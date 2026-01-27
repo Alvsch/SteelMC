@@ -2,7 +2,8 @@
 //!
 //! This module contains the traits for the packets.
 use std::{
-    io::{Cursor, Write},
+    cell::RefCell,
+    io::{self, Cursor, Write},
     num::NonZeroU32,
     sync::Arc,
 };
@@ -16,6 +17,37 @@ use steel_utils::{
 };
 
 use crate::utils::{ConnectionProtocol, MAX_PACKET_DATA_SIZE, MAX_PACKET_SIZE, PacketError};
+
+struct Flate2Context {
+    compressor: ZlibEncoder<FrontVec>,
+    level: u32,
+}
+
+impl Flate2Context {
+    pub fn new(level: u32) -> Self {
+        Self {
+            compressor: ZlibEncoder::new(FrontVec::new(10), Compression::new(level)),
+            level,
+        }
+    }
+
+    pub fn try_reconstruct(&mut self, level: u32) {
+        if self.level != level {
+            self.compressor = ZlibEncoder::new(FrontVec::new(10), Compression::new(level));
+            self.level = level;
+        }
+    }
+
+    pub fn compress(&mut self, data: &[u8], level: u32) -> io::Result<FrontVec> {
+        self.try_reconstruct(level as u32);
+        self.compressor.write_all(data)?;
+        self.compressor.reset(FrontVec::new(10))
+    }
+}
+
+thread_local! {
+    static FLATE2_CTX: RefCell<Flate2Context> = RefCell::new(Flate2Context::new(4));
+}
 
 // These are the network read/write traits
 /// A trait for packets sent from the server to the client.
@@ -147,15 +179,11 @@ impl EncodedPacket {
         }
 
         if data_len >= compression.threshold.get() as _ {
-            let mut buf = FrontVec::new(10);
-            let mut compressor =
-                ZlibEncoder::new(&mut buf, Compression::new(compression.level as u32));
-
-            compressor
-                .write_all(&packet_data)
-                .map_err(|e| PacketError::CompressionFailed(e.to_string()))?;
-            compressor
-                .finish()
+            let mut buf = FLATE2_CTX
+                .with(|ctx| {
+                    let mut compressor = ctx.borrow_mut();
+                    compressor.compress(&packet_data, compression.level as u32)
+                })
                 .map_err(|e| PacketError::CompressionFailed(e.to_string()))?;
 
             // compressed data cant be larger so we dont need to check the size again
