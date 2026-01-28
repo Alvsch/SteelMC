@@ -39,7 +39,7 @@ impl Flate2Context {
     }
 
     pub fn compress(&mut self, data: &[u8], level: u32) -> io::Result<FrontVec> {
-        self.try_reconstruct(level as u32);
+        self.try_reconstruct(level);
         self.compressor.write_all(data)?;
         self.compressor.reset(FrontVec::new(10))
     }

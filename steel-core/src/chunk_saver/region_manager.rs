@@ -5,8 +5,8 @@
 //! format, avoiding memory duplication.
 
 use std::{
-    cell::RefCell,
-    io::{self, Cursor},
+    cell::UnsafeCell,
+    io::{self, BufReader, Cursor},
     path::PathBuf,
     sync::{Weak, atomic::Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -22,8 +22,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 use zstd::{
-    Decoder, Encoder,
-    zstd_safe::{self, CCtx, CParameter, DCtx},
+    Decoder, Encoder, zstd_safe::{self, CCtx, DCtx}
 };
 
 use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
@@ -55,17 +54,21 @@ pub struct ZstdContext {
 impl ZstdContext {
     /// Creates a new zstd compression/decompression context with the specified compression level.
     pub fn new(level: i32) -> io::Result<Self> {
-        let mut cctx = CCtx::create();
-        cctx.set_parameter(CParameter::CompressionLevel(level))
-            .map_err(|code| {
-                let msg = zstd_safe::get_error_name(code);
-                io::Error::other(msg.to_string())
-            })?;
-
-        Ok(Self {
-            cctx,
+        let mut this = Self {
+            cctx: CCtx::create(),
             dctx: DCtx::create(),
-        })
+        };
+
+        this.cctx.init(level).map_err(|code| {
+            let msg = zstd_safe::get_error_name(code);
+            io::Error::other(msg.to_string())
+        })?;
+        this.dctx.init().map_err(|code| {
+            let msg = zstd_safe::get_error_name(code);
+            io::Error::other(msg.to_string())
+        })?;
+
+        Ok(this)
     }
 
     /// Compresses data using the configured zstd context.
@@ -79,15 +82,18 @@ impl ZstdContext {
 
     /// Decompresses data using the configured zstd context.
     pub fn decompress(&mut self, compressed: &[u8]) -> io::Result<Vec<u8>> {
-        let mut decoder = Decoder::with_context(compressed, &mut self.dctx);
-        let mut data = Vec::new();
+        let mut decoder = Decoder::with_context(
+            BufReader::with_capacity(DCtx::in_size(), compressed),
+            &mut self.dctx,
+        );
+        let mut data = Vec::with_capacity(zstd_safe::DCtx::out_size());
         io::copy(&mut decoder, &mut data)?;
         Ok(data)
     }
 }
 
 thread_local! {
-    static ZSTD_CTX: RefCell<ZstdContext> = RefCell::new(ZstdContext::new(3).expect("Failed to create zstd context"));
+    static ZSTD_CTX: UnsafeCell<ZstdContext> = UnsafeCell::new(ZstdContext::new(3).expect("Failed to create zstd context"));
 }
 
 /// Manages region files with seek-based chunk access.
@@ -408,7 +414,7 @@ impl RegionManager {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
         // Compress with zstd
-        let compressed = ZSTD_CTX.with(|ctx| ctx.borrow_mut().compress(&data[..]))?;
+        let compressed = ZSTD_CTX.with(|ctx| unsafe { &mut *ctx.get() }.compress(&data[..]))?;
 
         if compressed.len() > MAX_CHUNK_SIZE {
             // Clean up if we opened the region
@@ -508,7 +514,7 @@ impl RegionManager {
             Self::read_chunk_data(&mut handle.file, entry.sector_offset, entry.size_bytes).await?;
 
         // Decompress
-        let data = ZSTD_CTX.with(|ctx| ctx.borrow_mut().decompress(&compressed[..]))?;
+        let data = ZSTD_CTX.with(|ctx| unsafe { &mut *ctx.get() }.decompress(&compressed[..]))?;
 
         // Deserialize
         let persistent: PersistentChunk = wincode::deserialize(&data)
