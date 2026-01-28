@@ -20,6 +20,7 @@ use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
+use tracing::{Instrument, instrument};
 
 use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
 use crate::chunk::{
@@ -429,6 +430,7 @@ impl RegionManager {
     ///
     /// The region must already be acquired via `acquire_chunk` before calling this.
     #[allow(clippy::missing_panics_doc)]
+    #[instrument(level = "trace", skip(self, level))]
     pub async fn load_chunk(
         &self,
         pos: ChunkPos,
@@ -440,7 +442,7 @@ impl RegionManager {
         let (local_x, local_z) = RegionPos::local_chunk_pos(pos.0.x, pos.0.y);
         let index = RegionHeader::chunk_index(local_x, local_z);
 
-        let mut regions = self.regions.write().await;
+        let mut regions = self.regions.write().instrument(tracing::trace_span!("regions_write")).await;
 
         // Get the region (should already be open via acquire_chunk)
         let Some(handle) = regions.get_mut(&region_pos) else {
@@ -459,7 +461,7 @@ impl RegionManager {
             Self::read_chunk_data(&mut handle.file, entry.sector_offset, entry.size_bytes).await?;
 
         // Decompress
-        let data = zstd::decode_all(&compressed[..])?;
+        let data = tracing::trace_span!("zstd_decode_all").in_scope(|| zstd::decode_all(&compressed[..]))?;
 
         // Deserialize
         let persistent: PersistentChunk = wincode::deserialize(&data)
@@ -754,6 +756,7 @@ impl RegionManager {
     /// * `min_y` - The minimum Y coordinate of the world
     /// * `height` - The total height of the world
     /// * `level` - Weak reference to the world for `LevelChunk`
+    #[instrument(level = "trace", skip(persistent, level))]
     fn persistent_to_chunk(
         persistent: &PersistentChunk,
         pos: ChunkPos,

@@ -1,5 +1,6 @@
 //! This module is responsible for sending chunks to the client.
 use rustc_hash::FxHashSet;
+use tracing::instrument;
 use std::sync::Arc;
 
 use steel_protocol::packets::game::{
@@ -60,6 +61,7 @@ impl ChunkSender {
     ///
     /// # Panics
     /// Panics if a chunk is not at Full status when it should be.
+    #[instrument(level = "trace", skip(self, connection, world), fields(pos = ?player_chunk_pos))]
     pub fn send_next_chunks(
         &mut self,
         connection: Arc<JavaConnection>,
