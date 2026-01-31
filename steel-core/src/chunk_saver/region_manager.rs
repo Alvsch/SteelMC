@@ -15,12 +15,12 @@ use rustc_hash::FxHashMap;
 use simdnbt::borrow::read_compound as read_borrowed_compound;
 use simdnbt::owned::NbtCompound;
 use steel_registry::{REGISTRY, Registry};
-use steel_utils::{BlockPos, BlockStateId, ChunkPos, Identifier, locks::AsyncRwLock};
+use steel_utils::{BlockPos, BlockStateId, ChunkPos, Identifier, locks::AsyncMutex};
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
-use tracing::{Instrument, instrument};
+use tracing::{Instrument, instrument, trace_span};
 
 use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
 use crate::chunk::{
@@ -50,7 +50,7 @@ pub struct RegionManager {
     /// Base directory for region files (e.g., "world/region").
     base_path: PathBuf,
     /// Open region file handles with their headers.
-    regions: AsyncRwLock<FxHashMap<RegionPos, RegionHandle>>,
+    regions: AsyncMutex<FxHashMap<RegionPos, RegionHandle>>,
 }
 
 /// Prepared chunk data ready to be saved asynchronously.
@@ -150,7 +150,7 @@ impl RegionManager {
     pub fn new(base_path: impl Into<PathBuf>) -> Self {
         Self {
             base_path: base_path.into(),
-            regions: AsyncRwLock::new(FxHashMap::default()),
+            regions: AsyncMutex::new(FxHashMap::default()),
         }
     }
 
@@ -257,6 +257,7 @@ impl RegionManager {
     }
 
     /// Reads a chunk's compressed data from disk.
+    #[instrument(level = "trace", skip(file))]
     async fn read_chunk_data(
         file: &mut File,
         sector_offset: u32,
@@ -340,7 +341,11 @@ impl RegionManager {
         let (local_x, local_z) = RegionPos::local_chunk_pos(pos.0.x, pos.0.y);
         let index = RegionHeader::chunk_index(local_x, local_z);
 
-        let mut regions = self.regions.write().await;
+        let mut regions = self
+            .regions
+            .lock()
+            .instrument(trace_span!("regions_lock (save_chunk_data)"))
+            .await;
 
         // Track if we opened the region (so we can close it after)
         let we_opened_region = !regions.contains_key(&region_pos);
@@ -442,7 +447,11 @@ impl RegionManager {
         let (local_x, local_z) = RegionPos::local_chunk_pos(pos.0.x, pos.0.y);
         let index = RegionHeader::chunk_index(local_x, local_z);
 
-        let mut regions = self.regions.write().instrument(tracing::trace_span!("regions_write")).await;
+        let mut regions = self
+            .regions
+            .lock()
+            .instrument(trace_span!("regions_lock (load_chunks)"))
+            .await;
 
         // Get the region (should already be open via acquire_chunk)
         let Some(handle) = regions.get_mut(&region_pos) else {
@@ -461,7 +470,8 @@ impl RegionManager {
             Self::read_chunk_data(&mut handle.file, entry.sector_offset, entry.size_bytes).await?;
 
         // Decompress
-        let data = tracing::trace_span!("zstd_decode_all").in_scope(|| zstd::decode_all(&compressed[..]))?;
+        let data = tracing::trace_span!("zstd_decode_all")
+            .in_scope(|| zstd::decode_all(&compressed[..]))?;
 
         // Deserialize
         let persistent: PersistentChunk = wincode::deserialize(&data)
@@ -486,7 +496,11 @@ impl RegionManager {
         let (local_x, local_z) = RegionPos::local_chunk_pos(pos.0.x, pos.0.y);
         let index = RegionHeader::chunk_index(local_x, local_z);
 
-        let mut regions = self.regions.write().await;
+        let mut regions = self
+            .regions
+            .lock()
+            .instrument(trace_span!("regions_lock (acquire_chunk)"))
+            .await;
 
         // Get or open/create the region
         let handle = if let Some(handle) = regions.get_mut(&region_pos) {
@@ -516,7 +530,11 @@ impl RegionManager {
     pub async fn release_chunk(&self, pos: ChunkPos) -> io::Result<()> {
         let region_pos = RegionPos::from_chunk(pos.0.x, pos.0.y);
 
-        let mut regions = self.regions.write().await;
+        let mut regions = self
+            .regions
+            .lock()
+            .instrument(trace_span!("regions_lock (release_chunk)"))
+            .await;
 
         let should_close = if let Some(handle) = regions.get_mut(&region_pos) {
             handle.loaded_chunk_count = handle.loaded_chunk_count.saturating_sub(1);
@@ -541,7 +559,11 @@ impl RegionManager {
         let (local_x, local_z) = RegionPos::local_chunk_pos(pos.0.x, pos.0.y);
         let index = RegionHeader::chunk_index(local_x, local_z);
 
-        let regions = self.regions.write().await;
+        let regions = self
+            .regions
+            .lock()
+            .instrument(trace_span!("regions_lock (chunk_exists)"))
+            .await;
 
         // Check cached header first
         if let Some(handle) = regions.get(&region_pos) {
@@ -573,7 +595,11 @@ impl RegionManager {
 
     /// Flushes all dirty headers to disk.
     pub async fn flush_all(&self) -> io::Result<()> {
-        let mut regions = self.regions.write().await;
+        let mut regions = self
+            .regions
+            .lock()
+            .instrument(trace_span!("regions_lock (flush_all)"))
+            .await;
 
         for handle in regions.values_mut() {
             if handle.header_dirty {
@@ -590,7 +616,11 @@ impl RegionManager {
     /// This should be called during graceful shutdown after all chunks have been saved.
     /// It ensures all data is persisted and file handles are properly closed.
     pub async fn close_all(&self) -> io::Result<()> {
-        let mut regions = self.regions.write().await;
+        let mut regions = self
+            .regions
+            .lock()
+            .instrument(trace_span!("regions_lock (close_all)"))
+            .await;
 
         for (_, mut handle) in regions.drain() {
             if handle.header_dirty {

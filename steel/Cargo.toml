@@ -61,6 +61,7 @@ mimalloc = { version = "0.1.48", optional = true }
 
 # Profiling
 dhat = { version = "0.3", optional = true }
+tracing-chrome = "0.7.2"
 
 [lints]
 workspace = true

@@ -61,7 +61,15 @@ fn init_tracing() {
     let tracer = tracer_provider.tracer("steel");
     global::set_tracer_provider(tracer_provider);
 
+    let (chrome_layer, _guard) = tracing_chrome::ChromeLayerBuilder::new()
+        .file("./trace-steel.json")
+        .include_args(true)
+        .build();
+
+    std::mem::forget(_guard);
+
     tracing_subscriber::registry()
+        .with(chrome_layer)
         .with(
             OpenTelemetryLayer::new(tracer)
                 .with_filter(EnvFilter::new("trace,h2=off,hyper=off,tonic=off,tower=off")),

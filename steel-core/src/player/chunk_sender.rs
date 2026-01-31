@@ -1,7 +1,7 @@
 //! This module is responsible for sending chunks to the client.
 use rustc_hash::FxHashSet;
-use tracing::instrument;
 use std::sync::Arc;
+use tracing::instrument;
 
 use steel_protocol::packets::game::{
     CChunkBatchFinished, CChunkBatchStart, CForgetLevelChunk, CLevelChunkWithLight,
