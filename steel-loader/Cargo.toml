@@ -1,0 +1,14 @@
+[package]
+name = "steel-loader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+steel-api.workspace = true
+stabby = { workspace = true, features = ["libloading"] }
+libloading = "0.9.0"
+
+[lints]
+# workspace = true

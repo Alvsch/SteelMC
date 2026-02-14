@@ -10,6 +10,8 @@ members = [
     "steel-utils",
     "steel-core",
     "steel-crypto",
+    "steel-api",
+    "steel-loader",
 ]
 
 [workspace.package]
@@ -27,6 +29,9 @@ steel-macros = { path = "steel-macros" }
 steel-protocol = { path = "steel-protocol" }
 steel-registry = { path = "steel-registry" }
 steel-utils = { path = "steel-utils" }
+steel-loader = { path = "steel-loader" }
+steel-api = { path = "steel-api" }
+stabby = "72.1.2-rc1"
 
 # Async runtime
 tokio = { version = "1.49", features = [
