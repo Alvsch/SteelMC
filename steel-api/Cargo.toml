@@ -1,0 +1,13 @@
+[package]
+name = "steel-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+abi_stable.workspace = true
+steel-api-macros.workspace = true
+
+[lints]
+# workspace = true

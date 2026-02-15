@@ -1,0 +1,16 @@
+[package]
+name = "steel-api-macros"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true, features = ["full"] }
+quote.workspace = true
+
+[lints]
+# workspace = true
