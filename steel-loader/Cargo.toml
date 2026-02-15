@@ -10,6 +10,9 @@ steel-api.workspace = true
 abi_stable.workspace = true
 libloading.workspace = true
 thiserror.workspace = true
+rustc-hash.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 # workspace = true

@@ -1,22 +1,89 @@
 #![expect(non_local_definitions)]
 
-// External dependencies
+use abi_stable::RRef;
+use abi_stable::derive_macro_reexports::VersionStrings;
+use crate::traits::{Player_TO, Server_TO};
+
 pub use abi_stable::{LIB_HEADER, StableAbi, sabi_types::VersionNumber, std_types::RString};
-use abi_stable::{RRef, sabi_trait};
 pub use steel_api_macros::export_plugin;
 
-mod plugin;
-mod report;
+macro_rules! define_trait_with_arc_forward {
+    (
+        $(
+            $(#[$trait_meta:meta])*
+            $vis:vis trait $trait:ident {
+                $(
+                    $(#[$fn_meta:meta])*
+                    fn $name:ident
+                    (
+                        &$self:ident
+                        $(, $arg:ident : $arg_ty:ty )*
+                    )
+                    $(-> $ret:ty)?;
+                )*
+            }
+        )+
+    ) => {
+        $(
+            $(#[$trait_meta])*
+            $vis trait $trait {
+                $(
+                    $(#[$fn_meta])*
+                    fn $name(
+                        &$self
+                        $(, $arg : $arg_ty )*
+                    )
+                    $(-> $ret)?;
+                )*
+            }
 
-pub use plugin::Plugin;
-pub use report::PluginReport;
-
-pub const PLUGIN_ROOT_NAME: &[u8] = b"__plugin_root";
-pub const PLUGIN_ROOT_REPORT_NAME: &[u8] = b"__plugin_root__report";
-
-#[sabi_trait]
-pub trait Player {
-    extern "C" fn get_name(&self) -> RString;
+            impl $trait for std::sync::Arc<dyn $trait> {
+                $(
+                    fn $name(
+                        &$self
+                        $(, $arg : $arg_ty )*
+                    )
+                    $(-> $ret)?
+                    {
+                        (**$self).$name($($arg),*)
+                    }
+                )*
+            }
+        )+
+    };
 }
 
-pub type PlayerRef<'a> = Player_TO<'a, RRef<'a, ()>>;
+mod report;
+pub use report::PluginReport;
+
+pub mod traits;
+
+#[repr(C)]
+#[derive(StableAbi)]
+pub struct Plugin {
+    pub name: RString,
+    pub version: VersionStrings,
+    pub on_enable: extern "C" fn(Context),
+    pub on_disable: extern "C" fn(Context),
+}
+
+#[repr(C)]
+#[derive(StableAbi)]
+pub struct Context<'a> {
+    pub server: Server_TO<'a, RRef<'a, ()>>,
+    pub player: Player_TO<'a, RRef<'a, ()>>,
+    pub plugin_data_folder: RString,
+    // config, logger etc.
+    // register commands
+    // register events
+}
+
+impl<'a> Context<'a> {
+    pub fn reborrow(&'a self) -> Context<'a> {
+        Self {
+            server: self.server.sabi_reborrow(),
+            player: self.player.sabi_reborrow(),
+            plugin_data_folder: self.plugin_data_folder.clone(),
+        }
+    }
+}
