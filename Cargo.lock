@@ -3011,6 +3011,7 @@ dependencies = [
  "abi_stable",
  "libloading 0.9.0",
  "steel-api",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

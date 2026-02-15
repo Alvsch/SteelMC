@@ -9,6 +9,7 @@ license.workspace = true
 steel-api.workspace = true
 abi_stable.workspace = true
 libloading.workspace = true
+thiserror.workspace = true
 
 [lints]
 # workspace = true

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use steel_api::{
     PLUGIN_ROOT_NAME, PLUGIN_ROOT_REPORT_NAME, Player, Player_TO, Plugin, PluginReport,
 };
+use thiserror::Error;
 
 struct MyPlayer {
     name: String,
@@ -23,38 +24,47 @@ struct PluginBundle {
     plugin: Plugin,
 }
 
-fn load_plugin(path: &Path) -> PluginBundle {
-    let library = unsafe { Library::new(path) }.unwrap();
+#[derive(Debug, Error)]
+pub enum PluginError {
+    #[error("library error {0}")]
+    LibraryError(#[from] libloading::Error),
+    #[error("invalid abi version")]
+    InvalidAbiVersion,
+    #[error("invalid plugin layout")]
+    InvalidPluginLayout,
+}
+
+fn load_plugin(path: &Path) -> Result<PluginBundle, PluginError> {
+    let library = unsafe { Library::new(path) }?;
 
     let plugin_report =
-        unsafe { library.get::<extern "C" fn() -> PluginReport>(PLUGIN_ROOT_REPORT_NAME) }.unwrap();
+        unsafe { library.get::<extern "C" fn() -> PluginReport>(PLUGIN_ROOT_REPORT_NAME) }?;
 
     let plugin_report = plugin_report();
     if !plugin_report.abi_header.is_valid() {
-        panic!("invalid abi version");
+        return Err(PluginError::InvalidAbiVersion);
     }
 
     if let Err(_err) =
         check_layout_compatibility(<Plugin as StableAbi>::LAYOUT, plugin_report.type_layout)
             .into_result()
     {
-        panic!("invalid plugin layout");
+        return Err(PluginError::InvalidPluginLayout);
     }
 
-    let plugin_root =
-        unsafe { library.get::<extern "C" fn() -> Plugin>(PLUGIN_ROOT_NAME) }.unwrap();
+    let plugin_root = unsafe { library.get::<extern "C" fn() -> Plugin>(PLUGIN_ROOT_NAME) }?;
 
     let plugin = plugin_root();
-    PluginBundle {
+    Ok(PluginBundle {
         _library: library,
         plugin,
-    }
+    })
 }
 
 fn main() {
     let path = PathBuf::from("../steel-plugin/target/debug/libsteel_plugin.so");
 
-    let bundle = load_plugin(&path);
+    let bundle = load_plugin(&path).expect("failed to load plugin");
     let plugin = bundle.plugin;
 
     let player = MyPlayer {
