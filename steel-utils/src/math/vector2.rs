@@ -8,6 +8,7 @@ use crate::serial::{ReadFrom, WriteTo};
 
 /// A 2D vector.
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq, Default, PartialOrd, Ord)]
+#[cfg_attr(feature = "api", derive(abi_stable::StableAbi), repr(C))]
 #[allow(missing_docs)]
 pub struct Vector2<T> {
     pub x: T,

@@ -1,9 +1,9 @@
 use abi_stable::std_types::RString;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, Level};
 use steel_api::traits::{Player, Server};
 use steel_loader::PluginLoader;
+use tracing::{Level, info};
 
 struct MyPlayer;
 
@@ -36,5 +36,4 @@ fn main() {
     info!("loading plugin");
     loader.load(&plugin_lib);
     info!("loaded plugin");
-
 }

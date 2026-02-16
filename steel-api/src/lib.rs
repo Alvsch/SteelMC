@@ -1,8 +1,8 @@
 #![expect(non_local_definitions)]
 
+use crate::traits::{Player_TO, Server_TO};
 use abi_stable::RRef;
 use abi_stable::derive_macro_reexports::VersionStrings;
-use crate::traits::{Player_TO, Server_TO};
 
 pub use abi_stable::{LIB_HEADER, StableAbi, sabi_types::VersionNumber, std_types::RString};
 pub use steel_api_macros::export_plugin;
@@ -56,6 +56,7 @@ macro_rules! define_trait_with_arc_forward {
 mod report;
 pub use report::PluginReport;
 
+mod abi_types;
 pub mod traits;
 
 #[repr(C)]

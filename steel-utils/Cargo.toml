@@ -6,10 +6,13 @@ license.workspace = true
 authors.workspace = true
 build = "build/build.rs"
 
+[features]
+api = ["dep:abi_stable"]
+
 [dependencies]
 # Async runtime
 tokio.workspace = true
-tokio-util.workspace = true
+abi_stable = { workspace = true, optional = true }
 
 # Serialization
 serde.workspace = true
@@ -21,7 +24,6 @@ wincode.workspace = true
 parking_lot.workspace = true
 
 # Data structures
-rustc-hash.workspace = true
 bitflags.workspace = true
 phf.workspace = true
 
@@ -29,9 +31,7 @@ phf.workspace = true
 uuid.workspace = true
 
 # Logging
-log.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 # Cryptography
 md5.workspace = true
@@ -53,13 +53,9 @@ proc-macro2.workspace = true
 quote.workspace = true
 
 # Data structures
-
-rustc-hash.workspace = true
 phf_codegen.workspace = true
 
 # Utilities
-
-heck.workspace = true
 text_components = { workspace = true, features = ["build"] }
 [[bench]]
 name = "xoroshiro"

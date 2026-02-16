@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 abi_stable.workspace = true
 steel-api-macros.workspace = true
+steel-utils = { workspace = true, features = ["api"] }
+uuid.workspace = true
 
 [lints]
 # workspace = true

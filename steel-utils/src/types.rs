@@ -102,6 +102,7 @@ impl ReadFrom for BlockStateId {
 
 /// A chunk position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "api", derive(abi_stable::StableAbi), repr(C))]
 pub struct ChunkPos(pub Vector2<i32>);
 
 impl Hash for ChunkPos {
@@ -188,6 +189,7 @@ impl ReadFrom for ChunkPos {
 
 /// A block position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "api", derive(abi_stable::StableAbi), repr(C))]
 pub struct BlockPos(pub Vector3<i32>);
 
 impl From<Vector3<f64>> for BlockPos {
@@ -442,6 +444,7 @@ impl ReadFrom for BlockPos {
 
 /// A chunk section position (16x16x16 region).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "api", derive(abi_stable::StableAbi), repr(C))]
 pub struct SectionPos(pub Vector3<i32>);
 
 impl SectionPos {
@@ -590,6 +593,7 @@ impl WriteTo for SectionPos {
 
 /// The game type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "api", derive(abi_stable::StableAbi), repr(C))]
 #[allow(missing_docs)]
 pub enum GameType {
     Survival = 0,

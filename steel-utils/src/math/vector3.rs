@@ -14,6 +14,7 @@ use crate::{
 
 /// A 3D vector.
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Eq, Default)]
+#[cfg_attr(feature = "api", derive(abi_stable::StableAbi), repr(C))]
 #[allow(missing_docs)]
 pub struct Vector3<T> {
     pub x: T,

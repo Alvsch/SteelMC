@@ -2935,6 +2935,8 @@ version = "0.1.0"
 dependencies = [
  "abi_stable",
  "steel-api-macros",
+ "steel-utils",
+ "uuid",
 ]
 
 [[package]]
@@ -3099,12 +3101,11 @@ dependencies = [
 name = "steel-utils"
 version = "0.1.0"
 dependencies = [
+ "abi_stable",
  "bitflags",
  "crc32c",
  "criterion",
  "enum_dispatch",
- "heck",
- "log",
  "md5",
  "num-traits",
  "parking_lot",
@@ -3112,15 +3113,12 @@ dependencies = [
  "phf_codegen",
  "proc-macro2",
  "quote",
- "rustc-hash 2.1.1",
  "serde",
  "serde_json",
  "simdnbt",
  "text_components",
  "tokio",
- "tokio-util",
  "tracing",
- "tracing-subscriber",
  "uuid",
  "wincode",
 ]
