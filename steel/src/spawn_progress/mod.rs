@@ -74,7 +74,7 @@ pub async fn generate_spawn_chunks(
     let center_chunk = if pregen_radius > SPAWN_RADIUS {
         ChunkPos::new(0, 0)
     } else {
-        let spawn_pos = world.level_data.read().data().spawn_pos();
+        let spawn_pos = world.level_data.read().spawn_pos();
         ChunkPos::new(
             SectionPos::block_to_section_coord(spawn_pos.0.x),
             SectionPos::block_to_section_coord(spawn_pos.0.z),

@@ -6,6 +6,7 @@
 
 use std::{
     io,
+    ops::Deref,
     path::{Path, PathBuf},
 };
 
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use steel_registry::REGISTRY;
 use steel_registry::game_rules::{GameRuleValue, GameRuleValues};
 use steel_utils::BlockPos;
+use steel_utils::types::Difficulty;
 use tokio::fs;
 
 /// Persistent level data that gets saved to disk.
@@ -29,6 +31,12 @@ pub struct LevelData {
     pub spawn: SpawnPoint,
     /// Weather state.
     pub weather: WeatherState,
+    /// World difficulty.
+    #[serde(default)]
+    pub difficulty: Difficulty,
+    /// Whether the difficulty is locked.
+    #[serde(default)]
+    pub difficulty_locked: bool,
     /// Game rules (stored as name -> value pairs for serialization).
     pub game_rules: FxHashMap<String, GameRuleValue>,
     /// Runtime game rule values (not serialized, loaded from `game_rules`).
@@ -93,6 +101,8 @@ impl LevelData {
             day_time: 0,
             spawn: SpawnPoint::default(),
             weather: WeatherState::default(),
+            difficulty: Difficulty::default(),
+            difficulty_locked: false,
             game_rules: FxHashMap::default(),
             game_rules_values: GameRuleValues::new(&REGISTRY.game_rules),
             initialized: false,
@@ -140,6 +150,14 @@ pub struct LevelDataManager {
     data: LevelData,
     /// Whether data has been modified since last save.
     dirty: bool,
+}
+
+impl Deref for LevelDataManager {
+    type Target = LevelData;
+
+    fn deref(&self) -> &LevelData {
+        &self.data
+    }
 }
 
 impl LevelDataManager {

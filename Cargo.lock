@@ -2819,6 +2819,7 @@ name = "steel-core"
 version = "0.3.0+mc1.21.11"
 dependencies = [
  "anyhow",
+ "bitflags",
  "criterion",
  "crossbeam",
  "enum_dispatch",

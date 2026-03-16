@@ -45,7 +45,7 @@ impl CommandContext {
         let world = player
             .as_ref()
             .map_or(server.overworld().clone(), |p| Arc::clone(&p.world));
-        let world_spawn = world.level_data.read().data().spawn.clone();
+        let world_spawn = world.level_data.read().spawn.clone();
         let position = player
             .as_ref()
             // TODO: Check this. The default position is the surface of the world center

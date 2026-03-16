@@ -6,6 +6,7 @@ pub mod chunk_sender;
 /// This module contains the `PlayerConnection` trait that abstracts network connections.
 pub mod connection;
 mod entity_state;
+pub mod food_data;
 /// Game mode specific logic for player interactions.
 pub mod game_mode;
 mod game_profile;
@@ -24,8 +25,10 @@ mod signature_cache;
 mod teleport_state;
 
 pub use abilities::Abilities;
+use bitflags::bitflags;
 use chat_state::ChatState;
 use entity_state::EntityState;
+use food_data::{FoodData, FoodTickResult, food_constants};
 use health_sync::HealthSyncState;
 pub use message_validator::LastSeenMessagesValidator;
 use movement_state::MovementState;
@@ -49,11 +52,12 @@ use std::{
 use steel_protocol::packet_traits::{ClientPacket, EncodedPacket};
 use steel_protocol::packets::game::CSystemChatMessage;
 use steel_protocol::packets::game::{
-    AnimateAction, CAddEntity, CAnimate, CDamageEvent, CEntityEvent, CEntityPositionSync,
+    AnimateAction, AttributeModifierData, AttributeModifierOperation, AttributeSnapshot,
+    CAddEntity, CAnimate, CChangeDifficulty, CDamageEvent, CEntityEvent, CEntityPositionSync,
     CHurtAnimation, COpenSignEditor, CPlayerCombatKill, CPlayerPosition, CRemoveEntities, CRespawn,
-    CSetEntityData, CSetHealth, CSetHeldSlot, CSetTime, ClientCommandAction, PlayerAction,
-    SAcceptTeleportation, SPickItemFromBlock, SPlayerAbilities, SPlayerAction, SSetCarriedItem,
-    SUseItem, SUseItemOn,
+    CSetEntityData, CSetHealth, CSetHeldSlot, CSetTime, CUpdateAttributes, ClientCommandAction,
+    PlayerAction, PlayerCommandAction, SAcceptTeleportation, SPickItemFromBlock, SPlayerAbilities,
+    SPlayerAction, SPlayerCommand, SSetCarriedItem, SUseItem, SUseItemOn,
 };
 use steel_protocol::utils::ConnectionProtocol;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
@@ -64,14 +68,15 @@ use steel_registry::game_rules::GameRuleValue;
 use steel_registry::vanilla_entities;
 use steel_registry::vanilla_entity_data::PlayerEntityData;
 use steel_registry::vanilla_game_rules::{
-    ADVANCE_TIME, ELYTRA_MOVEMENT_CHECK, IMMEDIATE_RESPAWN, KEEP_INVENTORY, PLAYER_MOVEMENT_CHECK,
-    SHOW_DEATH_MESSAGES,
+    ADVANCE_TIME, ELYTRA_MOVEMENT_CHECK, IMMEDIATE_RESPAWN, KEEP_INVENTORY,
+    NATURAL_HEALTH_REGENERATION, PLAYER_MOVEMENT_CHECK, SHOW_DEATH_MESSAGES,
 };
 use steel_registry::{RegistryEntry, vanilla_chat_types};
 use steel_utils::entity_events::EntityStatus;
 
+use steel_utils::Identifier;
 use steel_utils::locks::SyncMutex;
-use steel_utils::types::GameType;
+use steel_utils::types::{Difficulty, GameType};
 use text_components::resolving::TextResolutor;
 use text_components::translation::TranslatedMessage;
 use text_components::{Modifier, TextComponent};
@@ -116,6 +121,29 @@ use steel_utils::types::InteractionHand;
 use steel_utils::{ChunkPos, math::Vector3, translations};
 
 use crate::entity::LivingEntity;
+
+bitflags! {
+    /// Vanilla shared‐flags byte sent in entity metadata.
+    struct SharedFlags: u8 {
+        const ON_FIRE       = 1 << 0;
+        const SHIFT_KEY_DOWN = 1 << 1;
+        const SPRINTING     = 1 << 3;
+        const SWIMMING      = 1 << 4;
+        const INVISIBLE     = 1 << 5;
+        const GLOWING       = 1 << 6;
+        const FALL_FLYING   = 1 << 7;
+    }
+}
+
+/// Vanilla sprint speed modifier.
+const SPRINT_SPEED_MODIFIER_AMOUNT: f64 = 0.3;
+
+/// Vanilla base movement speed
+const BASE_MOVEMENT_SPEED: f64 = 0.100_000_001_490_116_12;
+
+/// Vanilla attribute registry ID
+const ATTRIBUTE_MOVEMENT_SPEED_ID: i32 = 22;
+
 use crate::inventory::{
     MenuInstance, MenuProvider,
     container::Container,
@@ -213,7 +241,7 @@ pub struct Player {
     pub position: SyncMutex<Vector3<f64>>,
     /// The player's rotation (yaw, pitch).
     pub rotation: AtomicCell<(f32, f32)>,
-    /// Movement tracking state (prev position/rotation, velocity, validation, broadcast sync).
+    /// Movement tracking state
     pub(crate) movement: SyncMutex<MovementState>,
 
     /// Synchronized entity data (health, pose, flags, etc.) for network sync.
@@ -276,6 +304,9 @@ pub struct Player {
     /// Shared living-entity fields (`dead`, `invulnerable_time`, `last_hurt`).
     /// Vanilla: `LivingEntity` (L230-232) + `Entity.invulnerableTime` (L256).
     living_base: SyncMutex<LivingEntityBase>,
+
+    /// Player food/hunger state (food level, saturation, exhaustion).
+    food_data: SyncMutex<FoodData>,
 
     /// Delta-tracking state for `CSetHealth` deduplication.
     health_sync: SyncMutex<HealthSyncState>,
@@ -366,6 +397,7 @@ impl Player {
             abilities: SyncMutex::new(Abilities::default()),
             block_breaking: SyncMutex::new(BlockBreakingManager::new()),
             living_base: SyncMutex::new(LivingEntityBase::new()),
+            food_data: SyncMutex::new(FoodData::new()),
             health_sync: SyncMutex::new(HealthSyncState::new()),
             removed: AtomicBool::new(false),
             level_callback: SyncMutex::new(Arc::new(NullEntityCallback)),
@@ -415,22 +447,16 @@ impl Player {
     /// Ticks the player.
     #[allow(clippy::cast_possible_truncation)]
     pub fn tick(&self) {
-        // Increment local tick counter
         self.tick_count.fetch_add(1, Ordering::Relaxed);
 
         // Reset first_good_position to current position at start of tick (vanilla: resetPosition)
         {
             let mut mv = self.movement.lock();
             mv.first_good_position = *self.position.lock();
-            // Sync packet counts for rate limiting (vanilla: knownMovePacketCount = receivedMovePacketCount)
             mv.known_move_packet_count = mv.received_move_packet_count;
         }
 
-        // Apply gravity to delta_movement (vanilla: applyGravity in Entity.tick/LivingEntity.travel)
-        // This must happen after resetPosition so the speed check has the correct expected velocity
         self.apply_gravity();
-
-        // Send pending block change acks (batched, once per tick like vanilla)
         self.tick_ack_block_changes();
 
         if !self.client_loaded.load(Ordering::Relaxed) {
@@ -466,23 +492,27 @@ impl Player {
             self.check_below_world();
 
             // TODO: Implement remaining player ticking logic here
-            // - Handling food/health regeneration
             // - Managing game mode specific logic
             // - Updating advancements
             // - Handling falling
+            // - Vanilla Player.aiStep() calls self.setSpeed(getAttributeValue(MOVEMENT_SPEED))
+            //   every tick to refresh speed from the attribute system. Add when attribute
+            //   system is implemented.
+            self.tick_regeneration();
         }
 
-        // --- Post-tick (always runs, vanilla does not gate these behind isAlive) ---
         self.broadcast_inventory_changes();
         self.update_pose();
+        self.update_shared_flags();
         self.sync_entity_data();
 
-        // Only send CSetHealth when a value actually changed, matching vanilla's
-        // `lastSentHealth` / `lastSentFood` / `lastFoodSaturationZero` pattern.
         {
             let health = *self.entity_data.lock().health.get();
-            let food: i32 = 20; // TODO: use actual food level once hunger is implemented
-            let saturation: f32 = 5.0; // TODO: use actual saturation once hunger is implemented
+            let (food, saturation) = {
+                let food_data = self.food_data.lock();
+                (food_data.food_level, food_data.saturation_level)
+            };
+
             let saturation_zero = saturation == 0.0;
 
             let mut sync = self.health_sync.lock();
@@ -524,6 +554,22 @@ impl Player {
         }
     }
 
+    /// Packs `EntityState` booleans into the vanilla shared flags byte and writes
+    /// it into `entity_data.shared_flags`. Dirty-tracking in [`SyncedValue`]
+    /// ensures a `SetEntityData` packet is only sent when the value changes.
+    fn update_shared_flags(&self) {
+        let state = self.entity_state.lock();
+        let mut flags = SharedFlags::empty();
+
+        // TODO: on_fire, swimming, invisible, glowing
+        flags.set(SharedFlags::SHIFT_KEY_DOWN, state.crouching);
+        flags.set(SharedFlags::SPRINTING, state.sprinting);
+        flags.set(SharedFlags::FALL_FLYING, state.fall_flying);
+        drop(state);
+
+        self.entity_data.lock().shared_flags.set(flags.bits() as i8);
+    }
+
     /// Syncs dirty entity data to nearby players.
     fn sync_entity_data(&self) {
         if let Some(dirty_values) = self.entity_data.lock().pack_dirty() {
@@ -539,34 +585,22 @@ impl Player {
     /// - Calculates pickup area as bounding box inflated by (1.0, 0.5, 1.0)
     /// - Calls `playerTouch()` on each entity in range
     fn touch_nearby_items(&self) {
-        // Spectators can't pick up items
         if self.game_mode.load() == GameType::Spectator {
             return;
         }
 
-        // Calculate pickup area (vanilla: Player.aiStep lines 454-458)
         let pickup_area = self.bounding_box().inflate_xyz(1.0, 0.5, 1.0);
-
-        // Get all entities in the pickup area
         let entities = self.world.get_entities_in_aabb(&pickup_area);
 
-        // Get player Arc for try_pickup (needed because try_pickup takes &Arc<Player>)
         let Some(player_arc) = self.world.players.get_by_entity_id(self.id) else {
             return;
         };
 
         for entity in entities {
-            // Skip self
-            if entity.id() == self.id {
+            if entity.id() == self.id || entity.is_removed() {
                 continue;
             }
 
-            // Skip removed entities
-            if entity.is_removed() {
-                continue;
-            }
-
-            // Try to pick up item entities
             if let Some(item_entity) = entity.as_item_entity() {
                 item_entity.try_pickup(&player_arc);
             }
@@ -841,7 +875,7 @@ impl Player {
         true // Still awaiting, reject movement
     }
 
-    /// Marks that an impulse (knockback, etc.) was applied to the player.
+    /// Marks that an impulse (knockback, etc.) was applied.
     pub fn apply_impulse(&self) {
         self.movement.lock().last_impulse_tick = self.tick_count.load(Ordering::Relaxed);
     }
@@ -903,18 +937,15 @@ impl Player {
         };
         let start_pos = *self.position.lock();
         let game_mode = self.game_mode.load();
-        let is_spectator = game_mode == GameType::Spectator;
-        let is_creative = game_mode == GameType::Creative;
         let (is_sleeping, is_fall_flying, was_on_ground, is_crouching) = {
             let es = self.entity_state.lock();
             (es.sleeping, es.fall_flying, es.on_ground, es.crouching)
         };
-        // Skip movement checks when tick rate is frozen (vanilla: tickRateManager().runsNormally())
+        let is_spectator = game_mode == GameType::Spectator;
+        let is_creative = game_mode == GameType::Creative;
         let tick_frozen = !self.world.tick_runs_normally();
 
-        // Handle position updates
         if packet.has_pos {
-            // Clamp position to vanilla limits
             let target_pos = Vector3::new(
                 movement::clamp_horizontal(packet.position.x),
                 movement::clamp_vertical(packet.position.y),
@@ -925,7 +956,6 @@ impl Player {
                 (mv.first_good_position, mv.last_good_position)
             };
 
-            // Sleeping check - only allow small movements when sleeping
             if is_sleeping {
                 let dx = target_pos.x - first_good.x;
                 let dy = target_pos.y - first_good.y;
@@ -938,25 +968,19 @@ impl Player {
                     return;
                 }
             } else {
-                // Increment received packet count and calculate delta for rate limiting
                 let mut delta_packets = {
                     let mut mv = self.movement.lock();
                     mv.received_move_packet_count += 1;
                     mv.received_move_packet_count - mv.known_move_packet_count
                 };
 
-                // Cap delta packets to prevent abuse (vanilla caps at 5)
                 if delta_packets > 5 {
                     delta_packets = 1;
                 }
 
-                // Skip checks for spectators, creative mode, tick frozen, or gamerules disabled
-                // Vanilla: shouldValidateMovement() checks playerMovementCheck and elytraMovementCheck
                 let gamerule_skip = !self.should_validate_movement(is_fall_flying);
                 let skip_checks = is_spectator || is_creative || tick_frozen || gamerule_skip;
 
-                // Read movement state before building the input struct to avoid
-                // holding the lock across the struct literal expression.
                 let (expected_velocity_sq, in_impulse_grace) = {
                     let mv = self.movement.lock();
                     let vel_sq = mv.delta_movement_length_sq();
@@ -966,7 +990,6 @@ impl Player {
                     (vel_sq, grace)
                 };
 
-                // Validate movement using physics simulation
                 let mut validation = movement::validate_movement(
                     &self.world,
                     &movement::MovementInput {
@@ -984,48 +1007,51 @@ impl Player {
                 );
 
                 if !validation.is_valid {
-                    // Teleport back to start position
                     let (yaw, pitch) = prev_rot;
                     self.teleport(start_pos.x, start_pos.y, start_pos.z, yaw, pitch);
                     return;
                 }
 
-                // Movement accepted - update last good position
                 self.movement.lock().last_good_position = target_pos;
 
-                // Zero Y velocity when landing (vanilla: Block.updateEntityMovementAfterFallOn)
-                // This prevents gravity from accumulating while on the ground
+                // Zero Y velocity when landing (vanilla: updateEntityMovementAfterFallOn)
                 if !was_on_ground && packet.on_ground {
                     validation.move_delta.y = 0.0;
                 }
-                // Update velocity based on actual movement (vanilla: handlePlayerKnownMovement)
                 self.set_delta_movement(validation.move_delta);
 
-                // Jump detection (vanilla: jumpFromGround)
                 let moved_upwards = validation.move_delta.y > 0.0;
                 if was_on_ground && !packet.on_ground && moved_upwards {
-                    // Player jumped - could trigger jump-related mechanics here
-                    // For now, this is a placeholder for future jump handling
+                    if self.is_sprinting() {
+                        self.cause_food_exhaustion(food_constants::EXHAUSTION_SPRINT_JUMP);
+                    } else {
+                        self.cause_food_exhaustion(food_constants::EXHAUSTION_JUMP);
+                    }
+                }
+
+                if packet.on_ground && self.is_sprinting() {
+                    let dx = validation.move_delta.x;
+                    let dz = validation.move_delta.z;
+                    let horizontal_dist_sq = dx * dx + dz * dz;
+                    if horizontal_dist_sq > 0.0 {
+                        let distance = horizontal_dist_sq.sqrt() as f32;
+                        self.cause_food_exhaustion(distance * food_constants::EXHAUSTION_SPRINT);
+                    }
                 }
             }
         }
 
-        // Update on_ground state from packet
         self.entity_state.lock().on_ground = packet.on_ground;
 
-        // Update current state
         if packet.has_pos {
             let old_pos = *self.position.lock();
             *self.position.lock() = packet.position;
-
-            // Notify callback of position change (updates entity cache section index)
             self.level_callback.lock().on_move(old_pos, packet.position);
         }
         if packet.has_rot {
             self.rotation.store((packet.y_rot, packet.x_rot));
         }
 
-        // Broadcast movement to other players
         let pos = if packet.has_pos {
             packet.position
         } else {
@@ -1040,15 +1066,11 @@ impl Player {
         if packet.has_pos || packet.has_rot {
             let new_chunk = ChunkPos::new((pos.x as i32) >> 4, (pos.z as i32) >> 4);
 
-            // Note: player_area_map is updated in chunk_map.update_player_status
-            // which is called every tick and computes view diffs efficiently
-
             if packet.has_pos {
                 let dx = calc_delta(pos.x, prev_pos.x);
                 let dy = calc_delta(pos.y, prev_pos.y);
                 let dz = calc_delta(pos.z, prev_pos.z);
 
-                // Vanilla sync conditions (ServerEntity.java:148)
                 let (sync_delay, last_on_ground) = {
                     let mut mv = self.movement.lock();
                     let d = mv.position_sync_delay;
@@ -1060,7 +1082,6 @@ impl Player {
 
                 if let (Some(dx), Some(dy), Some(dz)) = (dx, dy, dz) {
                     if force_sync {
-                        // Send absolute position sync (forced by timer or on_ground change)
                         {
                             let mut mv = self.movement.lock();
                             mv.position_sync_delay = 0;
@@ -1096,7 +1117,6 @@ impl Player {
                             .broadcast_to_nearby(new_chunk, move_packet, Some(self.id));
                     }
                 } else {
-                    // Send absolute position sync (delta too big)
                     {
                         let mut mv = self.movement.lock();
                         mv.position_sync_delay = 0;
@@ -1305,8 +1325,6 @@ impl Player {
 
         // Update abilities based on new game mode (mirrors vanilla GameType.updatePlayerAbilities)
         self.abilities.lock().update_for_game_mode(gamemode);
-
-        // Send abilities first (vanilla sends this before game event)
         self.send_abilities();
 
         self.send_packet(CGameEvent {
@@ -1314,8 +1332,6 @@ impl Player {
             data: gamemode.into(),
         });
 
-        // Broadcast game mode update to all players (including self)
-        // This updates PlayerInfo on clients, which is used for isSpectator() checks
         let update_packet =
             CPlayerInfoUpdate::update_game_mode(self.gameprofile.id, gamemode as i32);
         self.world.broadcast_to_all(update_packet);
@@ -1334,6 +1350,103 @@ impl Player {
     pub fn send_abilities(&self) {
         let packet = self.abilities.lock().to_packet();
         self.send_packet(packet);
+    }
+
+    /// Sends the current world difficulty to the client.
+    pub fn send_difficulty(&self) {
+        let level_data = self.world.level_data.read();
+        let difficulty = level_data.difficulty;
+        let locked = level_data.difficulty_locked;
+        drop(level_data);
+        self.send_packet(CChangeDifficulty { difficulty, locked });
+    }
+
+    /// Handles a client request to change the world difficulty.
+    pub fn handle_change_difficulty(&self, difficulty: Difficulty) {
+        // TODO: implement op-level permission check
+        let mut level_data = self.world.level_data.write();
+        if level_data.difficulty_locked {
+            let locked = true;
+            let current = level_data.difficulty;
+            drop(level_data);
+            self.send_packet(CChangeDifficulty {
+                difficulty: current,
+                locked,
+            });
+            return;
+        }
+
+        level_data.data_mut().difficulty = difficulty;
+        let locked = level_data.difficulty_locked;
+        drop(level_data);
+
+        let packet = CChangeDifficulty { difficulty, locked };
+        self.world.broadcast_to_all(packet);
+    }
+
+    /// Ticks food/hunger regeneration and starvation.
+    fn tick_regeneration(&self) {
+        let difficulty = self.world.level_data.read().difficulty;
+        let natural_regen =
+            self.world.get_game_rule(NATURAL_HEALTH_REGENERATION) == GameRuleValue::Bool(true);
+        let tick = self.tick_count.load(Ordering::Relaxed);
+
+        if difficulty == Difficulty::Peaceful && natural_regen {
+            if tick % 20 == 0 {
+                if self.is_hurt() {
+                    self.heal(1.0);
+                }
+
+                let mut food = self.food_data.lock();
+                if food.saturation_level < food_constants::MAX_SATURATION {
+                    food.saturation_level += 1.0;
+                }
+            }
+
+            if tick % 10 == 0 {
+                let mut food = self.food_data.lock();
+                if food.needs_food() {
+                    food.food_level += 1;
+                }
+            }
+        }
+
+        let current_health = self.get_health();
+        let max_health = self.get_max_health();
+
+        let mut food = self.food_data.lock();
+        let result = food.tick(difficulty, natural_regen, current_health, max_health);
+
+        match result {
+            FoodTickResult::Heal { amount, exhaustion } => {
+                food.add_exhaustion(exhaustion);
+
+                drop(food);
+                self.heal(amount);
+            }
+            FoodTickResult::Starve => {
+                drop(food);
+
+                self.hurt(
+                    &DamageSource::environment(vanilla_damage_types::STARVE),
+                    1.0,
+                );
+            }
+            FoodTickResult::None => {}
+        }
+    }
+
+    /// Adds food exhaustion, gated by invulnerability.
+    pub fn cause_food_exhaustion(&self, amount: f32) {
+        if !self.abilities.lock().invulnerable {
+            self.food_data.lock().add_exhaustion(amount);
+        }
+    }
+
+    /// Returns `true` if the player is alive but below max health.
+    pub fn is_hurt(&self) -> bool {
+        let health = self.get_health();
+        health > 0.0 && health < self.get_max_health()
     }
 
     /// If the player's health is at or below zero (e.g. they disconnected while dead),
@@ -1852,8 +1965,131 @@ impl Player {
 
     /// Handles a player input packet (movement keys, sneaking, sprinting).
     pub fn handle_player_input(&self, packet: SPlayerInput) {
+        // Vanilla stores the input unconditionally before the guard check.
+        // SteelMC doesn't have setLastClientInput yet, so we skip that.
+
+        if !self.client_loaded.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // TODO: Vanilla calls this.player.resetLastActionTime() here which sets
+        // lastActionTime = Util.getMillis(), preventing idle-kick. Add when idle-kick system is implemented.
+
         self.entity_state.lock().crouching = packet.shift();
-        // Note: sprinting is handled via SPlayerCommand packet
+    }
+
+    /// Handles a player command packet (sprinting, elytra, leaving bed, etc).
+    // this is just temporary there because the logic is not yet implemented complete for the other branches
+    #[allow(clippy::match_same_arms)]
+    pub fn handle_player_command(&self, packet: SPlayerCommand) {
+        if !self.client_loaded.load(Ordering::Relaxed) {
+            return;
+        }
+
+        if packet.entity_id != self.id {
+            log::warn!(
+                "Player {} (eid {}) sent SPlayerCommand with mismatched entity_id {}",
+                self.gameprofile.name,
+                self.id,
+                packet.entity_id
+            );
+            return;
+        }
+
+        // TODO: Vanilla calls this.player.resetLastActionTime() here which sets
+        // noActionTime = 0, preventing idle-kick. Add when idle-kick system is implemented.
+
+        match packet.action {
+            PlayerCommandAction::StartSprinting => {
+                self.set_sprinting(true);
+            }
+            PlayerCommandAction::StopSprinting => {
+                self.set_sprinting(false);
+            }
+            PlayerCommandAction::StartFallFlying => {
+                // TODO: Full canGlide() checks once the required systems exist:
+                //   - not in water, not a passenger
+                //   - no Levitation effect
+                //   - at least one equipped item has GLIDER component in correct slot
+                //     and won't break on next damage
+                //   - not in creative flight
+                // If validation fails, call stop_fall_flying() (toggle shared flag 7)
+                // Also needs tick-based updateFallFlying():
+                //   - re-validate canGlide() every tick
+                //   - damage a random glider item every 20 ticks
+                //   - emit ELYTRA_GLIDE game event every 10 ticks
+                // Blocked on: equipment checks working end-to-end, potion effects,
+                //             fluid detection, passenger/vehicle system
+                self.entity_state.lock().fall_flying = true;
+            }
+            PlayerCommandAction::LeaveBed => {
+                let mut state = self.entity_state.lock();
+                if state.sleeping {
+                    state.sleeping = false;
+                    // TODO: Full bed wake-up logic:
+                    //   - set bed block OCCUPIED property to false
+                    //   - compute stand-up position via BedBlock::findStandUpPosition
+                    //   - teleport player + set rotation toward bed
+                    //   - set pose to Standing, clear sleeping pos entity data
+                    //   - update server sleeping player list (for sleep-skip)
+                    //   - set sleepCounter = 100
+                    //   - set awaiting_position_from_client
+                    // Blocked on: bed block properties, sleeping pos entity data
+                }
+            }
+            PlayerCommandAction::StartRidingJump => {
+                // TODO: horse jump — check getControlledVehicle() is PlayerRideableJumping,
+                //       validate canJump() && data > 0, call handleStartJump(data)
+                // Blocked on: vehicle/entity system
+            }
+            PlayerCommandAction::StopRidingJump => {
+                // TODO: stop horse jump — call handleStopJump() on controlled vehicle
+                // Blocked on: vehicle/entity system
+            }
+            PlayerCommandAction::OpenVehicleInventory => {
+                // TODO: open vehicle inventory — check getVehicle() is HasCustomInventoryScreen
+                // Blocked on: vehicle/entity system
+            }
+        }
+
+        // Shared flags are updated once per tick in tick() → update_shared_flags().
+    }
+
+    /// Applies or removes the sprint speed modifier and broadcasts the attribute
+    /// change to nearby players via `CUpdateAttributes`.
+    ///
+    /// Matches vanilla `LivingEntity.setSprinting()` which adds/removes the
+    /// `SPEED_MODIFIER_SPRINTING` attribute modifier (+30% `ADD_MULTIPLIED_TOTAL`).
+    fn apply_sprint_speed_modifier(&self, sprinting: bool) {
+        // Compute effective speed server-side.
+        // Vanilla: base * (1 + modifier_sum) for ADD_MULTIPLIED_TOTAL
+        let effective_speed = if sprinting {
+            BASE_MOVEMENT_SPEED * (1.0 + SPRINT_SPEED_MODIFIER_AMOUNT)
+        } else {
+            BASE_MOVEMENT_SPEED
+        };
+        self.speed.store(effective_speed as f32);
+
+        // Build the attribute snapshot with or without the sprint modifier.
+        let modifiers = if sprinting {
+            vec![AttributeModifierData {
+                id: Identifier::vanilla_static("sprinting"),
+                amount: SPRINT_SPEED_MODIFIER_AMOUNT,
+                operation: AttributeModifierOperation::AddMultipliedTotal,
+            }]
+        } else {
+            Vec::new()
+        };
+
+        let snapshot = AttributeSnapshot {
+            attribute_id: ATTRIBUTE_MOVEMENT_SPEED_ID,
+            base_value: BASE_MOVEMENT_SPEED,
+            modifiers,
+        };
+
+        let packet = CUpdateAttributes::new(self.id, vec![snapshot]);
+        let chunk_pos = *self.last_chunk_pos.lock();
+        self.world.broadcast_to_nearby(chunk_pos, packet, None);
     }
 
     /// Handles the use of an item on a block.
@@ -2487,6 +2723,10 @@ impl Player {
     /// `PvP` checks before delegating to super). When other living entities are
     /// added, the core logic here should move to a `LivingEntity` trait method.
     pub fn hurt(&self, source: &DamageSource, amount: f32) -> bool {
+        // TODO: Vanilla ServerPlayer.hurtServer checks isInvulnerableTo() first, which
+        // includes gamerule checks (drowningDamage, fallDamage, fireDamage, freezeDamage).
+        // Add when gamerule damage-type system is implemented.
+
         {
             let abilities = self.abilities.lock();
             if abilities.invulnerable && !source.bypasses_invulnerability() {
@@ -2498,10 +2738,35 @@ impl Player {
             return false;
         }
 
-        // TODO: gamerule damage-type checks (drowningDamage, fallDamage, etc.)
-        // TODO: difficulty scaling (Peaceful/Easy/Hard)
+        // TODO: Vanilla LivingEntity.hurtServer checks fire resistance effect here:
+        //   if source.is(IS_FIRE) && hasEffect(FIRE_RESISTANCE) → return false
+        // Blocked on: potion/effect system
+
+        // TODO: Vanilla LivingEntity.hurtServer wakes sleeping entities:
+        //   if this.isSleeping() { this.stopSleeping(); }
+        // Blocked on: full sleep system (stopSleeping, bed block state, stand-up position)
+
+        // TODO: Vanilla LivingEntity.hurtServer sets this.noActionTime = 0 here.
+        // This is the LivingEntity mob-despawn counter (separate from ServerPlayer.lastActionTime).
+        // For players it's not critical, but add for completeness when mob AI is implemented.
+
+        // Difficulty scaling
+        // TODO: well so basically this isn't done in hurt but rather on the ATTACKER side (so Mob.doHurtTarget)
+        let mut amount = amount;
         if source.scales_with_difficulty() {
-            // needs todo
+            let difficulty = self.world.level_data.read().difficulty;
+            match difficulty {
+                Difficulty::Peaceful => {
+                    amount = 0.0;
+                }
+                Difficulty::Easy => {
+                    amount = (amount / 2.0 + 1.0).min(amount);
+                }
+                Difficulty::Hard => {
+                    amount = amount * 3.0 / 2.0;
+                }
+                Difficulty::Normal => {}
+            }
         }
 
         if amount <= 0.0 {
@@ -2528,7 +2793,18 @@ impl Player {
             }
         };
 
+        // TODO: Vanilla LivingEntity.hurtServer applies item blocking (shield) before
+        // actuallyHurt via applyItemBlocking(). Implements shield damage reduction,
+        // BlocksAttacks component, and shield disable cooldown.
+        // Blocked on: item use / blocking system, BlocksAttacks data component
+
         self.actually_hurt(source, effective_amount);
+
+        // TODO: Vanilla LivingEntity.hurtServer applies knockback after damage:
+        //   - Calculates knockback direction from source position or projectile
+        //   - Calls this.knockback(0.4, dx, dz)
+        //   - Calls this.indicateDamage(dx, dz) if not blocked
+        // Blocked on: knockback / velocity system, projectile system
 
         if took_full_damage {
             let type_id = source.damage_type.id() as i32;
@@ -2565,15 +2841,18 @@ impl Player {
     }
 
     /// Applies damage after reductions.
-    /// Vanilla: `LivingEntity.actuallyHurt()`
-    /// TODO: armor, enchantment, absorption, food exhaustion
-    fn actually_hurt(&self, _source: &DamageSource, amount: f32) {
+    /// TODO: armor, enchantment, absorption
+    fn actually_hurt(&self, source: &DamageSource, amount: f32) {
         // TODO: apply armor/enchant/absorption reductions here (vanilla: getDamageAfterArmorAbsorb, getDamageAfterMagicAbsorb)
         // TODO: absorption amount handling
-        // TODO: food exhaustion (source.getFoodExhaustion())
         // TODO: combat tracker (getCombatTracker().recordDamage)
         if amount <= 0.0 {
             return;
+        }
+
+        // TODO: absorption handling
+        if amount > 0.0 {
+            self.cause_food_exhaustion(source.damage_type.exhaustion);
         }
 
         let mut entity_data = self.entity_data.lock();
@@ -2591,10 +2870,6 @@ impl Player {
 
             living_base.dead = true;
         }
-
-        // NOTE: Vanilla `ServerPlayer.die()` does NOT set Pose::Dying — only
-        // `LivingEntity.die()` does (which ServerPlayer never calls via super).
-        // The death screen covers the player model, so the pose is irrelevant.
 
         // Broadcast entity event 3 (death sound) to all nearby players.
         let chunk_pos = *self.last_chunk_pos.lock();
@@ -2710,6 +2985,9 @@ impl Player {
             entity_data.pose.set(EntityPose::Standing);
         }
 
+        // Reset food data to defaults
+        *self.food_data.lock() = FoodData::new();
+
         self.health_sync.lock().reset_for_respawn();
 
         // TODO: bed/respawn anchor lookup, send NO_RESPAWN_BLOCK_AVAILABLE if missing
@@ -2731,7 +3009,7 @@ impl Player {
             data_kept: 0,
         });
 
-        let spawn_pos = world.level_data.read().data().spawn_pos();
+        let spawn_pos = world.level_data.read().spawn_pos();
         let spawn = Vector3::new(
             f64::from(spawn_pos.x()) + 0.5,
             f64::from(spawn_pos.y()),
@@ -2749,7 +3027,7 @@ impl Player {
 
         // TODO: send CSetDefaultSpawnPosition (dimension, pos, yaw, pitch)
 
-        // TODO: send CChangeDifficulty (difficulty, locked)
+        self.send_difficulty();
 
         // TODO: send CSetExperience (progress, level, total)
 
@@ -2997,7 +3275,7 @@ impl LivingEntity for Player {
 
     fn set_sprinting(&self, sprinting: bool) {
         self.entity_state.lock().sprinting = sprinting;
-        // TODO: Apply speed modifiers when attribute system is implemented
+        self.apply_sprint_speed_modifier(sprinting);
     }
 
     fn get_speed(&self) -> f32 {
