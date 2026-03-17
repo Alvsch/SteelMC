@@ -827,7 +827,7 @@ impl From<f32> for GameType {
 
 /// World difficulty level.
 ///
-/// Controls starvation damage thresholds, mob spawning behaviour,
+/// Controls starvation damage thresholds, mob spawning behavior,
 /// and various other gameplay tweaks.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]

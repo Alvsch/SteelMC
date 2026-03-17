@@ -137,7 +137,7 @@ impl FoodData {
     }
 
     /// Returns `true` if the player has enough food to perform exhaustive
-    /// manoeuvres (for example sprinting).
+    /// maneuvers (for example sprinting).
     #[must_use]
     pub const fn has_enough_food(&self) -> bool {
         self.food_level > SPRINT_LEVEL

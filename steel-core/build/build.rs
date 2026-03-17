@@ -6,6 +6,7 @@ use std::env;
 use std::fs;
 
 mod blocks;
+mod candle_cakes;
 mod items;
 mod weathering;
 
@@ -31,6 +32,8 @@ pub fn main() {
         blocks::build(&classes.blocks),
     )
     .expect("Failed to write blocks.rs");
+    fs::write(format!("{out_dir}/candle_cakes.rs"), candle_cakes::build())
+        .expect("Failed to write candle_cakes.rs");
     fs::write(format!("{out_dir}/items.rs"), items::build(&classes.items))
         .expect("Failed to write items.rs");
     fs::write(format!("{out_dir}/weathering.rs"), weathering::build())
