@@ -1,4 +1,4 @@
-use crate::{REGISTRY, RegistryEntry};
+use crate::{REGISTRY, RegistryEntry, RegistryExt};
 use rustc_hash::FxHashMap;
 use steel_utils::Identifier;
 
@@ -47,6 +47,15 @@ impl RegistryEntry for Enchantment {
 }
 
 pub type EnchantmentRef = &'static Enchantment;
+
+impl PartialEq for EnchantmentRef {
+    #[allow(clippy::disallowed_methods)]
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(*self, *other)
+    }
+}
+
+impl Eq for EnchantmentRef {}
 
 pub struct EnchantmentRegistry {
     enchantments_by_id: Vec<EnchantmentRef>,

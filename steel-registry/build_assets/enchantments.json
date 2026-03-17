@@ -1,0 +1,779 @@
+{
+  "enchantments": [
+    {
+      "id": 0,
+      "name": "aqua_affinity",
+      "max_level": 1,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 1,
+        "per_level_above_first": 0
+      },
+      "max_cost": {
+        "base": 41,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "head"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "bane_of_arthropods",
+      "max_level": 5,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 5,
+        "per_level_above_first": 8
+      },
+      "max_cost": {
+        "base": 25,
+        "per_level_above_first": 8
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "binding_curse",
+      "max_level": 1,
+      "anvil_cost": 8,
+      "weight": 1,
+      "min_cost": {
+        "base": 25,
+        "per_level_above_first": 0
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "armor"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "blast_protection",
+      "max_level": 4,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 5,
+        "per_level_above_first": 8
+      },
+      "max_cost": {
+        "base": 13,
+        "per_level_above_first": 8
+      },
+      "slots": [
+        "armor"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "breach",
+      "max_level": 4,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 15,
+        "per_level_above_first": 9
+      },
+      "max_cost": {
+        "base": 65,
+        "per_level_above_first": 9
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "channeling",
+      "max_level": 1,
+      "anvil_cost": 8,
+      "weight": 1,
+      "min_cost": {
+        "base": 25,
+        "per_level_above_first": 0
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "density",
+      "max_level": 5,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 5,
+        "per_level_above_first": 8
+      },
+      "max_cost": {
+        "base": 25,
+        "per_level_above_first": 8
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "depth_strider",
+      "max_level": 3,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 10,
+        "per_level_above_first": 10
+      },
+      "max_cost": {
+        "base": 25,
+        "per_level_above_first": 10
+      },
+      "slots": [
+        "feet"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "efficiency",
+      "max_level": 5,
+      "anvil_cost": 1,
+      "weight": 10,
+      "min_cost": {
+        "base": 1,
+        "per_level_above_first": 10
+      },
+      "max_cost": {
+        "base": 51,
+        "per_level_above_first": 10
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 9,
+      "name": "feather_falling",
+      "max_level": 4,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 5,
+        "per_level_above_first": 6
+      },
+      "max_cost": {
+        "base": 11,
+        "per_level_above_first": 6
+      },
+      "slots": [
+        "armor"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "fire_aspect",
+      "max_level": 2,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 10,
+        "per_level_above_first": 20
+      },
+      "max_cost": {
+        "base": 60,
+        "per_level_above_first": 20
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 11,
+      "name": "fire_protection",
+      "max_level": 4,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 10,
+        "per_level_above_first": 8
+      },
+      "max_cost": {
+        "base": 18,
+        "per_level_above_first": 8
+      },
+      "slots": [
+        "armor"
+      ]
+    },
+    {
+      "id": 12,
+      "name": "flame",
+      "max_level": 1,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 20,
+        "per_level_above_first": 0
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 13,
+      "name": "fortune",
+      "max_level": 3,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 15,
+        "per_level_above_first": 9
+      },
+      "max_cost": {
+        "base": 65,
+        "per_level_above_first": 9
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 14,
+      "name": "frost_walker",
+      "max_level": 2,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 10,
+        "per_level_above_first": 10
+      },
+      "max_cost": {
+        "base": 25,
+        "per_level_above_first": 10
+      },
+      "slots": [
+        "feet"
+      ]
+    },
+    {
+      "id": 15,
+      "name": "impaling",
+      "max_level": 5,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 1,
+        "per_level_above_first": 8
+      },
+      "max_cost": {
+        "base": 21,
+        "per_level_above_first": 8
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 16,
+      "name": "infinity",
+      "max_level": 1,
+      "anvil_cost": 8,
+      "weight": 1,
+      "min_cost": {
+        "base": 20,
+        "per_level_above_first": 0
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 17,
+      "name": "knockback",
+      "max_level": 2,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 5,
+        "per_level_above_first": 20
+      },
+      "max_cost": {
+        "base": 55,
+        "per_level_above_first": 20
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 18,
+      "name": "looting",
+      "max_level": 3,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 15,
+        "per_level_above_first": 9
+      },
+      "max_cost": {
+        "base": 65,
+        "per_level_above_first": 9
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 19,
+      "name": "loyalty",
+      "max_level": 3,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 12,
+        "per_level_above_first": 7
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 20,
+      "name": "luck_of_the_sea",
+      "max_level": 3,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 15,
+        "per_level_above_first": 9
+      },
+      "max_cost": {
+        "base": 65,
+        "per_level_above_first": 9
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 21,
+      "name": "lunge",
+      "max_level": 3,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 5,
+        "per_level_above_first": 8
+      },
+      "max_cost": {
+        "base": 25,
+        "per_level_above_first": 8
+      },
+      "slots": [
+        "hand"
+      ]
+    },
+    {
+      "id": 22,
+      "name": "lure",
+      "max_level": 3,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 15,
+        "per_level_above_first": 9
+      },
+      "max_cost": {
+        "base": 65,
+        "per_level_above_first": 9
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 23,
+      "name": "mending",
+      "max_level": 1,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 25,
+        "per_level_above_first": 25
+      },
+      "max_cost": {
+        "base": 75,
+        "per_level_above_first": 25
+      },
+      "slots": [
+        "any"
+      ]
+    },
+    {
+      "id": 24,
+      "name": "multishot",
+      "max_level": 1,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 20,
+        "per_level_above_first": 0
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 25,
+      "name": "piercing",
+      "max_level": 4,
+      "anvil_cost": 1,
+      "weight": 10,
+      "min_cost": {
+        "base": 1,
+        "per_level_above_first": 10
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 26,
+      "name": "power",
+      "max_level": 5,
+      "anvil_cost": 1,
+      "weight": 10,
+      "min_cost": {
+        "base": 1,
+        "per_level_above_first": 10
+      },
+      "max_cost": {
+        "base": 16,
+        "per_level_above_first": 10
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 27,
+      "name": "projectile_protection",
+      "max_level": 4,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 3,
+        "per_level_above_first": 6
+      },
+      "max_cost": {
+        "base": 9,
+        "per_level_above_first": 6
+      },
+      "slots": [
+        "armor"
+      ]
+    },
+    {
+      "id": 28,
+      "name": "protection",
+      "max_level": 4,
+      "anvil_cost": 1,
+      "weight": 10,
+      "min_cost": {
+        "base": 1,
+        "per_level_above_first": 11
+      },
+      "max_cost": {
+        "base": 12,
+        "per_level_above_first": 11
+      },
+      "slots": [
+        "armor"
+      ]
+    },
+    {
+      "id": 29,
+      "name": "punch",
+      "max_level": 2,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 12,
+        "per_level_above_first": 20
+      },
+      "max_cost": {
+        "base": 37,
+        "per_level_above_first": 20
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 30,
+      "name": "quick_charge",
+      "max_level": 3,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 12,
+        "per_level_above_first": 20
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "mainhand",
+        "offhand"
+      ]
+    },
+    {
+      "id": 31,
+      "name": "respiration",
+      "max_level": 3,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 10,
+        "per_level_above_first": 10
+      },
+      "max_cost": {
+        "base": 40,
+        "per_level_above_first": 10
+      },
+      "slots": [
+        "head"
+      ]
+    },
+    {
+      "id": 32,
+      "name": "riptide",
+      "max_level": 3,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 17,
+        "per_level_above_first": 7
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "hand"
+      ]
+    },
+    {
+      "id": 33,
+      "name": "sharpness",
+      "max_level": 5,
+      "anvil_cost": 1,
+      "weight": 10,
+      "min_cost": {
+        "base": 1,
+        "per_level_above_first": 11
+      },
+      "max_cost": {
+        "base": 21,
+        "per_level_above_first": 11
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 34,
+      "name": "silk_touch",
+      "max_level": 1,
+      "anvil_cost": 8,
+      "weight": 1,
+      "min_cost": {
+        "base": 15,
+        "per_level_above_first": 0
+      },
+      "max_cost": {
+        "base": 65,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 35,
+      "name": "smite",
+      "max_level": 5,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 5,
+        "per_level_above_first": 8
+      },
+      "max_cost": {
+        "base": 25,
+        "per_level_above_first": 8
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 36,
+      "name": "soul_speed",
+      "max_level": 3,
+      "anvil_cost": 8,
+      "weight": 1,
+      "min_cost": {
+        "base": 10,
+        "per_level_above_first": 10
+      },
+      "max_cost": {
+        "base": 25,
+        "per_level_above_first": 10
+      },
+      "slots": [
+        "feet"
+      ]
+    },
+    {
+      "id": 37,
+      "name": "sweeping_edge",
+      "max_level": 3,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 5,
+        "per_level_above_first": 9
+      },
+      "max_cost": {
+        "base": 20,
+        "per_level_above_first": 9
+      },
+      "slots": [
+        "mainhand"
+      ]
+    },
+    {
+      "id": 38,
+      "name": "swift_sneak",
+      "max_level": 3,
+      "anvil_cost": 8,
+      "weight": 1,
+      "min_cost": {
+        "base": 25,
+        "per_level_above_first": 25
+      },
+      "max_cost": {
+        "base": 75,
+        "per_level_above_first": 25
+      },
+      "slots": [
+        "legs"
+      ]
+    },
+    {
+      "id": 39,
+      "name": "thorns",
+      "max_level": 3,
+      "anvil_cost": 8,
+      "weight": 1,
+      "min_cost": {
+        "base": 10,
+        "per_level_above_first": 20
+      },
+      "max_cost": {
+        "base": 60,
+        "per_level_above_first": 20
+      },
+      "slots": [
+        "any"
+      ]
+    },
+    {
+      "id": 40,
+      "name": "unbreaking",
+      "max_level": 3,
+      "anvil_cost": 2,
+      "weight": 5,
+      "min_cost": {
+        "base": 5,
+        "per_level_above_first": 8
+      },
+      "max_cost": {
+        "base": 55,
+        "per_level_above_first": 8
+      },
+      "slots": [
+        "any"
+      ]
+    },
+    {
+      "id": 41,
+      "name": "vanishing_curse",
+      "max_level": 1,
+      "anvil_cost": 8,
+      "weight": 1,
+      "min_cost": {
+        "base": 25,
+        "per_level_above_first": 0
+      },
+      "max_cost": {
+        "base": 50,
+        "per_level_above_first": 0
+      },
+      "slots": [
+        "any"
+      ]
+    },
+    {
+      "id": 42,
+      "name": "wind_burst",
+      "max_level": 3,
+      "anvil_cost": 4,
+      "weight": 2,
+      "min_cost": {
+        "base": 15,
+        "per_level_above_first": 9
+      },
+      "max_cost": {
+        "base": 65,
+        "per_level_above_first": 9
+      },
+      "slots": [
+        "mainhand"
+      ]
+    }
+  ]
+}
