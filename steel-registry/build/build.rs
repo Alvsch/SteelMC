@@ -42,6 +42,8 @@ mod wolf_sound_variants;
 mod wolf_variants;
 mod zombie_nautilus_variants;
 
+mod enchantments;
+
 mod density_functions;
 mod multi_noise;
 mod noise_parameters;
@@ -98,6 +100,7 @@ const FLUIDS: &str = "fluids";
 const FLUID_TAGS: &str = "fluid_tags";
 const POI_TYPES: &str = "poi_types";
 
+const ENCHANTMENTS: &str = "enchantments";
 const LOOT_TABLES: &str = "loot_tables";
 const BLOCK_ENTITY_TYPES: &str = "block_entity_types";
 const GAME_RULES: &str = "game_rules";
@@ -169,6 +172,7 @@ pub fn main() {
         (instrument_tags::build(), INSTRUMENT_TAGS),
         (painting_variant_tags::build(), PAINTING_VARIANT_TAGS),
         (poi_type_tags::build(), POI_TYPE_TAGS),
+        (enchantments::build(), ENCHANTMENTS),
     ];
 
     // Track which files we're generating this run

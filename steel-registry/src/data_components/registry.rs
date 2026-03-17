@@ -385,7 +385,10 @@ impl DataComponentMap {
         let mut map = FxHashMap::default();
         map.insert(MAX_STACK_SIZE.key.clone(), ComponentData::I32(64));
         map.insert(LORE.key.clone(), ComponentData::Todo);
-        map.insert(ENCHANTMENTS.key.clone(), ComponentData::Todo);
+        map.insert(
+            ENCHANTMENTS.key.clone(),
+            ComponentData::Enchantments(super::components::ItemEnchantments::empty()),
+        );
         map.insert(REPAIR_COST.key.clone(), ComponentData::I32(0));
         map.insert(ATTRIBUTE_MODIFIERS.key.clone(), ComponentData::Todo);
         map.insert(RARITY.key.clone(), ComponentData::Todo);

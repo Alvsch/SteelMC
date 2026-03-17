@@ -10,7 +10,7 @@ use super::registry::DataComponentRegistry;
 pub use super::registry::DataComponentType;
 
 // Re-export component types for convenience
-pub use super::components::{Equippable, EquippableSlot, Tool, ToolRule};
+pub use super::components::{Equippable, EquippableSlot, ItemEnchantments, Tool, ToolRule};
 
 // ==================== Fully Implemented Components ====================
 
@@ -80,7 +80,7 @@ pub const LORE: DataComponentType<()> = DataComponentType::new(Identifier::vanil
 pub const RARITY: DataComponentType<()> =
     DataComponentType::new(Identifier::vanilla_static("rarity"));
 
-pub const ENCHANTMENTS: DataComponentType<()> =
+pub const ENCHANTMENTS: DataComponentType<ItemEnchantments> =
     DataComponentType::new(Identifier::vanilla_static("enchantments"));
 
 pub const CAN_PLACE_ON: DataComponentType<()> =
@@ -148,7 +148,7 @@ pub const SWING_ANIMATION: DataComponentType<()> =
 pub const ADDITIONAL_TRADE_COST: DataComponentType<()> =
     DataComponentType::new(Identifier::vanilla_static("additional_trade_cost"));
 
-pub const STORED_ENCHANTMENTS: DataComponentType<()> =
+pub const STORED_ENCHANTMENTS: DataComponentType<ItemEnchantments> =
     DataComponentType::new(Identifier::vanilla_static("stored_enchantments"));
 
 pub const DYED_COLOR: DataComponentType<()> =
