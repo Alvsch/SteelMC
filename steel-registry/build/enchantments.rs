@@ -5,10 +5,8 @@ use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::quote;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug)]
 struct EnchantmentJson {
-    id: u32,
-    name: String,
     max_level: u32,
     min_cost: CostJson,
     max_cost: CostJson,
@@ -17,15 +15,10 @@ struct EnchantmentJson {
     slots: Vec<String>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug)]
 struct CostJson {
     base: i32,
     per_level_above_first: i32,
-}
-
-#[derive(Deserialize, Debug)]
-struct EnchantmentsFile {
-    enchantments: Vec<EnchantmentJson>,
 }
 
 fn slot_to_tokens(slot: &str) -> TokenStream {
@@ -45,15 +38,36 @@ fn slot_to_tokens(slot: &str) -> TokenStream {
 }
 
 pub(crate) fn build() -> TokenStream {
-    println!("cargo:rerun-if-changed=build_assets/enchantments.json");
+    println!(
+        "cargo:rerun-if-changed=build_assets/builtin_datapacks/minecraft/data/minecraft/enchantment/"
+    );
 
-    let content = fs::read_to_string("build_assets/enchantments.json")
-        .expect("Failed to read enchantments.json");
-    let file: EnchantmentsFile =
-        serde_json::from_str(&content).expect("Failed to parse enchantments.json");
+    let enchantment_dir = "build_assets/builtin_datapacks/minecraft/data/minecraft/enchantment";
+    let mut enchantments = Vec::new();
 
-    let mut enchantments = file.enchantments;
-    enchantments.sort_by_key(|e| e.id);
+    for entry in fs::read_dir(enchantment_dir).expect("Failed to read enchantment directory") {
+        let entry = entry.expect("Failed to read directory entry");
+        let path = entry.path();
+
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+
+        let name = path
+            .file_stem()
+            .expect("No file stem")
+            .to_str()
+            .expect("Invalid UTF-8")
+            .to_string();
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
+        let ench: EnchantmentJson = serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse {name}: {e}"));
+
+        enchantments.push((name, ench));
+    }
+
+    enchantments.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut stream = TokenStream::new();
 
@@ -66,9 +80,8 @@ pub(crate) fn build() -> TokenStream {
 
     let mut register_stream = TokenStream::new();
 
-    for ench in &enchantments {
-        let const_ident = Ident::new(&ench.name.to_shouty_snake_case(), Span::call_site());
-        let name = &ench.name;
+    for (name, ench) in &enchantments {
+        let const_ident = Ident::new(&name.to_shouty_snake_case(), Span::call_site());
 
         let max_level = Literal::u32_unsuffixed(ench.max_level);
         let min_cost_base = Literal::i32_unsuffixed(ench.min_cost.base);
