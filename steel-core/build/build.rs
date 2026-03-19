@@ -7,6 +7,7 @@ use std::fs;
 
 mod blocks;
 mod candle_cakes;
+mod common;
 mod items;
 mod weathering;
 
@@ -41,4 +42,5 @@ pub fn main() {
 
     println!("cargo:rerun-if-changed={manifest_dir}/build/classes.json");
     println!("cargo:rerun-if-changed={manifest_dir}/src/behavior/blocks");
+    println!("cargo:rerun-if-changed={manifest_dir}/src/behavior/items");
 }

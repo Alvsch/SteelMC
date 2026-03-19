@@ -29,6 +29,7 @@ use bitflags::bitflags;
 use chat_state::ChatState;
 use entity_state::EntityState;
 use food_data::{FoodData, FoodTickResult, food_constants};
+use glam::DVec3;
 use health_sync::HealthSyncState;
 pub use message_validator::LastSeenMessagesValidator;
 use movement_state::MovementState;
@@ -118,7 +119,7 @@ use crate::block_entity::entities::SignBlockEntity;
 use steel_utils::BlockPos;
 
 use steel_utils::types::InteractionHand;
-use steel_utils::{ChunkPos, math::Vector3, translations};
+use steel_utils::{ChunkPos, translations};
 
 use crate::entity::LivingEntity;
 
@@ -238,7 +239,7 @@ pub struct Player {
     pub client_loaded: AtomicBool,
 
     /// The player's position.
-    pub position: SyncMutex<Vector3<f64>>,
+    pub position: SyncMutex<DVec3>,
     /// The player's rotation (yaw, pitch).
     pub rotation: AtomicCell<(f32, f32)>,
     /// Movement tracking state
@@ -325,9 +326,9 @@ impl Player {
     }
 
     /// Computes the start (eye position) and end positions for a raytrace.
-    pub fn get_ray_endpoints(&self) -> (Vector3<f64>, Vector3<f64>) {
+    pub fn get_ray_endpoints(&self) -> (DVec3, DVec3) {
         let pos = self.position();
-        let start_pos = Vector3::new(pos.x, self.get_eye_y(), pos.z);
+        let start_pos = DVec3::new(pos.x, self.get_eye_y(), pos.z);
         let (yaw, pitch) = self.rotation();
         let (yaw_rad, pitch_rad) = (f64::from(yaw.to_radians()), f64::from(pitch.to_radians()));
         // Vanilla: Attributes.BLOCK_INTERACTION_RANGE defaults to 4.5,
@@ -337,13 +338,13 @@ impl Player {
         } else {
             4.5
         };
-        let direction = Vector3::new(
+        let direction = DVec3::new(
             -yaw_rad.sin() * pitch_rad.cos() * block_interaction_range,
             -pitch_rad.sin() * block_interaction_range,
             pitch_rad.cos() * yaw_rad.cos() * block_interaction_range,
         );
 
-        let end_pos = start_pos.add(&direction);
+        let end_pos = start_pos + direction;
         (start_pos, end_pos)
     }
 
@@ -360,7 +361,7 @@ impl Player {
         // Create a single shared inventory container used by both the player and inventory menu
         let inventory = Arc::new(SyncMutex::new(PlayerInventory::new(player.clone())));
 
-        let pos = Vector3::new(0.0, 0.0, 0.0);
+        let pos = DVec3::new(0.0, 0.0, 0.0);
 
         Self {
             gameprofile,
@@ -946,7 +947,8 @@ impl Player {
         let tick_frozen = !self.world.tick_runs_normally();
 
         if packet.has_pos {
-            let target_pos = Vector3::new(
+            // Clamp position to vanilla limits
+            let target_pos = DVec3::new(
                 movement::clamp_horizontal(packet.position.x),
                 movement::clamp_vertical(packet.position.y),
                 movement::clamp_horizontal(packet.position.z),
@@ -1836,12 +1838,12 @@ impl Player {
 
     /// Returns the player's current velocity.
     #[must_use]
-    pub fn get_delta_movement(&self) -> Vector3<f64> {
+    pub fn get_delta_movement(&self) -> DVec3 {
         self.movement.lock().delta_movement
     }
 
     /// Sets the player's velocity.
-    pub fn set_delta_movement(&self, velocity: Vector3<f64>) {
+    pub fn set_delta_movement(&self, velocity: DVec3) {
         self.movement.lock().delta_movement = velocity;
     }
 
@@ -1896,7 +1898,7 @@ impl Player {
     ///
     /// Matches vanilla `ServerGamePacketListenerImpl.teleport()`.
     pub fn teleport(&self, x: f64, y: f64, z: f64, yaw: f32, pitch: f32) {
-        let pos = Vector3::new(x, y, z);
+        let pos = DVec3::new(x, y, z);
 
         let new_id = {
             let mut tp = self.teleport_state.lock();
@@ -2585,7 +2587,7 @@ impl Player {
             // Random direction throw (like death drops)
             let power = rand::random::<f32>() * 0.5;
             let angle = rand::random::<f32>() * TAU;
-            Vector3::new(
+            DVec3::new(
                 f64::from(-angle.sin() * power),
                 0.2,
                 f64::from(angle.cos() * power),
@@ -2604,7 +2606,7 @@ impl Player {
             let angle_offset = rand::random::<f32>() * TAU;
             let power_offset = 0.02 * rand::random::<f32>();
 
-            Vector3::new(
+            DVec3::new(
                 f64::from(-sin_yaw * cos_pitch * 0.3)
                     + f64::from(angle_offset.cos() * power_offset),
                 f64::from(-sin_pitch * 0.3 + 0.1)
@@ -2613,7 +2615,7 @@ impl Player {
             )
         };
 
-        let spawn_pos = Vector3::new(pos.x, spawn_y, pos.z);
+        let spawn_pos = DVec3::new(pos.x, spawn_y, pos.z);
 
         if let Some(entity) = self
             .world
@@ -2969,7 +2971,7 @@ impl Player {
         // is naturally zeroed; we reuse the same Player, so we must reset manually.
         // TODO: as new transient fields are added (effects, fire ticks, frozen
         // ticks, etc.), they must be reset here too.
-        self.movement.lock().delta_movement = Vector3::default();
+        self.movement.lock().delta_movement = DVec3::default();
         {
             let mut es = self.entity_state.lock();
             es.on_ground = false;
@@ -3009,8 +3011,8 @@ impl Player {
             data_kept: 0,
         });
 
-        let spawn_pos = world.level_data.read().spawn_pos();
-        let spawn = Vector3::new(
+        let spawn_pos = world.level_data.read().data().spawn_pos();
+        let spawn = DVec3::new(
             f64::from(spawn_pos.x()) + 0.5,
             f64::from(spawn_pos.y()),
             f64::from(spawn_pos.z()) + 0.5,
@@ -3155,7 +3157,7 @@ impl Entity for Player {
         self.gameprofile.id
     }
 
-    fn position(&self) -> Vector3<f64> {
+    fn position(&self) -> DVec3 {
         *self.position.lock()
     }
 
@@ -3206,7 +3208,7 @@ impl Entity for Player {
         self.rotation.load()
     }
 
-    fn velocity(&self) -> Vector3<f64> {
+    fn velocity(&self) -> DVec3 {
         self.movement.lock().delta_movement
     }
 
