@@ -23,7 +23,6 @@ use crate::{
 /// - [ ] animation ticks
 /// - [ ] onProjectile
 /// - [ ] onExplosion
-/// - [ ] drop candle when updateShape returns air
 #[block_behavior]
 pub struct CandleCakeBlock {
     block: BlockRef,
