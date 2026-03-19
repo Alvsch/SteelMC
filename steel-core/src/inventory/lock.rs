@@ -11,6 +11,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use steel_utils::locks::SyncMutex;
 
+use crate::inventory::anvil_menu::SimpleContainer;
 use crate::{
     block_entity::{BlockEntity, SharedBlockEntity},
     inventory::{
@@ -44,6 +45,8 @@ pub enum LockedContainer {
     /// The block entity is guaranteed to return `Some` from `as_container()`
     /// because this variant is only constructed after validation.
     BlockEntity(ArcMutexGuard<RawMutex, dyn BlockEntity>),
+    /// A Simple Container
+    SimpleContainer(ArcMutexGuard<RawMutex, SimpleContainer>),
 }
 
 impl Deref for LockedContainer {
@@ -58,6 +61,7 @@ impl Deref for LockedContainer {
             LockedContainer::BlockEntity(guard) => (**guard)
                 .as_container()
                 .expect("BlockEntity variant should only be used for container block entities"),
+            LockedContainer::SimpleContainer(guard) => &**guard,
         }
     }
 }
@@ -72,6 +76,7 @@ impl DerefMut for LockedContainer {
             LockedContainer::BlockEntity(guard) => (**guard)
                 .as_container_mut()
                 .expect("BlockEntity variant should only be used for container block entities"),
+            LockedContainer::SimpleContainer(guard) => &mut **guard,
         }
     }
 }
@@ -96,6 +101,8 @@ pub enum ContainerRef {
     /// Use [`ContainerRef::from_block_entity`] to create this variant,
     /// which validates that the block entity actually implements Container.
     BlockEntity(SharedBlockEntity),
+    /// A Simple Container
+    SimpleContainer(Arc<SyncMutex<SimpleContainer>>),
 }
 
 impl From<SyncPlayerInv> for ContainerRef {
@@ -128,6 +135,7 @@ impl ContainerRef {
             ContainerRef::ResultContainer(arc) => ContainerId::from_arc(arc),
             ContainerRef::Other(arc) => ContainerId::from_arc(arc),
             ContainerRef::BlockEntity(arc) => ContainerId::from_arc(arc),
+            ContainerRef::SimpleContainer(arc) => ContainerId::from_arc(arc),
         }
     }
 
@@ -146,6 +154,9 @@ impl ContainerRef {
             ContainerRef::Other(arc) => LockedContainer::Other(SyncMutex::lock_arc(arc)),
             ContainerRef::BlockEntity(arc) => {
                 LockedContainer::BlockEntity(SyncMutex::lock_arc(arc))
+            }
+            ContainerRef::SimpleContainer(arc) => {
+                LockedContainer::SimpleContainer(SyncMutex::lock_arc(arc))
             }
         }
     }

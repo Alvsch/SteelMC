@@ -3,6 +3,7 @@
 //! This module provides the core inventory system including containers,
 //! menus, crafting, equipment, and recipes.
 
+pub mod anvil_menu;
 pub mod chest_menu;
 pub mod container;
 pub mod crafting;

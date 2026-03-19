@@ -14,6 +14,7 @@ use steel_registry::item_stack::ItemStack;
 use steel_utils::locks::SyncMutex;
 
 use crate::inventory::SyncPlayerInv;
+use crate::inventory::anvil_menu::SimpleContainer;
 use crate::inventory::container::Container;
 use crate::inventory::crafting::{CraftingContainer, ResultContainer};
 use crate::inventory::lock::{ContainerId, ContainerLockGuard, ContainerRef};
@@ -25,6 +26,9 @@ pub type SyncCraftingContainer = Arc<SyncMutex<CraftingContainer>>;
 
 /// A synchronized result container.
 pub type SyncResultContainer = Arc<SyncMutex<ResultContainer>>;
+
+/// A synchronized simple container.
+pub type SyncSimpleContainer = Arc<SyncMutex<SimpleContainer>>;
 
 /// A slot is a view into a single position in a container.
 /// Slots require a `ContainerLockGuard` to access items, ensuring proper locking.
@@ -693,6 +697,121 @@ impl Slot for CraftingResultSlot {
     }
 }
 
+/// The Result Slot in an Anvil
+pub struct AnvilResultSlot {
+    input_container: SyncSimpleContainer,
+    result_container: SyncResultContainer,
+}
+
+impl AnvilResultSlot {
+    /// Creates a new Anvil Result Slot
+    pub const fn new(
+        input_container: SyncSimpleContainer,
+        result_container: SyncResultContainer,
+    ) -> Self {
+        Self {
+            input_container,
+            result_container,
+        }
+    }
+
+    /// Returns a reference to the result container.
+    #[must_use]
+    pub fn result_container_ref(&self) -> ContainerRef {
+        ContainerRef::ResultContainer(Arc::clone(&self.result_container))
+    }
+
+    /// Returns a reference to the input container.
+    #[must_use]
+    pub fn input_container_ref(&self) -> ContainerRef {
+        ContainerRef::SimpleContainer(Arc::clone(&self.input_container))
+    }
+}
+
+impl Slot for AnvilResultSlot {
+    #[doc = " Returns a reference to the item in this slot."]
+    fn get_item<'a>(&self, guard: &'a ContainerLockGuard) -> &'a ItemStack {
+        guard
+            .get(ContainerId::from_arc(&self.result_container))
+            .expect("container not locked")
+            .get_item(0)
+    }
+
+    #[doc = " Returns a mutable reference to the item in this slot."]
+    fn get_item_mut<'a>(&self, guard: &'a mut ContainerLockGuard) -> &'a mut ItemStack {
+        guard
+            .get_mut(ContainerId::from_arc(&self.result_container))
+            .expect("container not locked")
+            .get_item_mut(0)
+    }
+
+    #[doc = " Sets the item in this slot."]
+    fn set_item(&self, guard: &mut ContainerLockGuard, stack: ItemStack) {
+        guard
+            .get_mut(ContainerId::from_arc(&self.result_container))
+            .expect("container not locked")
+            .set_item(0, stack);
+    }
+
+    #[doc = " Returns the maximum stack size for this slot."]
+    #[doc = ""]
+    #[doc = " For normal slots, this delegates to the container\'s max stack size."]
+    #[doc = " For special slots (like armor), this may return a fixed value (e.g., 1)."]
+    fn get_max_stack_size(&self, guard: &ContainerLockGuard) -> i32 {
+        guard
+            .get(ContainerId::from_arc(&self.result_container))
+            .expect("container not locked")
+            .get_max_stack_size()
+    }
+
+    #[doc = " Marks the slot\'s container as changed."]
+    fn set_changed(&self, guard: &mut ContainerLockGuard) {
+        guard
+            .get_mut(ContainerId::from_arc(&self.result_container))
+            .expect("container not locked")
+            .set_changed();
+    }
+
+    #[doc = " Returns the container slot index."]
+    fn get_container_slot(&self) -> usize {
+        0
+    }
+
+    /// Cannot place items directly in the result slot.
+    fn may_place(&self, _stack: &ItemStack) -> bool {
+        false
+    }
+
+    /// Result slots don't allow partial removal.
+    fn allow_modification(&self, _guard: &ContainerLockGuard) -> bool {
+        false
+    }
+
+    /// Removes items from the anvil result slot and remove xp.
+    ///
+    /// Unlike normal slots, this **always takes the entire stack** regardless
+    /// of the `amount` parameter.
+    fn remove(&self, guard: &mut ContainerLockGuard, _amount: i32) -> ItemStack {
+        mem::take(self.get_item_mut(guard))
+    }
+
+    fn on_take(
+        &self,
+        _guard: &mut ContainerLockGuard,
+        _stack: &ItemStack,
+        player: &Player,
+    ) -> Option<ItemStack> {
+        if !player.has_infinite_materials() {
+            // TODO: take xp
+        }
+        None
+    }
+
+    fn is_fake(&self) -> bool {
+        true
+    }
+}
+
 /// Enum of all slot types that implement the Slot trait.
 #[enum_dispatch(Slot)]
 pub enum SlotType {
@@ -704,6 +823,8 @@ pub enum SlotType {
     CraftingGrid(CraftingGridSlot),
     /// Crafting result slot (fake, doesn't persist items).
     CraftingResult(CraftingResultSlot),
+    /// Anvil result slot (fake, doesn't persist items).
+    AnvilResult(AnvilResultSlot),
 }
 
 impl SlotType {
@@ -719,6 +840,7 @@ impl SlotType {
             SlotType::CraftingResult(s) => {
                 vec![s.result_container_ref(), s.crafting_container_ref()]
             }
+            SlotType::AnvilResult(s) => vec![s.input_container_ref(), s.result_container_ref()],
         }
     }
 

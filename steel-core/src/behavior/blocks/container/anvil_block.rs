@@ -1,0 +1,50 @@
+use std::sync::Arc;
+
+use steel_macros::block_behavior;
+use steel_registry::{
+    blocks::{BlockRef, block_state_ext::BlockStateExt, properties::BlockStateProperties},
+    items::item::BlockHitResult,
+};
+use steel_utils::BlockStateId;
+
+use crate::{
+    behavior::{BlockBehavior, BlockPlaceContext, InteractionResult},
+    inventory::anvil_menu::AnvilMenuProvider,
+    player::Player,
+    world::World,
+};
+
+/// Behavior for Anvils
+#[block_behavior]
+pub struct AnvilBlock {
+    block: BlockRef,
+}
+
+impl AnvilBlock {
+    /// Creates a new Anvil Block Behavior
+    #[must_use]
+    pub const fn new(block: BlockRef) -> Self {
+        Self { block }
+    }
+}
+
+impl BlockBehavior for AnvilBlock {
+    fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
+        Some(self.block.default_state().set_value(
+            &BlockStateProperties::FACING,
+            context.horizontal_direction.rotate_y_clockwise(),
+        ))
+    }
+
+    fn use_without_item(
+        &self,
+        _state: BlockStateId,
+        _world: &Arc<World>,
+        pos: steel_utils::BlockPos,
+        player: &Player,
+        _hit_result: &BlockHitResult,
+    ) -> InteractionResult {
+        player.open_menu(&AnvilMenuProvider::new(player.inventory.clone(), pos));
+        InteractionResult::Success
+    }
+}
