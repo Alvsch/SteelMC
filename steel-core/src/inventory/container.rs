@@ -18,8 +18,15 @@ pub const DEFAULT_DISTANCE_BUFFER: f32 = 4.0;
 /// Example: `PlayerInventory`, Chest, Temporary Crafting Table
 #[enum_dispatch]
 pub trait Container {
+    /// Returns the items in this container
+    fn items(&self) -> &[ItemStack];
+    /// Returns mutable references to the items in this container.
+    fn items_mut(&mut self) -> &mut [ItemStack];
+
     /// Returns the number of slots in this container.
-    fn get_container_size(&self) -> usize;
+    fn get_container_size(&self) -> usize {
+        self.items().len()
+    }
 
     /// Returns true if all slots in this container are empty.
     fn is_empty(&self) -> bool {
@@ -32,13 +39,19 @@ pub trait Container {
     }
 
     /// Returns a reference to the item in the specified slot.
-    fn get_item(&self, slot: usize) -> &ItemStack;
+    fn get_item(&self, slot: usize) -> &ItemStack {
+        &self.items()[slot]
+    }
 
     /// Returns a mutable reference to the item in the specified slot.
-    fn get_item_mut(&mut self, slot: usize) -> &mut ItemStack;
+    fn get_item_mut(&mut self, slot: usize) -> &mut ItemStack {
+        &mut self.items_mut()[slot]
+    }
 
     /// Sets the item in the specified slot.
-    fn set_item(&mut self, slot: usize, stack: ItemStack);
+    fn set_item(&mut self, slot: usize, stack: ItemStack) {
+        self.items_mut()[slot] = stack;
+    }
 
     /// Removes up to `count` items from the specified slot and returns them.
     fn remove_item(&mut self, slot: usize, count: i32) -> ItemStack {
@@ -98,8 +111,7 @@ pub trait Container {
     /// Clears all items from this container.
     fn clear_content(&mut self) -> i32 {
         let mut count = 0;
-        for i in 0..self.get_container_size() {
-            let item = self.get_item_mut(i);
+        for item in self.items_mut() {
             count += item.count;
             *item = ItemStack::empty();
         }
@@ -109,8 +121,7 @@ pub trait Container {
     /// Clears all items from this container.
     fn clear_content_matching(&mut self, predicate: &mut dyn FnMut(&mut ItemStack) -> bool) -> i32 {
         let mut count = 0;
-        for i in 0..self.get_container_size() {
-            let item = self.get_item_mut(i);
+        for item in self.items_mut() {
             if predicate(item) {
                 count += item.count;
                 *item = ItemStack::empty();
@@ -128,7 +139,7 @@ pub trait Container {
     where
         Self: Sized,
     {
-        with_indices(self, indices)
+        with_indices(self, indices) // FIXME: gotta look at this
     }
 
     /// Tries to add an item to the container.
@@ -177,6 +188,16 @@ pub trait Container {
         }
 
         stack.is_empty()
+    }
+
+    /// Returns a boxed iterator to the items in this container
+    fn iter(&self) -> Box<dyn Iterator<Item = &ItemStack> + '_> {
+        Box::new(self.items().iter())
+    }
+
+    /// Returns a boxed iterator to mutable references of the items in this container
+    fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &mut ItemStack> + '_> {
+        Box::new(self.items_mut().iter_mut())
     }
 }
 
@@ -270,22 +291,20 @@ mod tests {
     }
 
     impl Container for TestContainer {
+        fn items(&self) -> &[ItemStack] {
+            &self.items
+        }
+
+        fn items_mut(&mut self) -> &mut [ItemStack] {
+            &mut self.items
+        }
+
+        #[doc = " Returns the number of slots in this container."]
         fn get_container_size(&self) -> usize {
             self.items.len()
         }
 
-        fn get_item(&self, slot: usize) -> &ItemStack {
-            &self.items[slot]
-        }
-
-        fn get_item_mut(&mut self, slot: usize) -> &mut ItemStack {
-            &mut self.items[slot]
-        }
-
-        fn set_item(&mut self, slot: usize, stack: ItemStack) {
-            self.items[slot] = stack;
-        }
-
+        #[doc = " Marks this container as changed (dirty) for saving/syncing."]
         fn set_changed(&mut self) {}
     }
 

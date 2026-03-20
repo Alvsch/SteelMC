@@ -255,6 +255,16 @@ impl PlayerInventory {
 static EMPTY_ITEM: LazyLock<ItemStack> = LazyLock::new(ItemStack::empty);
 
 impl Container for PlayerInventory {
+    /// WARNING: This only returns the items in the main inventory, not those in the equipment slots
+    fn items(&self) -> &[ItemStack] {
+        &self.items
+    }
+
+    /// WARNING: This only returns the items in the main inventory, not those in the equipment slots
+    fn items_mut(&mut self) -> &mut [ItemStack] {
+        &mut self.items
+    }
+
     fn get_container_size(&self) -> usize {
         // 36 main slots + 7 equipment slots (feet, legs, chest, head, offhand, body, saddle)
         Self::INVENTORY_SIZE + 7
@@ -367,5 +377,13 @@ impl Container for PlayerInventory {
         self.equipment.clear();
         self.set_changed();
         count
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = &ItemStack> + '_> {
+        Box::new(self.items.iter().chain(self.equipment.iter()))
+    }
+
+    fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &mut ItemStack> + '_> {
+        Box::new(self.items.iter_mut().chain(self.equipment.iter_mut()))
     }
 }

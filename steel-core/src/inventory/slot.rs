@@ -14,11 +14,11 @@ use steel_registry::item_stack::ItemStack;
 use steel_utils::locks::SyncMutex;
 
 use crate::inventory::SyncPlayerInv;
-use crate::inventory::anvil_menu::SimpleContainer;
 use crate::inventory::container::Container;
 use crate::inventory::crafting::{CraftingContainer, ResultContainer};
 use crate::inventory::lock::{ContainerId, ContainerLockGuard, ContainerRef};
 use crate::inventory::recipe_manager;
+use crate::inventory::simple_menu::SimpleContainer;
 use crate::player::Player;
 
 /// A synchronized crafting container.

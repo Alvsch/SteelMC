@@ -1,5 +1,5 @@
 //! Anvil Menus
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef, vanilla_menu_types};
 use steel_utils::{BlockPos, locks::SyncMutex, translations};
@@ -12,13 +12,16 @@ use crate::{
         crafting::ResultContainer,
         lock::ContainerRef,
         menu::{Menu, MenuBehavior},
+        simple_menu::SimpleContainer,
         slot::{
-            AnvilResultSlot, NormalSlot, SlotType, SyncResultContainer,
+            AnvilResultSlot, NormalSlot, Slot, SlotType, SyncResultContainer,
             add_standard_inventory_slots,
         },
     },
     player::Player,
 };
+
+use super::lock::ContainerLockGuard;
 
 /// Slot indices for the anvil menu.
 pub mod slots {
@@ -49,6 +52,7 @@ pub struct AnvilMenu {
     /// The Result Slot
     result_container: SyncResultContainer,
     /// The Position
+    #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
 }
 
@@ -64,7 +68,8 @@ impl AnvilMenu {
         let result_container: SyncResultContainer =
             Arc::new(SyncMutex::new(ResultContainer::new()));
 
-        menu_slots.push(SlotType::Normal(NormalSlot::new(container_ref.clone(), 0))); // FIXME: dont use normal slots
+        menu_slots.push(SlotType::Normal(NormalSlot::new(container_ref.clone(), 0)));
+        menu_slots.push(SlotType::Normal(NormalSlot::new(container_ref.clone(), 1)));
         menu_slots.push(SlotType::AnvilResult(AnvilResultSlot::new(
             simple_container.clone(),
             result_container.clone(),
@@ -85,46 +90,6 @@ impl AnvilMenu {
     }
 }
 
-/// A Simple Container
-pub struct SimpleContainer {
-    items: Vec<ItemStack>,
-}
-
-impl SimpleContainer {
-    /// Creates a new Simple Container
-    #[must_use]
-    pub fn new(size: usize) -> Self {
-        Self {
-            items: vec![ItemStack::empty(); size],
-        }
-    }
-}
-
-impl Container for SimpleContainer {
-    #[doc = " Returns the number of slots in this container."]
-    fn get_container_size(&self) -> usize {
-        self.items.len()
-    }
-
-    #[doc = " Returns a reference to the item in the specified slot."]
-    fn get_item(&self, slot: usize) -> &ItemStack {
-        &self.items[slot]
-    }
-
-    #[doc = " Returns a mutable reference to the item in the specified slot."]
-    fn get_item_mut(&mut self, slot: usize) -> &mut ItemStack {
-        &mut self.items[slot]
-    }
-
-    #[doc = " Sets the item in the specified slot."]
-    fn set_item(&mut self, slot: usize, stack: ItemStack) {
-        self.items[slot] = stack;
-    }
-
-    #[doc = " Marks this container as changed (dirty) for saving/syncing."]
-    fn set_changed(&mut self) {}
-}
-
 impl Menu for AnvilMenu {
     fn behavior(&self) -> &MenuBehavior {
         &self.behavior
@@ -136,11 +101,108 @@ impl Menu for AnvilMenu {
 
     fn quick_move_stack(
         &mut self,
-        _guard: &mut super::lock::ContainerLockGuard,
-        _slot_index: usize,
-        _layer: &Player,
+        guard: &mut ContainerLockGuard,
+        slot_index: usize,
+        player: &Player,
     ) -> ItemStack {
-        todo!()
+        if slot_index >= self.behavior.slots.len() {
+            return ItemStack::empty();
+        }
+
+        let clicked = self.behavior.slots[slot_index].get_item(guard).clone();
+        if clicked.is_empty() {
+            return ItemStack::empty();
+        }
+
+        let mut stack_mut = clicked.clone();
+
+        if slot_index == slots::RESULT_SLOT {
+            if !self.behavior.move_item_stack_to(
+                guard,
+                &mut stack_mut,
+                slots::INV_SLOT_START,
+                slots::HOTBAR_SLOT_END,
+                true,
+            ) {
+                return ItemStack::empty();
+            }
+        } else if (0..slots::RESULT_SLOT).contains(&slot_index) {
+            if !self.behavior.move_item_stack_to(
+                guard,
+                &mut stack_mut,
+                slots::INV_SLOT_START,
+                slots::HOTBAR_SLOT_END,
+                false,
+            ) {
+                return ItemStack::empty();
+            }
+        } else if (slots::INV_SLOT_START..slots::HOTBAR_SLOT_END).contains(&slot_index) {
+            if !self.behavior.move_item_stack_to(
+                guard,
+                &mut stack_mut,
+                0,
+                slots::RESULT_SLOT,
+                false,
+            ) {
+                if (slots::INV_SLOT_START..slots::INV_SLOT_END).contains(&slot_index) {
+                    if !self.behavior.move_item_stack_to(
+                        guard,
+                        &mut stack_mut,
+                        slots::HOTBAR_SLOT_START,
+                        slots::HOTBAR_SLOT_END,
+                        false,
+                    ) {
+                        return ItemStack::empty();
+                    }
+                } else if !self.behavior.move_item_stack_to(
+                    guard,
+                    &mut stack_mut,
+                    slots::INV_SLOT_START,
+                    slots::INV_SLOT_END,
+                    false,
+                ) {
+                    return ItemStack::empty();
+                }
+            }
+        } else {
+            return ItemStack::empty();
+        }
+
+        if stack_mut.is_empty() {
+            self.behavior.slots[slot_index].set_by_player(guard, ItemStack::empty(), &clicked);
+        } else {
+            self.behavior.slots[slot_index].set_changed(guard);
+        }
+
+        if stack_mut.count == clicked.count {
+            return ItemStack::empty();
+        }
+
+        self.behavior.slots[slot_index].on_take(guard, &stack_mut, player);
+
+        stack_mut
+    }
+
+    fn removed(&mut self, player: &Player) {
+        let carried = mem::take(&mut self.behavior.carried);
+
+        if !carried.is_empty() {
+            player.add_item_or_drop(carried);
+        }
+
+        let items = self
+            .input_container
+            .lock()
+            .iter_mut()
+            .map(mem::take)
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<ItemStack>>();
+
+        for item in items {
+            player.add_item_or_drop(item);
+        }
+
+        self.result_container.lock().set_item(0, ItemStack::empty());
     }
 }
 

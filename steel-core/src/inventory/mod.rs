@@ -14,6 +14,7 @@ pub mod lock;
 pub mod menu;
 pub mod menu_provider;
 pub mod recipe_manager;
+pub mod simple_menu;
 pub mod slot;
 
 pub use chest_menu::{ChestMenu, ChestMenuProvider};

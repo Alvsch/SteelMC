@@ -74,4 +74,26 @@ impl EntityEquipment {
             *slot = ItemStack::empty();
         }
     }
+
+    /// Returns an Iterator to the `&ItemStacks` in the Slots
+    pub fn iter(&self) -> impl Iterator<Item = &ItemStack> {
+        self.slots.iter()
+    }
+
+    /// Returns an Iterator to the `&mut ItemStacks` in the Slots
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut ItemStack> {
+        self.slots.iter_mut()
+    }
+
+    /// The underlying slice containing the `ItemStacks`
+    #[must_use]
+    pub const fn slots(&self) -> &[ItemStack; 8] {
+        &self.slots
+    }
+
+    /// A mutable borrow to the underlying slice containing the `ItemStacks`
+    #[must_use]
+    pub const fn slots_mut(&mut self) -> &mut [ItemStack; 8] {
+        &mut self.slots
+    }
 }

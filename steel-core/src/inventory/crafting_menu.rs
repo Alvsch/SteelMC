@@ -311,13 +311,13 @@ impl Menu for CraftingMenu {
         }
 
         // Collect all items from crafting grid first (to release the lock)
-        let crafting_items: Vec<ItemStack> = {
-            let mut crafting = self.crafting_container.lock();
-            (0..crafting.get_container_size())
-                .map(|i| crafting.remove_item_no_update(i))
-                .filter(|item| !item.is_empty())
-                .collect()
-        };
+        let crafting_items: Vec<ItemStack> = self
+            .crafting_container
+            .lock()
+            .iter_mut()
+            .map(mem::take)
+            .filter(|item| !item.is_empty())
+            .collect();
 
         // Now place collected items back in inventory
         for item in crafting_items {

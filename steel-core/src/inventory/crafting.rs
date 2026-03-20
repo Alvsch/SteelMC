@@ -3,7 +3,7 @@
 //! This module provides the `CraftingContainer` for the crafting grid,
 //! `ResultContainer` for crafting output, and `CraftingInput` for recipe matching.
 
-use std::mem;
+use std::{mem, slice};
 
 use steel_registry::{
     item_stack::ItemStack,
@@ -67,20 +67,12 @@ impl CraftingContainer {
 }
 
 impl Container for CraftingContainer {
-    fn get_container_size(&self) -> usize {
-        self.items.len()
+    fn items(&self) -> &[ItemStack] {
+        &self.items
     }
 
-    fn get_item(&self, slot: usize) -> &ItemStack {
-        &self.items[slot]
-    }
-
-    fn get_item_mut(&mut self, slot: usize) -> &mut ItemStack {
-        &mut self.items[slot]
-    }
-
-    fn set_item(&mut self, slot: usize, stack: ItemStack) {
-        self.items[slot] = stack;
+    fn items_mut(&mut self) -> &mut [ItemStack] {
+        &mut self.items
     }
 
     fn set_changed(&mut self) {
@@ -141,5 +133,13 @@ impl Container for ResultContainer {
 
     fn set_changed(&mut self) {
         // Result container doesn't track dirty state.
+    }
+
+    fn items(&self) -> &[ItemStack] {
+        slice::from_ref(&self.result)
+    }
+
+    fn items_mut(&mut self) -> &mut [ItemStack] {
+        slice::from_mut(&mut self.result)
     }
 }

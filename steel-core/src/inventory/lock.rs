@@ -11,7 +11,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use steel_utils::locks::SyncMutex;
 
-use crate::inventory::anvil_menu::SimpleContainer;
+use crate::inventory::simple_menu::SimpleContainer;
 use crate::{
     block_entity::{BlockEntity, SharedBlockEntity},
     inventory::{
@@ -293,6 +293,33 @@ impl ContainerLockGuard {
             .and_then(|idx| self.guards.get_mut(idx))
             .and_then(|(_, guard)| match guard {
                 LockedContainer::CraftingContainer(g) => Some(&mut **g),
+                _ => None,
+            })
+    }
+
+    /// Get immutable access to a locked crafting container.
+    #[must_use]
+    pub fn get_simple_container(&self, id: impl Into<ContainerId>) -> Option<&SimpleContainer> {
+        self.id_to_index
+            .get(&id.into())
+            .and_then(|&idx| self.guards.get(idx))
+            .and_then(|(_, guard)| match guard {
+                LockedContainer::SimpleContainer(g) => Some(&**g),
+                _ => None,
+            })
+    }
+
+    /// Get mutable access to a locked crafting container.
+    pub fn get_simple_container_mut(
+        &mut self,
+        id: impl Into<ContainerId>,
+    ) -> Option<&mut SimpleContainer> {
+        self.id_to_index
+            .get(&id.into())
+            .copied()
+            .and_then(|idx| self.guards.get_mut(idx))
+            .and_then(|(_, guard)| match guard {
+                LockedContainer::SimpleContainer(g) => Some(&mut **g),
                 _ => None,
             })
     }
