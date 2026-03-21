@@ -6,6 +6,8 @@ pub mod chunk_sender;
 /// This module contains the `PlayerConnection` trait that abstracts network connections.
 pub mod connection;
 mod entity_state;
+/// Experience System
+pub mod experience;
 /// Game mode specific logic for player interactions.
 pub mod game_mode;
 mod game_profile;
@@ -83,7 +85,6 @@ use text_components::{
 };
 use uuid::Uuid;
 
-use crate::config::STEEL_CONFIG;
 use crate::entity::{
     DEATH_DURATION, Entity, EntityLevelCallback, LivingEntityBase, NullEntityCallback,
     RemovalReason,
@@ -91,6 +92,7 @@ use crate::entity::{
 use crate::player::player_inventory::PlayerInventory;
 use crate::server::Server;
 use crate::{command::commands::gamemode::get_gamemode_translation, inventory::SyncPlayerInv};
+use crate::{config::STEEL_CONFIG, player::experience::Experience};
 use crate::{config::WorldGeneratorTypes, entity::damage::DamageSource};
 use steel_registry::vanilla_damage_types;
 
@@ -285,6 +287,9 @@ pub struct Player {
 
     /// Callback for entity lifecycle events (movement between chunks, removal).
     level_callback: SyncMutex<Arc<dyn EntityLevelCallback>>,
+
+    /// The Player's Experience
+    pub experience: SyncMutex<Experience>,
 }
 
 impl Player {
@@ -369,6 +374,7 @@ impl Player {
             health_sync: SyncMutex::new(HealthSyncState::new()),
             removed: AtomicBool::new(false),
             level_callback: SyncMutex::new(Arc::new(NullEntityCallback)),
+            experience: SyncMutex::new(Experience::default()),
         }
     }
 
