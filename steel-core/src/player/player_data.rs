@@ -85,6 +85,14 @@ pub struct PersistentPlayerData {
     /// Data version for format migrations.
     /// NBT tag: `DataVersion` (Int)
     pub data_version: i32,
+
+    /// Current experience level
+    /// NBT tag: `XpLevel` (Int)
+    pub experience_level: i32,
+
+    /// To progress to the next experience level
+    /// NBT tag: `XpP` (Float)
+    pub experience_progress: f32,
 }
 
 /// Persistent abilities data.
@@ -143,6 +151,11 @@ impl PersistentPlayerData {
             }
         }
 
+        let (experience_level, experience_progress) = {
+            let lock = player.experience.lock();
+            (lock.level(), lock.progress() as f32)
+        };
+
         Self {
             pos: [pos.x, pos.y, pos.z],
             motion: [delta.x, delta.y, delta.z],
@@ -165,6 +178,8 @@ impl PersistentPlayerData {
             selected_slot: i32::from(inventory.get_selected_slot()),
             dimension: player.world.dimension.key.to_string(),
             data_version: PLAYER_DATA_VERSION,
+            experience_level,
+            experience_progress,
         }
     }
 
@@ -222,6 +237,10 @@ impl PersistentPlayerData {
             })
             .collect();
         compound.insert("Inventory", NbtList::from(inventory_list));
+
+        // Experience
+        compound.insert("XpLevel", self.experience_level);
+        compound.insert("XpP", self.experience_progress);
 
         compound
     }
@@ -296,6 +315,9 @@ impl PersistentPlayerData {
             }
         }
 
+        let experience_level = nbt.int("XpLevel").unwrap_or(0);
+        let experience_progress = nbt.float("XpP").unwrap_or(0.0);
+
         Some(Self {
             pos,
             motion,
@@ -310,6 +332,8 @@ impl PersistentPlayerData {
             selected_slot,
             dimension,
             data_version,
+            experience_level,
+            experience_progress,
         })
     }
 }
@@ -441,6 +465,12 @@ impl PersistentPlayerData {
             // Restore selected slot
             let selected = self.selected_slot.clamp(0, 8) as u8;
             inventory.set_selected_slot(selected);
+        }
+
+        {
+            let mut experience = player.experience.lock();
+            experience.set_levels(self.experience_level);
+            experience.set_progress(f64::from(self.experience_progress));
         }
     }
 }

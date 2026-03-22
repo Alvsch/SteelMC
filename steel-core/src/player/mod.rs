@@ -6,6 +6,8 @@ pub mod chunk_sender;
 /// This module contains the `PlayerConnection` trait that abstracts network connections.
 pub mod connection;
 mod entity_state;
+/// Experience System
+pub mod experience;
 /// Game mode specific logic for player interactions.
 pub mod game_mode;
 mod game_profile;
@@ -31,7 +33,7 @@ use health_sync::HealthSyncState;
 pub use message_validator::LastSeenMessagesValidator;
 use movement_state::MovementState;
 pub use signature_cache::{LastSeen, MessageCache};
-use steel_protocol::packet_traits::CompressionInfo;
+use steel_protocol::{packet_traits::CompressionInfo, packets::game::CSetExperience};
 use teleport_state::TeleportState;
 
 use block_breaking::BlockBreakingManager;
@@ -83,7 +85,6 @@ use text_components::{
 };
 use uuid::Uuid;
 
-use crate::config::STEEL_CONFIG;
 use crate::entity::{
     DEATH_DURATION, Entity, EntityLevelCallback, LivingEntityBase, NullEntityCallback,
     RemovalReason,
@@ -91,6 +92,7 @@ use crate::entity::{
 use crate::player::player_inventory::PlayerInventory;
 use crate::server::Server;
 use crate::{command::commands::gamemode::get_gamemode_translation, inventory::SyncPlayerInv};
+use crate::{config::STEEL_CONFIG, player::experience::Experience};
 use crate::{config::WorldGeneratorTypes, entity::damage::DamageSource};
 use steel_registry::vanilla_damage_types;
 
@@ -285,6 +287,9 @@ pub struct Player {
 
     /// Callback for entity lifecycle events (movement between chunks, removal).
     level_callback: SyncMutex<Arc<dyn EntityLevelCallback>>,
+
+    /// The Player's Experience
+    pub experience: SyncMutex<Experience>,
 }
 
 impl Player {
@@ -369,6 +374,7 @@ impl Player {
             health_sync: SyncMutex::new(HealthSyncState::new()),
             removed: AtomicBool::new(false),
             level_callback: SyncMutex::new(Arc::new(NullEntityCallback)),
+            experience: SyncMutex::new(Experience::default()),
         }
     }
 
@@ -499,6 +505,19 @@ impl Player {
             }
         }
 
+        {
+            let mut experience = self.experience.lock();
+
+            if experience.dirty {
+                self.send_packet(CSetExperience {
+                    progress: experience.progress() as f32,
+                    level: experience.level(),
+                    total_experience: experience.points(),
+                });
+                experience.dirty = false;
+            }
+        }
+
         self.connection.tick();
     }
 
@@ -579,11 +598,13 @@ impl Player {
     }
 
     /// Handles a custom payload packet.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     pub fn handle_custom_payload(&self, packet: SCustomPayload) {
         log::info!("Hello from the other side! {packet:?}");
     }
 
     /// Handles the end of a client tick.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     pub const fn handle_client_tick_end(&self) {
         //log::info!("Hello from the other side!");
     }
@@ -774,7 +795,7 @@ impl Player {
                             chat_packet.clone(),
                             Arc::clone(&player),
                             last_seen.clone(),
-                            Some(sig_array),
+                            Some(&sig_array),
                         );
                     }
                 }
@@ -2763,7 +2784,15 @@ impl Player {
 
         // TODO: send CChangeDifficulty (difficulty, locked)
 
-        // TODO: send CSetExperience (progress, level, total)
+        if self.world.get_game_rule(KEEP_INVENTORY) != GameRuleValue::Bool(true) {
+            let mut experience = self.experience.lock();
+            experience.set_total_points(0);
+            self.send_packet(CSetExperience {
+                progress: 0.0,
+                level: 0,
+                total_experience: 0,
+            });
+        }
 
         // TODO: send mob effect packets once effects are implemented
 
@@ -2866,6 +2895,7 @@ impl Player {
     }
 
     /// Cleans up player resources.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     pub const fn cleanup(&self) {}
 }
 
