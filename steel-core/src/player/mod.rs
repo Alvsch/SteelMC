@@ -33,7 +33,7 @@ use health_sync::HealthSyncState;
 pub use message_validator::LastSeenMessagesValidator;
 use movement_state::MovementState;
 pub use signature_cache::{LastSeen, MessageCache};
-use steel_protocol::packet_traits::CompressionInfo;
+use steel_protocol::{packet_traits::CompressionInfo, packets::game::CSetExperience};
 use teleport_state::TeleportState;
 
 use block_breaking::BlockBreakingManager;
@@ -502,6 +502,19 @@ impl Player {
                     food_saturation: saturation,
                 });
                 sync.record_sent(health, food, saturation_zero);
+            }
+        }
+
+        {
+            let mut experience = self.experience.lock();
+
+            if experience.dirty {
+                self.send_packet(CSetExperience {
+                    progress: experience.progress() as f32,
+                    level: experience.level(),
+                    total_experience: experience.points(),
+                });
+                experience.dirty = false;
             }
         }
 
@@ -2771,7 +2784,15 @@ impl Player {
 
         // TODO: send CChangeDifficulty (difficulty, locked)
 
-        // TODO: send CSetExperience (progress, level, total)
+        if self.world.get_game_rule(KEEP_INVENTORY) != GameRuleValue::Bool(true) {
+            let mut experience = self.experience.lock();
+            experience.set_total_points(0);
+            self.send_packet(CSetExperience {
+                progress: 0.0,
+                level: 0,
+                total_experience: 0,
+            });
+        }
 
         // TODO: send mob effect packets once effects are implemented
 
