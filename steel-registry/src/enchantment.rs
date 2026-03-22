@@ -32,7 +32,9 @@ pub struct Enchantment {
     pub anvil_cost: i32,
     pub weight: u32,
     pub slots: &'static [EquipmentSlotGroup],
-    // TODO: supported_items, primary_items, exclusive_set (need item tag system)
+    pub supported_items: &'static str,
+    pub primary_items: Option<&'static str>,
+    pub exclusive_set: Option<&'static str>,
     // TODO: effects (data-driven, complex nested JSON structures)
 }
 

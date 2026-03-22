@@ -138,11 +138,7 @@ impl ComponentData {
             // Complex types
             Self::Tool(v) => v.hash_component(&mut hasher),
             Self::Equippable(v) => v.hash_component(&mut hasher),
-            // TODO: Implement proper hashing for enchantments
-            Self::Enchantments(_) => {
-                hasher.start_map();
-                hasher.end_map();
-            }
+            Self::Enchantments(v) => v.hash_component(&mut hasher),
             Self::TextComponent(v) => v.hash_component(&mut hasher),
 
             // Stub/plugin types - hash as empty map for now

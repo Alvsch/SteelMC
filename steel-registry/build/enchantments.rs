@@ -13,6 +13,9 @@ struct EnchantmentJson {
     anvil_cost: i32,
     weight: u32,
     slots: Vec<String>,
+    supported_items: String,
+    primary_items: Option<String>,
+    exclusive_set: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -93,6 +96,22 @@ pub(crate) fn build() -> TokenStream {
 
         let slots: Vec<TokenStream> = ench.slots.iter().map(|s| slot_to_tokens(s)).collect();
 
+        let supported_items = ench.supported_items.as_str();
+        let primary_items = match &ench.primary_items {
+            Some(s) => {
+                let s = s.as_str();
+                quote! { Some(#s) }
+            }
+            None => quote! { None },
+        };
+        let exclusive_set = match &ench.exclusive_set {
+            Some(s) => {
+                let s = s.as_str();
+                quote! { Some(#s) }
+            }
+            None => quote! { None },
+        };
+
         stream.extend(quote! {
             pub static #const_ident: Enchantment = Enchantment {
                 key: Identifier::vanilla_static(#name),
@@ -102,6 +121,9 @@ pub(crate) fn build() -> TokenStream {
                 anvil_cost: #anvil_cost,
                 weight: #weight,
                 slots: &[#(#slots),*],
+                supported_items: #supported_items,
+                primary_items: #primary_items,
+                exclusive_set: #exclusive_set,
             };
         });
 

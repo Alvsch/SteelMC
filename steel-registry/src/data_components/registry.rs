@@ -25,6 +25,7 @@ use steel_utils::{
 };
 
 use super::component_data::{Component, ComponentData, ComponentDataDiscriminant};
+use super::components::ItemEnchantments;
 use super::vanilla_components::{
     ATTRIBUTE_MODIFIERS, BREAK_SOUND, ENCHANTMENTS, LORE, MAX_STACK_SIZE, RARITY, REPAIR_COST,
     TOOLTIP_DISPLAY,
@@ -387,7 +388,7 @@ impl DataComponentMap {
         map.insert(LORE.key.clone(), ComponentData::Todo);
         map.insert(
             ENCHANTMENTS.key.clone(),
-            ComponentData::Enchantments(super::components::ItemEnchantments::empty()),
+            ComponentData::Enchantments(ItemEnchantments::empty()),
         );
         map.insert(REPAIR_COST.key.clone(), ComponentData::I32(0));
         map.insert(ATTRIBUTE_MODIFIERS.key.clone(), ComponentData::Todo);

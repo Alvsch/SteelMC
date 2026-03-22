@@ -192,12 +192,7 @@ impl ItemStack {
     /// Damages the item and breaks it if durability reaches zero.
     ///
     /// Returns `true` if the item broke and should be removed/replaced.
-    pub fn hurt_and_break(
-        &mut self,
-        amount: i32,
-        has_infinite_materials: bool,
-        rng: &mut impl rand::Rng,
-    ) -> bool {
+    pub fn hurt_and_break(&mut self, amount: i32, has_infinite_materials: bool) -> bool {
         if !self.is_damageable_item() || amount <= 0 {
             return false;
         }
@@ -206,10 +201,12 @@ impl ItemStack {
             return false;
         }
 
-        let unbreaking_level = self.get_enchantment_level_by_name("unbreaking");
+        let unbreaking_level =
+            self.get_enchantment_level(&crate::vanilla_enchantments::UNBREAKING.key);
+        let mut rng = rand::rng();
         let mut effective_amount = 0;
         for _ in 0..amount {
-            if should_consume_durability(unbreaking_level, rng) {
+            if should_consume_durability(unbreaking_level, &mut rng) {
                 effective_amount += 1;
             }
         }

@@ -320,11 +320,7 @@ impl BlockBreakingManager {
                     // Skip damage if player has infinite materials (creative mode)
                     let has_infinite_materials = player.has_infinite_materials();
                     let broke = inv.with_selected_item_mut(|main_hand| {
-                        main_hand.hurt_and_break(
-                            damage_per_block,
-                            has_infinite_materials,
-                            &mut rand::rng(),
-                        )
+                        main_hand.hurt_and_break(damage_per_block, has_infinite_materials)
                     });
                     if broke {
                         // TODO: Play item break sound/particles

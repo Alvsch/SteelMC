@@ -1,5 +1,6 @@
 use rustc_hash::FxHashMap;
 use steel_utils::Identifier;
+use steel_utils::hash::{ComponentHasher, HashComponent};
 
 /// Enchantments stored on an item. Maps enchantment key to level.
 ///
@@ -41,5 +42,16 @@ impl ItemEnchantments {
     #[must_use]
     pub fn len(&self) -> usize {
         self.levels.len()
+    }
+}
+
+impl HashComponent for ItemEnchantments {
+    fn hash_component(&self, hasher: &mut ComponentHasher) {
+        hasher.start_map();
+        for (key, &level) in &self.levels {
+            hasher.put_string(&key.to_string());
+            hasher.put_int(level as i32);
+        }
+        hasher.end_map();
     }
 }
