@@ -133,7 +133,6 @@ impl BlockBreakingManager {
     ///
     /// Note: The caller (packet handler) is responsible for calling `ack_block_changes_up_to`
     /// after this method returns, matching vanilla behavior.
-    #[allow(clippy::too_many_lines)]
     pub fn handle_block_break_action(
         &mut self,
         player: &Player,
@@ -265,7 +264,10 @@ impl BlockBreakingManager {
     /// Destroys a block at the given position.
     ///
     /// Returns true if the block was successfully destroyed.
-    #[allow(clippy::unused_self)]
+    #[expect(
+        clippy::unused_self,
+        reason = "method belongs logically to BlockBreakingManager and will use self when additional state is added"
+    )]
     fn destroy_block(&self, player: &Player, world: &Arc<World>, pos: BlockPos) -> bool {
         let state = world.get_block_state(pos);
 
@@ -433,7 +435,6 @@ fn get_destroy_progress(player: &Player, block_state: BlockStateId) -> f32 {
 }
 
 /// Drops loot for a destroyed block using its loot table.
-#[allow(clippy::needless_pass_by_value)]
 fn drop_block_loot(player: &Player, _world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
     let block = state.get_block();
 

@@ -1,4 +1,4 @@
-#![allow(missing_docs)]
+#![expect(missing_docs, reason = "self-explanatory utility types")]
 
 use std::{
     borrow::Cow,
@@ -96,7 +96,10 @@ impl WriteTo for BlockStateId {
 impl ReadFrom for BlockStateId {
     fn read(data: &mut Cursor<&[u8]>) -> io::Result<Self> {
         let id = VarInt::read(data)?.0;
-        #[allow(clippy::cast_sign_loss)]
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "VarInt is validated upstream; block state IDs are non-negative"
+        )]
         Ok(Self(id as u16))
     }
 }
@@ -136,7 +139,7 @@ impl ChunkPos {
 
     /// Returns all 8 neighbors of this chunk position.
     #[must_use]
-    pub fn neighbors(&self) -> [ChunkPos; 8] {
+    pub fn neighbors(self) -> [ChunkPos; 8] {
         Self::OFFSETS.map(|(dx, dy)| ChunkPos::new(self.0.x + dx, self.0.y + dy))
     }
 
@@ -158,7 +161,7 @@ impl ChunkPos {
     /// Converts the `ChunkPos` to an `i64`.
     #[must_use]
     #[inline]
-    pub fn as_i64(&self) -> i64 {
+    pub fn as_i64(self) -> i64 {
         (i64::from(self.0.x) & 0xFFFF_FFFF) | ((i64::from(self.0.y) & 0xFFFF_FFFF) << 32)
     }
 
@@ -173,14 +176,12 @@ impl ChunkPos {
     }
 }
 
-#[allow(missing_docs)]
 impl WriteTo for ChunkPos {
     fn write(&self, writer: &mut impl Write) -> io::Result<()> {
         self.0.write(writer)
     }
 }
 
-#[allow(missing_docs)]
 impl ReadFrom for ChunkPos {
     fn read(data: &mut Cursor<&[u8]>) -> io::Result<Self> {
         Ok(Self(IVec2::read(data)?))
@@ -733,7 +734,7 @@ impl BoundingBox {
 
 /// The game type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(missing_docs)]
+#[expect(missing_docs, reason = "variant names are self-explanatory")]
 pub enum GameType {
     Survival = 0,
     Creative = 1,
@@ -744,7 +745,7 @@ pub enum GameType {
 impl GameType {
     /// Returns the name of the game type.
     #[must_use]
-    pub const fn name(&self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             GameType::Survival => "survival",
             GameType::Creative => "creative",
@@ -770,14 +771,12 @@ impl ReadFrom for GameType {
     }
 }
 
-#[allow(missing_docs)]
 impl From<GameType> for i8 {
     fn from(value: GameType) -> Self {
         value as i8
     }
 }
 
-#[allow(missing_docs)]
 impl From<GameType> for i32 {
     fn from(value: GameType) -> Self {
         value as i32
@@ -790,7 +789,6 @@ impl From<GameType> for f32 {
     }
 }
 
-#[allow(missing_docs)]
 impl From<i8> for GameType {
     fn from(value: i8) -> Self {
         match value {
@@ -802,7 +800,6 @@ impl From<i8> for GameType {
     }
 }
 
-#[allow(missing_docs)]
 impl From<i32> for GameType {
     fn from(value: i32) -> Self {
         match value {
@@ -814,7 +811,6 @@ impl From<i32> for GameType {
     }
 }
 
-#[allow(missing_docs)]
 impl From<f32> for GameType {
     fn from(value: f32) -> Self {
         match value {
@@ -844,7 +840,7 @@ pub enum Difficulty {
     Hard = 3,
 }
 
-#[allow(missing_docs, clippy::match_same_arms)]
+#[expect(clippy::match_same_arms, reason = "this is more readable and explicit")]
 impl From<u8> for Difficulty {
     fn from(value: u8) -> Self {
         match value {
@@ -857,7 +853,6 @@ impl From<u8> for Difficulty {
     }
 }
 
-#[allow(missing_docs)]
 impl From<Difficulty> for u8 {
     fn from(value: Difficulty) -> Self {
         value as u8
@@ -994,14 +989,12 @@ impl Identifier {
     }
 }
 
-#[allow(missing_docs)]
 impl Display for Identifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}:{}", self.namespace, self.path)
     }
 }
 
-#[allow(missing_docs)]
 impl FromStr for Identifier {
     type Err = &'static str;
 
@@ -1025,7 +1018,6 @@ impl FromStr for Identifier {
         })
     }
 }
-#[allow(missing_docs)]
 impl Serialize for Identifier {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -1035,7 +1027,6 @@ impl Serialize for Identifier {
     }
 }
 
-#[allow(missing_docs)]
 impl<'de> Deserialize<'de> for Identifier {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

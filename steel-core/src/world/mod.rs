@@ -162,6 +162,7 @@ impl World {
         dimension: DimensionTypeRef,
         seed: i64,
         config: WorldConfig,
+        generation_pool: Arc<rayon::ThreadPool>,
     ) -> io::Result<Arc<Self>> {
         // Create storage backend based on config
         let storage: Arc<ChunkStorage> = match &config.storage {
@@ -202,9 +203,10 @@ impl World {
             chunk_map: Arc::new(ChunkMap::new_with_storage(
                 chunk_runtime,
                 weak_self.clone(),
-                &dimension,
+                dimension,
                 storage,
                 config.generator,
+                generation_pool,
             )),
             players: PlayerMap::new(),
             player_area_map: PlayerAreaMap::new(),
@@ -220,8 +222,10 @@ impl World {
     }
 
     /// Cleans up the world by saving all chunks.
-    /// `await_holding_lock` is safe here cause it's only done on shutdown
-    #[allow(clippy::await_holding_lock)]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "holding the write lock across await is safe here because it only happens during shutdown"
+    )]
     pub async fn cleanup(&self, total_saved: &mut usize) {
         match self.level_data.write().save().await {
             Ok(()) => log::info!(
@@ -258,6 +262,7 @@ impl World {
     }
 
     /// Returns whether the block position is within valid horizontal bounds.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     pub const fn is_in_valid_bounds_horizontal(&self, block_pos: BlockPos) -> bool {
         let chunk_x = SectionPos::block_to_section_coord(block_pos.0.x);
         let chunk_z = SectionPos::block_to_section_coord(block_pos.0.z);
@@ -357,6 +362,7 @@ impl World {
     }
 
     /// Gets the value of a game rule on the `LevelDataManager` guard being passed in.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     #[must_use]
     pub fn get_game_rule_with_guard(
         &self,
@@ -375,6 +381,7 @@ impl World {
     }
 
     /// Sets the value of a game rule on the `LevelDataManager` guard being passed in.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     pub fn set_game_rule_with_guard(
         &self,
         rule: GameRuleRef,
@@ -392,7 +399,10 @@ impl World {
     /// This uses SHA-256 hashing to prevent clients from easily extracting
     /// the actual world seed, matching vanilla's `BiomeManager.obfuscateSeed()`.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)] // SHA-256 always produces 32 bytes
+    #[expect(
+        clippy::missing_panics_doc,
+        reason = "panic is unreachable: SHA-256 always produces 32 bytes"
+    )]
     pub fn obfuscated_seed(&self) -> i64 {
         let seed = self.level_data.read().seed;
         let mut hasher = Sha256::new();
@@ -414,7 +424,7 @@ impl World {
 
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
-            .with_full_chunk(&chunk_pos, |chunk| chunk.get_block_state(pos))
+            .with_full_chunk(chunk_pos, |chunk| chunk.get_block_state(pos))
             .unwrap_or_else(|| REGISTRY.blocks.get_base_state_id(vanilla_blocks::AIR))
     }
 
@@ -455,7 +465,7 @@ impl World {
         let chunk_pos = Self::chunk_pos_for_block(pos);
         let Some(old_state) = self
             .chunk_map
-            .with_full_chunk(&chunk_pos, |chunk| {
+            .with_full_chunk(chunk_pos, |chunk| {
                 chunk.set_block_state(pos, block_state, flags)
             })
             .flatten()
@@ -620,7 +630,7 @@ impl World {
     pub fn get_block_entity(&self, pos: BlockPos) -> Option<SharedBlockEntity> {
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
-            .with_full_chunk(&chunk_pos, |chunk| {
+            .with_full_chunk(chunk_pos, |chunk| {
                 chunk.as_full().and_then(|lc| lc.get_block_entity(pos))
             })
             .flatten()
@@ -638,7 +648,7 @@ impl World {
     ///
     /// Called when entities move, are added/removed, or when block entities change.
     pub fn mark_chunk_dirty(&self, chunk_pos: ChunkPos) {
-        self.chunk_map.with_full_chunk(&chunk_pos, |chunk| {
+        self.chunk_map.with_full_chunk(chunk_pos, |chunk| {
             if let Some(lc) = chunk.as_full() {
                 lc.dirty.store(true, Ordering::Release);
             }
@@ -695,7 +705,10 @@ impl World {
         }
     }
 
-    #[expect(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "splitting would hurt readability of the weather state machine"
+    )]
     fn tick_weather(&self) {
         if !self.can_have_weather() {
             return;
@@ -781,7 +794,10 @@ impl World {
         // Broadcast weather changes to clients
         let raining_now = self.is_raining_with_guard(&weather);
         if raining_before == raining_now {
-            #[expect(clippy::float_cmp)]
+            #[expect(
+                clippy::float_cmp,
+                reason = "comparing against the exact previously-assigned value to detect any change"
+            )]
             if weather.previous_rain_level != weather.rain_level {
                 self.broadcast_to_all(CGameEvent {
                     event: GameEventType::RainLevelChange,
@@ -789,7 +805,10 @@ impl World {
                 });
             }
 
-            #[expect(clippy::float_cmp)]
+            #[expect(
+                clippy::float_cmp,
+                reason = "comparing against the exact previously-assigned value to detect any change"
+            )]
             if weather.previous_thunder_level != weather.thunder_level {
                 self.broadcast_to_all(CGameEvent {
                     event: GameEventType::ThunderLevelChange,
@@ -871,7 +890,7 @@ impl World {
         priority: tick_scheduler::TickPriority,
     ) {
         let chunk_pos = Self::chunk_pos_for_block(pos);
-        self.chunk_map.with_full_chunk(&chunk_pos, |chunk_access| {
+        self.chunk_map.with_full_chunk(chunk_pos, |chunk_access| {
             if let Some(chunk) = chunk_access.as_full() {
                 let order = self.sub_tick_count.fetch_add(1, Ordering::Relaxed);
                 let tick = tick_scheduler::BlockTick {
@@ -903,7 +922,7 @@ impl World {
         priority: tick_scheduler::TickPriority,
     ) {
         let chunk_pos = Self::chunk_pos_for_block(pos);
-        self.chunk_map.with_full_chunk(&chunk_pos, |chunk_access| {
+        self.chunk_map.with_full_chunk(chunk_pos, |chunk_access| {
             if let Some(chunk) = chunk_access.as_full() {
                 let order = self.sub_tick_count.fetch_add(1, Ordering::Relaxed);
                 let tick = tick_scheduler::FluidTick {
@@ -927,7 +946,7 @@ impl World {
     pub fn has_scheduled_block_tick(&self, pos: BlockPos, block: BlockRef) -> bool {
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
-            .with_full_chunk(&chunk_pos, |chunk_access| {
+            .with_full_chunk(chunk_pos, |chunk_access| {
                 chunk_access
                     .as_full()
                     .is_some_and(|chunk| chunk.block_ticks.lock().has_tick(pos, block))
@@ -939,7 +958,7 @@ impl World {
     pub fn has_scheduled_fluid_tick(&self, pos: BlockPos, fluid: FluidRef) -> bool {
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
-            .with_full_chunk(&chunk_pos, |chunk_access| {
+            .with_full_chunk(chunk_pos, |chunk_access| {
                 chunk_access
                     .as_full()
                     .is_some_and(|chunk| chunk.fluid_ticks.lock().has_tick(pos, fluid))
@@ -1005,7 +1024,7 @@ impl World {
         mut packet: CPlayerChat,
         _sender: Arc<Player>,
         sender_last_seen: LastSeen,
-        message_signature: Option<[u8; 256]>,
+        message_signature: Option<&[u8; 256]>,
     ) {
         log::debug!(
             "broadcast_chat: sender_last_seen has {} signatures, message_signature present: {}",
@@ -1048,13 +1067,13 @@ impl World {
                 let mut chat = recipient.chat.lock();
                 if let Some(signature) = message_signature {
                     chat.signature_cache
-                        .push(&sender_last_seen, Some(&signature));
+                        .push(&sender_last_seen, Some(signature));
 
                     log::debug!("  Added signature to recipient's cache and pending list");
 
                     // Add to pending messages for acknowledgment tracking
                     chat.message_validator
-                        .add_pending(Some(Box::new(signature) as Box<[u8]>));
+                        .add_pending(Some(Box::new(*signature) as Box<[u8]>));
                 } else {
                     // Even unsigned messages update the pending tracker
                     chat.message_validator.add_pending(None);
@@ -1184,7 +1203,10 @@ impl World {
     /// * `entity_id` - The entity ID of the player breaking the block
     /// * `pos` - The position of the block being broken
     /// * `progress` - The destruction progress (0-9), or -1 to clear
-    #[allow(clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "value is clamped to -1..=9 before cast; -1 wraps intentionally to 255 as sentinel"
+    )]
     pub fn broadcast_block_destruction(&self, entity_id: i32, pos: BlockPos, progress: i32) {
         let chunk = ChunkPos::new(
             SectionPos::block_to_section_coord(pos.x()),
@@ -1872,7 +1894,7 @@ impl World {
         let pos = entity.position();
         let chunk_pos = ChunkPos::new((pos.x as i32) >> 4, (pos.z as i32) >> 4);
 
-        self.chunk_map.with_full_chunk(&chunk_pos, |chunk| {
+        self.chunk_map.with_full_chunk(chunk_pos, |chunk| {
             if let Some(c) = chunk.as_full() {
                 c.add_and_register_entity(entity.clone());
             }
@@ -2054,14 +2076,14 @@ impl World {
         // Remove Arc from old chunk
         let entity = self
             .chunk_map
-            .with_full_chunk(&from, |chunk| {
+            .with_full_chunk(from, |chunk| {
                 chunk.as_full().and_then(|c| c.entities.remove(entity_id))
             })
             .flatten();
 
         // Add Arc to new chunk
         if let Some(entity) = entity {
-            self.chunk_map.with_full_chunk(&to, |chunk| {
+            self.chunk_map.with_full_chunk(to, |chunk| {
                 if let Some(c) = chunk.as_full() {
                     c.entities.add(entity);
                 }
@@ -2081,7 +2103,7 @@ impl World {
         // Remove from chunk storage
         let entity: Option<SharedEntity> = self
             .chunk_map
-            .with_full_chunk(&chunk_pos, |chunk| {
+            .with_full_chunk(chunk_pos, |chunk| {
                 chunk.as_full().and_then(|c| c.entities.remove(entity_id))
             })
             .flatten();

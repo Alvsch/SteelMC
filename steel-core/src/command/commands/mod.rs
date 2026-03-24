@@ -15,6 +15,7 @@ pub mod tick;
 pub mod time;
 pub mod tp;
 pub mod weather;
+pub mod xp;
 
 use std::marker::PhantomData;
 use std::ops::Not;

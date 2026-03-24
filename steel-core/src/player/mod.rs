@@ -6,6 +6,8 @@ pub mod chunk_sender;
 /// This module contains the `PlayerConnection` trait that abstracts network connections.
 pub mod connection;
 mod entity_state;
+/// Experience System
+pub mod experience;
 pub mod food_data;
 /// Game mode specific logic for player interactions.
 pub mod game_mode;
@@ -34,7 +36,7 @@ use health_sync::HealthSyncState;
 pub use message_validator::LastSeenMessagesValidator;
 use movement_state::MovementState;
 pub use signature_cache::{LastSeen, MessageCache};
-use steel_protocol::packet_traits::CompressionInfo;
+use steel_protocol::{packet_traits::CompressionInfo, packets::game::CSetExperience};
 use teleport_state::TeleportState;
 
 use block_breaking::BlockBreakingManager;
@@ -88,7 +90,6 @@ use text_components::{
 };
 use uuid::Uuid;
 
-use crate::config::STEEL_CONFIG;
 use crate::entity::{
     DEATH_DURATION, Entity, EntityLevelCallback, LivingEntityBase, NullEntityCallback,
     RemovalReason,
@@ -96,6 +97,7 @@ use crate::entity::{
 use crate::player::player_inventory::PlayerInventory;
 use crate::server::Server;
 use crate::{command::commands::gamemode::get_gamemode_translation, inventory::SyncPlayerInv};
+use crate::{config::STEEL_CONFIG, player::experience::Experience};
 use crate::{config::WorldGeneratorTypes, entity::damage::DamageSource};
 use steel_registry::vanilla_damage_types;
 
@@ -229,7 +231,6 @@ pub struct Player {
     pub world: Arc<World>,
 
     /// Reference to the server (for entity ID generation, etc.).
-    #[allow(dead_code)]
     pub(crate) server: Weak<Server>,
 
     /// The entity ID assigned to this player.
@@ -317,6 +318,9 @@ pub struct Player {
 
     /// Callback for entity lifecycle events (movement between chunks, removal).
     level_callback: SyncMutex<Arc<dyn EntityLevelCallback>>,
+
+    /// The Player's Experience
+    pub experience: SyncMutex<Experience>,
 }
 
 impl Player {
@@ -402,6 +406,7 @@ impl Player {
             health_sync: SyncMutex::new(HealthSyncState::new()),
             removed: AtomicBool::new(false),
             level_callback: SyncMutex::new(Arc::new(NullEntityCallback)),
+            experience: SyncMutex::new(Experience::default()),
         }
     }
 
@@ -446,7 +451,10 @@ impl Player {
     }
 
     /// Ticks the player.
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "world coordinates are always within i32 range in a valid Minecraft world"
+    )]
     pub fn tick(&self) {
         self.tick_count.fetch_add(1, Ordering::Relaxed);
 
@@ -524,6 +532,19 @@ impl Player {
                     food_saturation: saturation,
                 });
                 sync.record_sent(health, food, saturation_zero);
+            }
+        }
+
+        {
+            let mut experience = self.experience.lock();
+
+            if experience.dirty {
+                self.send_packet(CSetExperience {
+                    progress: experience.progress() as f32,
+                    level: experience.level(),
+                    total_experience: experience.total_points(),
+                });
+                experience.dirty = false;
             }
         }
 
@@ -611,11 +632,13 @@ impl Player {
     }
 
     /// Handles a custom payload packet.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     pub fn handle_custom_payload(&self, packet: SCustomPayload) {
         log::info!("Hello from the other side! {packet:?}");
     }
 
     /// Handles the end of a client tick.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     pub const fn handle_client_tick_end(&self) {
         //log::info!("Hello from the other side!");
     }
@@ -703,7 +726,10 @@ impl Player {
     }
 
     /// Handles a chat message from the player.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "chat verification, signing, and broadcast form a single logical flow; splitting would hurt readability"
+    )]
     pub fn handle_chat(&self, packet: SChat, player: Arc<Player>) {
         let chat_message = packet.message.clone();
 
@@ -803,7 +829,7 @@ impl Player {
                             chat_packet.clone(),
                             Arc::clone(&player),
                             last_seen.clone(),
-                            Some(sig_array),
+                            Some(&sig_array),
                         );
                     }
                 }
@@ -906,7 +932,10 @@ impl Player {
     /// Handles a move player packet.
     ///
     /// Matches vanilla `ServerGamePacketListenerImpl.handleMovePlayer()`.
-    #[allow(clippy::cast_lossless, clippy::too_many_lines, clippy::similar_names)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "matches vanilla handleMovePlayer; splitting would hurt readability"
+    )]
     pub fn handle_move_player(&self, packet: SMovePlayer) {
         if Self::is_invalid_position(
             packet.get_x(0.0),
@@ -1982,7 +2011,7 @@ impl Player {
 
     /// Handles a player command packet (sprinting, elytra, leaving bed, etc).
     // this is just temporary there because the logic is not yet implemented complete for the other branches
-    #[allow(clippy::match_same_arms)]
+    #[expect(clippy::match_same_arms, reason = "arms are still todos")]
     pub fn handle_player_command(&self, packet: SPlayerCommand) {
         if !self.client_loaded.load(Ordering::Relaxed) {
             return;
@@ -2944,7 +2973,10 @@ impl Player {
     ///
     /// # Panics
     /// If the player dies in a dimension that doesn't exist.
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "respawn logic is a single sequential operation matching vanilla ServerPlayer.respawn; splitting would hurt readability"
+    )]
     pub fn respawn(&self) {
         {
             let mut living_base = self.living_base.lock();
@@ -3031,7 +3063,17 @@ impl Player {
 
         self.send_difficulty();
 
-        // TODO: send CSetExperience (progress, level, total)
+        {
+            let mut experience = self.experience.lock();
+            if self.world.get_game_rule(KEEP_INVENTORY) != GameRuleValue::Bool(true)
+                && self.game_mode.load() != GameType::Spectator
+            {
+                // TODO: drop XP orbs (min(level * 7, 100))
+                experience.set_total_points(0);
+            }
+            // Re-send XP to client after respawn regardless of keepInventory
+            experience.dirty = true;
+        }
 
         // TODO: send mob effect packets once effects are implemented
 
@@ -3141,6 +3183,7 @@ impl Player {
     }
 
     /// Cleans up player resources.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     pub const fn cleanup(&self) {}
 }
 

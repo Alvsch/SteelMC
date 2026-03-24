@@ -30,13 +30,13 @@ use steel_utils::BlockPos;
 use steel_utils::types::UpdateFlags;
 
 /// Handles all bucket variants (empty, water, lava).
-#[item_behavior(class = "BucketItem")]
-pub struct BucketItemBehavior {
+#[item_behavior]
+pub struct BucketItem {
     #[json_arg(vanilla_blocks, json = "content", optional = "empty")]
     fluid_block: Option<BlockRef>,
 }
 
-impl BucketItemBehavior {
+impl BucketItem {
     /// Creates a new bucket behavior. `None` = empty bucket, `Some(block)` = filled.
     #[must_use]
     pub const fn new(fluid_block: Option<BlockRef>) -> Self {
@@ -44,7 +44,7 @@ impl BucketItemBehavior {
     }
 }
 
-impl ItemBehavior for BucketItemBehavior {
+impl ItemBehavior for BucketItem {
     fn use_item(&self, context: &mut UseItemContext) -> InteractionResult {
         match self.fluid_block {
             None => use_empty_bucket(context),
@@ -59,29 +59,26 @@ impl ItemBehavior for BucketItemBehavior {
 /// In creative mode the held stack is untouched, but the result item is added to the
 /// inventory if the player doesn't already have one.
 fn consume_bucket(context: &mut UseItemContext, result_item: ItemRef) {
-    if context.player.has_infinite_materials() {
+    let player = context.player;
+    if player.has_infinite_materials() {
         // Creative: give the result item only if the player doesn't already have one.
-        let inv_id = ContainerId::from_arc(&context.player.inventory);
-        let already_has = context.inv_guard.get(inv_id).is_some_and(|inv| {
+        let inv_id = ContainerId::from_arc(&player.inventory);
+        let already_has = context.inv.guard().get(inv_id).is_some_and(|inv| {
             (0..inv.get_container_size()).any(|i| inv.get_item(i).item == result_item)
         });
         if !already_has {
             let result_stack = ItemStack::new(result_item);
-            context
-                .player
-                .add_item_or_drop_with_guard(context.inv_guard, result_stack);
+            player.add_item_or_drop_with_guard(context.inv.guard(), result_stack);
         }
         return;
     }
 
     let result_stack = ItemStack::new(result_item);
-    if context.item_stack.count() > 1 {
-        context.item_stack.shrink(1);
-        context
-            .player
-            .add_item_or_drop_with_guard(context.inv_guard, result_stack);
+    if context.inv.item().count() > 1 {
+        context.inv.item().shrink(1);
+        player.add_item_or_drop_with_guard(context.inv.guard(), result_stack);
     } else {
-        context.item_stack.set_item(&result_item.key);
+        context.inv.item().set_item(&result_item.key);
     }
 }
 
@@ -160,7 +157,10 @@ fn use_empty_bucket(context: &mut UseItemContext) -> InteractionResult {
 }
 
 // TODO: Refactor into smaller helpers once all bucket types are implemented
-#[allow(clippy::too_many_lines)] // Single method to match vanilla's emptyContents flow; will be refactored
+#[expect(
+    clippy::too_many_lines,
+    reason = "mirrors vanilla's emptyContents flow; splitting would obscure the sequential placement logic"
+)]
 fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> InteractionResult {
     // Raytrace to find target block
     let (start, end) = context.player.get_ray_endpoints();

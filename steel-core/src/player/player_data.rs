@@ -100,6 +100,18 @@ pub struct PersistentPlayerData {
     /// Data version for format migrations.
     /// NBT tag: `DataVersion` (Int)
     pub data_version: i32,
+
+    /// Current experience level
+    /// NBT tag: `XpLevel` (Int)
+    pub experience_level: i32,
+
+    /// To progress to the next experience level
+    /// NBT tag: `XpP` (Float)
+    pub experience_progress: f32,
+
+    /// Total cumulative experience points
+    /// NBT tag: `XpTotal` (Int)
+    pub experience_total: i32,
 }
 
 /// Persistent abilities data.
@@ -159,6 +171,11 @@ impl PersistentPlayerData {
             }
         }
 
+        let (experience_level, experience_progress, experience_total) = {
+            let lock = player.experience.lock();
+            (lock.level(), lock.progress() as f32, lock.total_points())
+        };
+
         Self {
             pos: [pos.x, pos.y, pos.z],
             motion: [delta.x, delta.y, delta.z],
@@ -185,6 +202,9 @@ impl PersistentPlayerData {
             food_exhaustion_level: food_data.exhaustion_level,
             food_tick_timer: food_data.tick_timer,
             data_version: PLAYER_DATA_VERSION,
+            experience_level,
+            experience_progress,
+            experience_total,
         }
     }
 
@@ -248,6 +268,11 @@ impl PersistentPlayerData {
             })
             .collect();
         compound.insert("Inventory", NbtList::from(inventory_list));
+
+        // Experience
+        compound.insert("XpLevel", self.experience_level);
+        compound.insert("XpP", self.experience_progress);
+        compound.insert("XpTotal", self.experience_total);
 
         compound
     }
@@ -328,6 +353,10 @@ impl PersistentPlayerData {
             }
         }
 
+        let experience_level = nbt.int("XpLevel").unwrap_or(0);
+        let experience_progress = nbt.float("XpP").unwrap_or(0.0);
+        let experience_total = nbt.int("XpTotal").unwrap_or(0);
+
         Some(Self {
             pos,
             motion,
@@ -346,6 +375,9 @@ impl PersistentPlayerData {
             food_exhaustion_level,
             food_tick_timer,
             data_version,
+            experience_level,
+            experience_progress,
+            experience_total,
         })
     }
 }
@@ -486,6 +518,11 @@ impl PersistentPlayerData {
             food.saturation_level = self.food_saturation_level;
             food.exhaustion_level = self.food_exhaustion_level;
             food.tick_timer = self.food_tick_timer;
+        }
+
+        {
+            let mut experience = player.experience.lock();
+            experience.set_total_points(self.experience_total);
         }
     }
 }

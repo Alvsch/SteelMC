@@ -15,7 +15,6 @@ use steel_utils::{
 
 use crate::{
     behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, candle_cakes},
-    entity::LivingEntity,
     player::Player,
     world::World,
 };
@@ -111,7 +110,12 @@ impl BlockBehavior for CakeBlock {
             return InteractionResult::Success;
         }
 
-        if player.get_main_hand_item().is_empty() {
+        if player
+            .inventory
+            .lock()
+            .get_item_in_hand(InteractionHand::MainHand)
+            .is_empty()
+        {
             return InteractionResult::Fail;
         }
         InteractionResult::Pass
