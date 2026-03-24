@@ -512,7 +512,7 @@ impl Player {
                 self.send_packet(CSetExperience {
                     progress: experience.progress() as f32,
                     level: experience.level(),
-                    total_experience: experience.points(),
+                    total_experience: experience.total_points(),
                 });
                 experience.dirty = false;
             }
@@ -2784,14 +2784,16 @@ impl Player {
 
         // TODO: send CChangeDifficulty (difficulty, locked)
 
-        if self.world.get_game_rule(KEEP_INVENTORY) != GameRuleValue::Bool(true) {
+        {
             let mut experience = self.experience.lock();
-            experience.set_total_points(0);
-            self.send_packet(CSetExperience {
-                progress: 0.0,
-                level: 0,
-                total_experience: 0,
-            });
+            if self.world.get_game_rule(KEEP_INVENTORY) != GameRuleValue::Bool(true)
+                && self.game_mode.load() != GameType::Spectator
+            {
+                // TODO: drop XP orbs (min(level * 7, 100))
+                experience.set_total_points(0);
+            }
+            // Re-send XP to client after respawn regardless of keepInventory
+            experience.dirty = true;
         }
 
         // TODO: send mob effect packets once effects are implemented

@@ -93,6 +93,10 @@ pub struct PersistentPlayerData {
     /// To progress to the next experience level
     /// NBT tag: `XpP` (Float)
     pub experience_progress: f32,
+
+    /// Total cumulative experience points
+    /// NBT tag: `XpTotal` (Int)
+    pub experience_total: i32,
 }
 
 /// Persistent abilities data.
@@ -151,9 +155,9 @@ impl PersistentPlayerData {
             }
         }
 
-        let (experience_level, experience_progress) = {
+        let (experience_level, experience_progress, experience_total) = {
             let lock = player.experience.lock();
-            (lock.level(), lock.progress() as f32)
+            (lock.level(), lock.progress() as f32, lock.total_points())
         };
 
         Self {
@@ -180,6 +184,7 @@ impl PersistentPlayerData {
             data_version: PLAYER_DATA_VERSION,
             experience_level,
             experience_progress,
+            experience_total,
         }
     }
 
@@ -241,6 +246,7 @@ impl PersistentPlayerData {
         // Experience
         compound.insert("XpLevel", self.experience_level);
         compound.insert("XpP", self.experience_progress);
+        compound.insert("XpTotal", self.experience_total);
 
         compound
     }
@@ -317,6 +323,7 @@ impl PersistentPlayerData {
 
         let experience_level = nbt.int("XpLevel").unwrap_or(0);
         let experience_progress = nbt.float("XpP").unwrap_or(0.0);
+        let experience_total = nbt.int("XpTotal").unwrap_or(0);
 
         Some(Self {
             pos,
@@ -334,6 +341,7 @@ impl PersistentPlayerData {
             data_version,
             experience_level,
             experience_progress,
+            experience_total,
         })
     }
 }
@@ -469,8 +477,7 @@ impl PersistentPlayerData {
 
         {
             let mut experience = player.experience.lock();
-            experience.set_levels(self.experience_level);
-            experience.set_progress(f64::from(self.experience_progress));
+            experience.set_total_points(self.experience_total);
         }
     }
 }

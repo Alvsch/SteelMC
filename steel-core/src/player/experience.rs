@@ -1,7 +1,8 @@
-/// Holds the total amount of experience points a player has
-#[derive(Default, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// Holds the total amount of experience points a player has.
+/// Vanilla uses signed `i32` for XP — negative values are clamped to 0.
+#[derive(Default, Copy, Clone, Debug)]
 pub struct Experience {
-    total_points: i32, // cannot be u32
+    total_points: i32,
     /// Whether the `total_points` has changed since the last time the client was updated
     pub dirty: bool,
 }
