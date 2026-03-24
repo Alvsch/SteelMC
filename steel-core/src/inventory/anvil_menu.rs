@@ -1,7 +1,26 @@
 //! Anvil Menus
-use std::{mem, sync::Arc};
+use std::{
+    mem,
+    sync::{
+        Arc,
+        atomic::{AtomicI32, Ordering},
+    },
+};
 
-use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef, vanilla_menu_types};
+use steel_registry::{
+    REGISTRY, RegistryExt,
+    data_components::{
+        DataComponentType,
+        components::ItemEnchantments,
+        vanilla_components::{
+            CUSTOM_NAME, ENCHANTMENTS, REPAIR_COST, REPAIRABLE, STORED_ENCHANTMENTS,
+        },
+    },
+    enchantment::Enchantment,
+    item_stack::ItemStack,
+    menu_type::MenuTypeRef,
+    vanilla_enchantments, vanilla_items, vanilla_menu_types,
+};
 use steel_utils::{BlockPos, locks::SyncMutex, translations};
 use text_components::TextComponent;
 
@@ -54,6 +73,7 @@ pub struct AnvilMenu {
     /// The Position
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
+    repair_durability_cost: AtomicI32,
 }
 
 impl AnvilMenu {
@@ -86,7 +106,203 @@ impl AnvilMenu {
             input_container: simple_container,
             result_container,
             block_pos: pos,
+            repair_durability_cost: AtomicI32::new(0),
         }
+    }
+
+    fn create_result(&mut self, player: &Player) {
+        let mut input_container = self.input_container.lock();
+        let [first, second] = input_container
+            .items_mut()
+            .get_disjoint_mut([0, 1])
+            .expect("failed to get");
+
+        let mut additional_cost = 0i32;
+        let mut rename_cost = 0i32;
+        self.behavior.set_data(0, 1);
+
+        if first.is_empty() || !Self::can_store_enchantments(first) {
+            self.result_container.lock().set_item(0, ItemStack::empty());
+            self.behavior.set_data(0, 0);
+            return;
+        }
+
+        self.repair_durability_cost.store(0, Ordering::Relaxed);
+
+        let mut result = first.clone();
+        let mut enchantments = first.get_enchantments().cloned().unwrap_or_default();
+        let prior_repair_cost: i64 = *first.get(REPAIR_COST).unwrap_or(&0) as i64
+            + *second.get(REPAIR_COST).unwrap_or(&0) as i64;
+
+        if !second.is_empty() {
+            let has_stored_enchantments = second.has(STORED_ENCHANTMENTS);
+
+            if result.is_damageable_item() {
+                // && first.is_valid_repair_item(second) {
+                let mut repair_per_unit =
+                    result.get_damage_value().min(result.get_max_damage() / 4);
+                if repair_per_unit <= 0 {
+                    self.result_container.lock().set_item(0, ItemStack::empty());
+                    self.behavior.set_data(0, 0);
+                    return;
+                }
+
+                let mut materials_used = 0;
+                while repair_per_unit > 0 && materials_used < second.count {
+                    let new_damage = result.get_damage_value() - repair_per_unit;
+                    result.set_damage_value(new_damage);
+                    additional_cost += 1;
+                    materials_used += 1;
+                    repair_per_unit = result.get_damage_value().min(result.get_max_damage() / 4);
+                }
+
+                self.repair_durability_cost
+                    .store(materials_used, Ordering::Relaxed);
+            } else {
+                if !has_stored_enchantments
+                    && (!result.is(second.item) || !result.is_damageable_item())
+                {
+                    self.result_container.lock().set_item(0, ItemStack::empty());
+                    self.behavior.set_data(0, 0);
+                    return;
+                }
+
+                if result.is_damageable_item() && !has_stored_enchantments {
+                    // Combining two of the same item
+                    let first_durability = first.get_max_damage() - first.get_damage_value();
+                    let second_durability = second.get_max_damage() - second.get_damage_value();
+                    let durability_bonus = second_durability + result.get_max_damage() * 12 / 100;
+                    let total_durability = first_durability + durability_bonus;
+                    let new_damage = (result.get_max_damage() - total_durability).max(0);
+
+                    if new_damage < result.get_damage_value() {
+                        result.set_damage_value(new_damage);
+                        additional_cost += 2;
+                    }
+                }
+
+                // Enchantment merging
+                let sacrifice_enchantments = second.get_enchantments().cloned().unwrap_or_default();
+                let mut any_compatible = false;
+                let mut any_incompatible = false;
+
+                for (ident, &level) in sacrifice_enchantments.iter() {
+                    let existing_level = enchantments.get_level(ident);
+                    let mut merged_level = if existing_level == level {
+                        level + 1
+                    } else {
+                        existing_level.max(level)
+                    };
+
+                    let enchantment = REGISTRY
+                        .enchantments
+                        .by_key(ident)
+                        .expect("should exist because we got it from item enchantments");
+                    //     let mut can_apply = enchantment.slots
+                    //         || first.is(&vanilla_items::ITEMS.enchanted_book)
+                    //         || player.has_infinite_materials();
+
+                    //     for existing_holder in enchantments.keys() {
+                    //         if existing_holder != enchantment
+                    //             && !Enchantment::are_compatible(holder, existing_holder)
+                    //         {
+                    //             can_apply = false;
+                    //             additional_cost += 1;
+                    //         }
+                    //     }
+
+                    //     if !can_apply {
+                    //         any_incompatible = true;
+                    //     } else {
+                    //         any_compatible = true;
+                    //         merged_level = merged_level.min(enchantment.get_max_level());
+                    //         enchantments.set(holder, merged_level);
+
+                    //         let mut anvil_cost = enchantment.get_anvil_cost();
+                    //         if has_stored_enchantments {
+                    //             anvil_cost = (anvil_cost / 2).max(1);
+                    //         }
+                    //         additional_cost += anvil_cost * merged_level;
+
+                    //         if first.count > 1 {
+                    //             additional_cost = 40;
+                    //         }
+                    //     }
+                }
+
+                // if any_incompatible && !any_compatible {
+                //     self.result_container.lock().set_item(0, ItemStack::empty());
+                //     self.behavior.set_data(0, 0);
+                //     return;
+                // }
+            }
+        }
+
+        // TODO: missing packet implementation
+        //// --- Renaming ---
+        //if let Some(name) = &self.item_name {
+        //    if !name.is_empty() {
+        //        if name != &first.get_hover_name() {
+        //            rename_cost = 1;
+        //            additional_cost += rename_cost;
+        //            result.set(CUSTOM_NAME, TextComponent::from(name.clone()));
+        //        }
+        //    }
+        //} else if first.has(CUSTOM_NAME) {
+        //    rename_cost = 1;
+        //    additional_cost += rename_cost;
+        //    result.remove(CUSTOM_NAME);
+        //}
+
+        // --- Final cost calculation ---
+        let total_cost = if additional_cost <= 0 {
+            0
+        } else {
+            (prior_repair_cost + additional_cost as i64).clamp(0, i32::MAX as i64) as i32
+        };
+        self.behavior.set_data(0, total_cost as i16);
+
+        if additional_cost <= 0 {
+            result = ItemStack::empty();
+        }
+
+        let only_renaming = rename_cost == additional_cost && rename_cost > 0;
+        if only_renaming && total_cost >= 40 {
+            self.behavior.set_data(0, 39);
+        }
+
+        if total_cost >= 40 && !player.has_infinite_materials() {
+            result = ItemStack::empty();
+        }
+
+        // --- Write repair cost to result ---
+        if !result.is_empty() {
+            let second_repair_cost = *second.get(REPAIR_COST).unwrap_or(&0);
+            let mut final_repair_cost = *result.get(REPAIR_COST).unwrap_or(&0);
+            if final_repair_cost < second_repair_cost {
+                final_repair_cost = second_repair_cost;
+            }
+            if rename_cost != additional_cost || rename_cost == 0 {
+                final_repair_cost = Self::calculate_increased_repair_cost(final_repair_cost);
+            }
+            result.set(REPAIR_COST, final_repair_cost);
+            //EnchantmentHelper::set_enchantments(&mut result, enchantments.to_immutable());
+        }
+
+        self.result_container.lock().set_item(0, result);
+        self.behavior.broadcast_changes(&player.connection);
+    }
+
+    fn can_store_enchantments(item_stack: &ItemStack) -> bool {
+        item_stack.has(if item_stack.is(&vanilla_items::ITEMS.enchanted_book) {
+            STORED_ENCHANTMENTS
+        } else {
+            ENCHANTMENTS
+        })
+    }
+
+    fn calculate_increased_repair_cost(old_repair_cost: i32) -> i32 {
+        old_repair_cost.saturating_mul(2).saturating_add(1)
     }
 }
 
