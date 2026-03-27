@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ChunkStorage"],"fn":["direction_from_2d","direction_to_2d"],"struct":["ChunkBuilder"]};

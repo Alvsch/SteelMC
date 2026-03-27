@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["PLACEABLE_TAG"],"fn":["register_painting_variant_tags"],"static":["PLACEABLE_TAG_LIST"]};

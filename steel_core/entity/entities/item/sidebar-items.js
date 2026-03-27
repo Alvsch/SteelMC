@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["AIR_DRAG","DEFAULT_GRAVITY","DEFAULT_HEALTH","DEFAULT_PICKUP_DELAY","INFINITE_LIFETIME","INFINITE_PICKUP_DELAY","LIFETIME"],"enum":["PositionSyncPacket"],"struct":["ItemEntity"]};

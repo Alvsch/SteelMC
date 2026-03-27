@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["collide","collide_single","join_is_not_empty","merged_face_occludes","project_shape_onto_grid","translate_shape"]};

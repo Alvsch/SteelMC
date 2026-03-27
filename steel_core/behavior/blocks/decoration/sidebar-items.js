@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["candle_block","sign_block","torch_block"]};

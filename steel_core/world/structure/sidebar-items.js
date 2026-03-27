@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["StructurePiece","StructureStart"],"type":["StructureReferenceMap","StructureStartMap"]};

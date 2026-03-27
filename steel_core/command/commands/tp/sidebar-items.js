@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["command_handler","teleport_to_player","teleport_to_pos"],"type":["MultipleEntityArgs","MultipleRotationArgs"]};

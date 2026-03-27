@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["MobCategory"],"struct":["EntityDimensions","EntityFlags","EntityType","EntityTypeRegistry"],"type":["EntityTypeRef"]};

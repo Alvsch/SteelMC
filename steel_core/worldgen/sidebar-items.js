@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["BiomeSourceKind","ChunkBiomeSampler"],"mod":["biome_source","climate_sampler","nether_climate_sampler"],"struct":["EndBiomeSource","EndIslands","NetherBiomeSource","NetherClimateSampler","OverworldBiomeSource","OverworldClimateSampler","OverworldColumnCache"]};

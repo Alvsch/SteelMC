@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ROUND_OFF"],"fn":["wrap"],"struct":["PerlinNoise"]};

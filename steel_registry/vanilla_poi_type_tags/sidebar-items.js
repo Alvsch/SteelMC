@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ACQUIRABLE_JOB_SITE_TAG","BEE_HOME_TAG","VILLAGE_TAG"],"fn":["register_poi_type_tags"],"static":["ACQUIRABLE_JOB_SITE_TAG_LIST","BEE_HOME_TAG_LIST","VILLAGE_TAG_LIST"]};

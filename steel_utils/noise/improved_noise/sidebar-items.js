@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["grad_dot"],"struct":["ImprovedNoise"]};

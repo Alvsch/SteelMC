@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SEND_PLAYER_INFO_INTERVAL"],"enum":["RaytraceAction"],"fn":["triangle_random"],"mod":["player_area_map","player_map","structure","tick_scheduler","weather","world_entities"],"struct":["PlayerAreaMap","PlayerMap","World","WorldConfig","WorldTickTimings"]};

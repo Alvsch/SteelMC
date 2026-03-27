@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["EquippableSlot"],"mod":["equippable","tool"],"struct":["Equippable","Tool","ToolRule"]};

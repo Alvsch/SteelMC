@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEPENDENCY_MARGIN","DISPLAY_DIAMETER","DISPLAY_RADIUS","SPAWN_RADIUS","TOTAL_SPAWN_CHUNKS"],"fn":["count_full_chunks","generate_pregen","generate_spawn_chunks","generate_with_display","get_pregen_radius"]};

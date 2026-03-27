@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["slot_to_equipment"],"static":["EMPTY_ITEM"],"struct":["PlayerInventory"]};

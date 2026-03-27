@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["COLLISION_EPSILON","MOVEMENT_ERROR_THRESHOLD","Y_TOLERANCE"],"mod":["collision","entity_move","physics_state","shapes"]};

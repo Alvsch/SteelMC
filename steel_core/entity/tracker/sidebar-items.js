@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["send_spawn_packets"],"struct":["EntityTracker","TrackedEntity"]};

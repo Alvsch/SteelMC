@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["full_block_shape"],"macro":["offset"],"mod":["behavior","block_state_ext","properties","shapes"],"struct":["Block","BlockRegistry"],"type":["BlockRef","ShapeFn"]};

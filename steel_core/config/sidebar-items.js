@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ConfigLabel","WorldGeneratorTypes","WorldStorageConfig"],"static":["CONFIG","STEEL_CONFIG"],"struct":["ConfigLink","ServerConfig","ServerConfigRef","ServerLinks"]};

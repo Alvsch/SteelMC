@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["bias_towards_extreme","clamp","clamp_i32","clamped_lerp","cube","floor","inverse_lerp","lerp","lerp2","lerp3","lfloor","map","map_clamped","smoothstep","smoothstep_derivative","square"]};

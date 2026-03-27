@@ -1,0 +1,361 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Trait defining the behavior of a block."><title>BlockBehavior in steel_core::behavior::block - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="steel_core" data-themes="" data-resource-suffix="" data-rustdoc-version="1.96.0-nightly (23903d01c 2026-03-26)" data-channel="nightly" data-search-js="search-63369b7b.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc trait"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">BlockBehavior</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../steel_core/index.html">steel_<wbr>core</a><span class="version">0.4.0+mc26.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Block<wbr>Behavior</a></h2><h3><a href="#required-methods">Required Methods</a></h3><ul class="block"><li><a href="#tymethod.get_state_for_placement" title="get_state_for_placement">get_state_for_placement</a></li></ul><h3><a href="#provided-methods">Provided Methods</a></h3><ul class="block"><li><a href="#method.affect_neighbors_after_removal" title="affect_neighbors_after_removal">affect_neighbors_after_removal</a></li><li><a href="#method.can_place_liquid" title="can_place_liquid">can_place_liquid</a></li><li><a href="#method.can_survive" title="can_survive">can_survive</a></li><li><a href="#method.entity_inside" title="entity_inside">entity_inside</a></li><li><a href="#method.get_analog_output_signal" title="get_analog_output_signal">get_analog_output_signal</a></li><li><a href="#method.get_clone_item_stack" title="get_clone_item_stack">get_clone_item_stack</a></li><li><a href="#method.get_fluid_state" title="get_fluid_state">get_fluid_state</a></li><li><a href="#method.handle_neighbor_changed" title="handle_neighbor_changed">handle_neighbor_changed</a></li><li><a href="#method.has_analog_output_signal" title="has_analog_output_signal">has_analog_output_signal</a></li><li><a href="#method.has_block_entity" title="has_block_entity">has_block_entity</a></li><li><a href="#method.is_randomly_ticking" title="is_randomly_ticking">is_randomly_ticking</a></li><li><a href="#method.new_block_entity" title="new_block_entity">new_block_entity</a></li><li><a href="#method.on_place" title="on_place">on_place</a></li><li><a href="#method.pickup_block" title="pickup_block">pickup_block</a></li><li><a href="#method.place_liquid" title="place_liquid">place_liquid</a></li><li><a href="#method.random_tick" title="random_tick">random_tick</a></li><li><a href="#method.should_keep_block_entity" title="should_keep_block_entity">should_keep_block_entity</a></li><li><a href="#method.tick" title="tick">tick</a></li><li><a href="#method.update_shape" title="update_shape">update_shape</a></li><li><a href="#method.use_item_on" title="use_item_on">use_item_on</a></li><li><a href="#method.use_without_item" title="use_without_item">use_without_item</a></li></ul><h3><a href="#implementors">Implementors</a></h3></section><div id="rustdoc-modnav"><h2><a href="index.html">In steel_<wbr>core::<wbr>behavior::<wbr>block</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">steel_core</a>::<wbr><a href="../index.html">behavior</a>::<wbr><a href="index.html">block</a></div><h1>Trait <span class="trait">Block<wbr>Behavior</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/steel_core/behavior/block.rs.html#35-444">Source</a> </span></div><pre class="rust item-decl"><code>pub trait BlockBehavior: <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + <a class="trait" href="https://doc.rust-lang.org/nightly/core/marker/trait.Sync.html" title="trait core::marker::Sync">Sync</a> {
+<details class="toggle type-contents-toggle"><summary class="hideme"><span>Show 22 methods</span></summary>    // Required method
+    fn <a href="#tymethod.get_state_for_placement" class="fn">get_state_for_placement</a>(
+        &amp;self,
+        context: &amp;<a class="struct" href="../struct.BlockPlaceContext.html" title="struct steel_core::behavior::BlockPlaceContext">BlockPlaceContext</a>&lt;'_&gt;,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;BlockStateId&gt;;
+
+    // Provided methods
+    fn <a href="#method.pickup_block" class="fn">pickup_block</a>(
+        &amp;self,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+        state: BlockStateId,
+        player: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="struct" href="../../player/struct.Player.html" title="struct steel_core::player::Player">Player</a>&gt;,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="struct.PickupResult.html" title="struct steel_core::behavior::block::PickupResult">PickupResult</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.update_shape" class="fn">update_shape</a>(
+        &amp;self,
+        state: BlockStateId,
+        _world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        _pos: BlockPos,
+        _direction: Direction,
+        _neighbor_pos: BlockPos,
+        _neighbor_state: BlockStateId,
+    ) -&gt; BlockStateId { ... }
+<span class="item-spacer"></span>    fn <a href="#method.can_survive" class="fn">can_survive</a>(
+        &amp;self,
+        state: BlockStateId,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+    ) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.on_place" class="fn">on_place</a>(
+        &amp;self,
+        state: BlockStateId,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+        old_state: BlockStateId,
+        moved_by_piston: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+    ) { ... }
+<span class="item-spacer"></span>    fn <a href="#method.affect_neighbors_after_removal" class="fn">affect_neighbors_after_removal</a>(
+        &amp;self,
+        state: BlockStateId,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+        moved_by_piston: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+    ) { ... }
+<span class="item-spacer"></span>    fn <a href="#method.use_item_on" class="fn">use_item_on</a>(
+        &amp;self,
+        item_stack: &amp;ItemStack,
+        state: BlockStateId,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+        player: &amp;<a class="struct" href="../../player/struct.Player.html" title="struct steel_core::player::Player">Player</a>,
+        hand: InteractionHand,
+        hit_result: &amp;<a class="struct" href="../struct.BlockHitResult.html" title="struct steel_core::behavior::BlockHitResult">BlockHitResult</a>,
+    ) -&gt; <a class="enum" href="../enum.InteractionResult.html" title="enum steel_core::behavior::InteractionResult">InteractionResult</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.use_without_item" class="fn">use_without_item</a>(
+        &amp;self,
+        state: BlockStateId,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+        player: &amp;<a class="struct" href="../../player/struct.Player.html" title="struct steel_core::player::Player">Player</a>,
+        hit_result: &amp;<a class="struct" href="../struct.BlockHitResult.html" title="struct steel_core::behavior::BlockHitResult">BlockHitResult</a>,
+    ) -&gt; <a class="enum" href="../enum.InteractionResult.html" title="enum steel_core::behavior::InteractionResult">InteractionResult</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.handle_neighbor_changed" class="fn">handle_neighbor_changed</a>(
+        &amp;self,
+        state: BlockStateId,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+        source_block: BlockRef,
+        moved_by_piston: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+    ) { ... }
+<span class="item-spacer"></span>    fn <a href="#method.get_clone_item_stack" class="fn">get_clone_item_stack</a>(
+        &amp;self,
+        block: BlockRef,
+        state: BlockStateId,
+        include_data: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;ItemStack&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.is_randomly_ticking" class="fn">is_randomly_ticking</a>(&amp;self, state: BlockStateId) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.random_tick" class="fn">random_tick</a>(
+        &amp;self,
+        state: BlockStateId,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+    ) { ... }
+<span class="item-spacer"></span>    fn <a href="#method.tick" class="fn">tick</a>(&amp;self, state: BlockStateId, world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;, pos: BlockPos) { ... }
+<span class="item-spacer"></span>    fn <a href="#method.entity_inside" class="fn">entity_inside</a>(
+        &amp;self,
+        state: BlockStateId,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+        entity: &amp;dyn <a class="trait" href="../../entity/trait.Entity.html" title="trait steel_core::entity::Entity">Entity</a>,
+    ) { ... }
+<span class="item-spacer"></span>    fn <a href="#method.has_block_entity" class="fn">has_block_entity</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.new_block_entity" class="fn">new_block_entity</a>(
+        &amp;self,
+        level: <a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Weak.html" title="struct alloc::sync::Weak">Weak</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="type" href="../../block_entity/type.SharedBlockEntity.html" title="type steel_core::block_entity::SharedBlockEntity">SharedBlockEntity</a>&gt; { ... }
+<span class="item-spacer"></span>    fn <a href="#method.should_keep_block_entity" class="fn">should_keep_block_entity</a>(
+        &amp;self,
+        old_state: BlockStateId,
+        new_state: BlockStateId,
+    ) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.has_analog_output_signal" class="fn">has_analog_output_signal</a>(&amp;self, state: BlockStateId) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.get_analog_output_signal" class="fn">get_analog_output_signal</a>(
+        &amp;self,
+        state: BlockStateId,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+    ) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.i32.html">i32</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.get_fluid_state" class="fn">get_fluid_state</a>(&amp;self, state: BlockStateId) -&gt; <a class="struct" href="../../fluid/struct.FluidState.html" title="struct steel_core::fluid::FluidState">FluidState</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.can_place_liquid" class="fn">can_place_liquid</a>(&amp;self, state: BlockStateId, fluid: <a class="type" href="../../fluid/type.FluidRef.html" title="type steel_core::fluid::FluidRef">FluidRef</a>) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a> { ... }
+<span class="item-spacer"></span>    fn <a href="#method.place_liquid" class="fn">place_liquid</a>(
+        &amp;self,
+        world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+        pos: BlockPos,
+        state: BlockStateId,
+        fluid_state: <a class="struct" href="../../fluid/struct.FluidState.html" title="struct steel_core::fluid::FluidState">FluidState</a>,
+    ) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a> { ... }
+</details>}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Trait defining the behavior of a block.</p>
+<p>This trait handles all dynamic/functional aspects of blocks:</p>
+<ul>
+<li>Placement logic</li>
+<li>Neighbor updates</li>
+<li>Player interactions</li>
+<li>State changes</li>
+</ul>
+</div></details><h2 id="required-methods" class="section-header">Required Methods<a href="#required-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="tymethod.get_state_for_placement" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#87">Source</a><h4 class="code-header">fn <a href="#tymethod.get_state_for_placement" class="fn">get_state_for_placement</a>(
+    &amp;self,
+    context: &amp;<a class="struct" href="../struct.BlockPlaceContext.html" title="struct steel_core::behavior::BlockPlaceContext">BlockPlaceContext</a>&lt;'_&gt;,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;BlockStateId&gt;</h4></section></summary><div class="docblock"><p>Returns the block state to use when placing this block.</p>
+</div></details></div><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="method.pickup_block" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#47-55">Source</a><h4 class="code-header">fn <a href="#method.pickup_block" class="fn">pickup_block</a>(
+    &amp;self,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+    state: BlockStateId,
+    player: <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;&amp;<a class="struct" href="../../player/struct.Player.html" title="struct steel_core::player::Player">Player</a>&gt;,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="struct.PickupResult.html" title="struct steel_core::behavior::block::PickupResult">PickupResult</a>&gt;</h4></section></summary><div class="docblock"><p>Called when a player uses an empty bucket on this block.</p>
+<p>Should:</p>
+<ul>
+<li>Remove or modify the block</li>
+<li>Return the filled bucket item to give</li>
+</ul>
+<p>Return None if pickup failed.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.update_shape" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#58-68">Source</a><h4 class="code-header">fn <a href="#method.update_shape" class="fn">update_shape</a>(
+    &amp;self,
+    state: BlockStateId,
+    _world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    _pos: BlockPos,
+    _direction: Direction,
+    _neighbor_pos: BlockPos,
+    _neighbor_state: BlockStateId,
+) -&gt; BlockStateId</h4></section></summary><div class="docblock"><p>Called when a neighboring block changes shape.
+Returns the new state for this block after considering the neighbor change.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.can_survive" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#82-84">Source</a><h4 class="code-header">fn <a href="#method.can_survive" class="fn">can_survive</a>(
+    &amp;self,
+    state: BlockStateId,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Returns whether this block can survive at the given position.</p>
+<p>Vanilla parity: <code>BlockBehavior.canSurvive(BlockState, LevelReader, BlockPos)</code>.</p>
+<p>Used during placement validation, shape updates (to break unsupported
+blocks), and when removing water from waterlogged blocks. The default
+returns <code>true</code>; override for blocks that require physical support
+(torches, buttons, candles, cactus, etc.).</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.on_place" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#101-110">Source</a><h4 class="code-header">fn <a href="#method.on_place" class="fn">on_place</a>(
+    &amp;self,
+    state: BlockStateId,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+    old_state: BlockStateId,
+    moved_by_piston: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+)</h4></section></summary><div class="docblock"><p>Called when this block is placed in the world.</p>
+<h5 id="arguments"><a class="doc-anchor" href="#arguments">§</a>Arguments</h5>
+<ul>
+<li><code>state</code> - The new block state that was placed</li>
+<li><code>world</code> - The world the block was placed in</li>
+<li><code>pos</code> - The position where the block was placed</li>
+<li><code>old_state</code> - The previous block state at this position</li>
+<li><code>moved_by_piston</code> - Whether the block was moved by a piston</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.affect_neighbors_after_removal" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#125-133">Source</a><h4 class="code-header">fn <a href="#method.affect_neighbors_after_removal" class="fn">affect_neighbors_after_removal</a>(
+    &amp;self,
+    state: BlockStateId,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+    moved_by_piston: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+)</h4></section></summary><div class="docblock"><p>Called after this block is removed from the world, to affect neighbors.</p>
+<p>This is used for things like rails notifying neighbors when removed.</p>
+<h5 id="arguments-1"><a class="doc-anchor" href="#arguments-1">§</a>Arguments</h5>
+<ul>
+<li><code>state</code> - The block state that was removed</li>
+<li><code>world</code> - The world the block was removed from</li>
+<li><code>pos</code> - The position where the block was removed</li>
+<li><code>moved_by_piston</code> - Whether the block was moved by a piston</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.use_item_on" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#145-156">Source</a><h4 class="code-header">fn <a href="#method.use_item_on" class="fn">use_item_on</a>(
+    &amp;self,
+    item_stack: &amp;ItemStack,
+    state: BlockStateId,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+    player: &amp;<a class="struct" href="../../player/struct.Player.html" title="struct steel_core::player::Player">Player</a>,
+    hand: InteractionHand,
+    hit_result: &amp;<a class="struct" href="../struct.BlockHitResult.html" title="struct steel_core::behavior::BlockHitResult">BlockHitResult</a>,
+) -&gt; <a class="enum" href="../enum.InteractionResult.html" title="enum steel_core::behavior::InteractionResult">InteractionResult</a></h4></section></summary><div class="docblock"><p>Called when a player uses an item on this block.</p>
+<p>Returns <code>TryEmptyHandInteraction</code> by default to fall through to item use.
+Override this to handle block-specific interactions (e.g., opening chests,
+using buttons, etc.).</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.use_without_item" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#167-176">Source</a><h4 class="code-header">fn <a href="#method.use_without_item" class="fn">use_without_item</a>(
+    &amp;self,
+    state: BlockStateId,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+    player: &amp;<a class="struct" href="../../player/struct.Player.html" title="struct steel_core::player::Player">Player</a>,
+    hit_result: &amp;<a class="struct" href="../struct.BlockHitResult.html" title="struct steel_core::behavior::BlockHitResult">BlockHitResult</a>,
+) -&gt; <a class="enum" href="../enum.InteractionResult.html" title="enum steel_core::behavior::InteractionResult">InteractionResult</a></h4></section></summary><div class="docblock"><p>Called when a player uses this block without an item (or as a fallback
+when <code>use_item_on</code> returns <code>TryEmptyHandInteraction</code>).</p>
+<p>Returns <code>Pass</code> by default. Override this for blocks that have interactions
+without needing an item (e.g., buttons, levers, repeaters).</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.handle_neighbor_changed" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#193-203">Source</a><h4 class="code-header">fn <a href="#method.handle_neighbor_changed" class="fn">handle_neighbor_changed</a>(
+    &amp;self,
+    state: BlockStateId,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+    source_block: BlockRef,
+    moved_by_piston: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+)</h4></section></summary><div class="docblock"><p>Called when a neighboring block changes (not shape-related).</p>
+<p>This is the Rust equivalent of vanilla’s <code>BlockState.handleNeighborChanged()</code>.
+Used by redstone components, doors, and other blocks that react to neighbor changes.</p>
+<h5 id="arguments-2"><a class="doc-anchor" href="#arguments-2">§</a>Arguments</h5>
+<ul>
+<li><code>state</code> - The current block state</li>
+<li><code>world</code> - The world</li>
+<li><code>pos</code> - Position of this block</li>
+<li><code>source_block</code> - The block type that changed</li>
+<li><code>moved_by_piston</code> - Whether the change was caused by a piston</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.get_clone_item_stack" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#219-227">Source</a><h4 class="code-header">fn <a href="#method.get_clone_item_stack" class="fn">get_clone_item_stack</a>(
+    &amp;self,
+    block: BlockRef,
+    state: BlockStateId,
+    include_data: <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a>,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;ItemStack&gt;</h4></section></summary><div class="docblock"><p>Returns the item stack to give when a player picks this block (middle click).</p>
+<p>The default implementation looks up an item with the same key as the block.
+Override this for blocks where the pick item differs from the block key
+(e.g., crops → seeds, redstone wire → redstone dust, wall torch → torch).</p>
+<h5 id="arguments-3"><a class="doc-anchor" href="#arguments-3">§</a>Arguments</h5>
+<ul>
+<li><code>block</code> - The block being picked</li>
+<li><code>_state</code> - The block state (some blocks vary pick item based on state)</li>
+<li><code>_include_data</code> - Whether to include block entity data (creative + Ctrl)</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.is_randomly_ticking" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#238-240">Source</a><h4 class="code-header">fn <a href="#method.is_randomly_ticking" class="fn">is_randomly_ticking</a>(&amp;self, state: BlockStateId) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Returns whether this block should receive random ticks.</p>
+<p>Override to return true for blocks like crops, grass, ice, fire, etc.
+This is used to optimize chunk ticking by skipping sections with no
+randomly-ticking blocks.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.random_tick" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#255-257">Source</a><h4 class="code-header">fn <a href="#method.random_tick" class="fn">random_tick</a>(&amp;self, state: BlockStateId, world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;, pos: BlockPos)</h4></section></summary><div class="docblock"><p>Called on random tick for blocks that support random ticking.</p>
+<p>This is only called if <code>is_randomly_ticking()</code> returns true.
+Used for crop growth, grass spread, ice melting, fire behavior, etc.</p>
+<h5 id="arguments-4"><a class="doc-anchor" href="#arguments-4">§</a>Arguments</h5>
+<ul>
+<li><code>state</code> - The current block state</li>
+<li><code>world</code> - The world the block is in</li>
+<li><code>pos</code> - The position of the block</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.tick" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#273-275">Source</a><h4 class="code-header">fn <a href="#method.tick" class="fn">tick</a>(&amp;self, state: BlockStateId, world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;, pos: BlockPos)</h4></section></summary><div class="docblock"><p>Called when a scheduled tick fires for this block.</p>
+<p>Unlike <code>random_tick</code>, scheduled ticks are deterministic — they fire after
+a precise delay set by <code>World::schedule_block_tick</code>. Used for buttons
+unpressing, repeaters firing, fluids flowing, etc.</p>
+<h5 id="arguments-5"><a class="doc-anchor" href="#arguments-5">§</a>Arguments</h5>
+<ul>
+<li><code>state</code> - The current block state</li>
+<li><code>world</code> - The world the block is in</li>
+<li><code>pos</code> - The position of the block</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.entity_inside" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#290-298">Source</a><h4 class="code-header">fn <a href="#method.entity_inside" class="fn">entity_inside</a>(
+    &amp;self,
+    state: BlockStateId,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+    entity: &amp;dyn <a class="trait" href="../../entity/trait.Entity.html" title="trait steel_core::entity::Entity">Entity</a>,
+)</h4></section></summary><div class="docblock"><p>Called when an entity is inside this block’s collision area.</p>
+<p>Used by cactus (damage), fire (ignite), sweet berry bush (slow + damage), etc.</p>
+<h5 id="arguments-6"><a class="doc-anchor" href="#arguments-6">§</a>Arguments</h5>
+<ul>
+<li><code>state</code> - The current block state</li>
+<li><code>world</code> - The world</li>
+<li><code>pos</code> - The position of the block</li>
+<li><code>entity</code> - The entity inside the block</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.has_block_entity" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#305-307">Source</a><h4 class="code-header">fn <a href="#method.has_block_entity" class="fn">has_block_entity</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Returns whether this block has an associated block entity.</p>
+<p>Override to return <code>true</code> for blocks like chests, furnaces, signs, etc.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.new_block_entity" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#321-328">Source</a><h4 class="code-header">fn <a href="#method.new_block_entity" class="fn">new_block_entity</a>(
+    &amp;self,
+    level: <a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Weak.html" title="struct alloc::sync::Weak">Weak</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+    state: BlockStateId,
+) -&gt; <a class="enum" href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="type" href="../../block_entity/type.SharedBlockEntity.html" title="type steel_core::block_entity::SharedBlockEntity">SharedBlockEntity</a>&gt;</h4></section></summary><div class="docblock"><p>Creates a new block entity for this block.</p>
+<p>Only called if <code>has_block_entity()</code> returns <code>true</code>.</p>
+<h5 id="arguments-7"><a class="doc-anchor" href="#arguments-7">§</a>Arguments</h5>
+<ul>
+<li><code>level</code> - Weak reference to the world</li>
+<li><code>pos</code> - The position where the block entity will be placed</li>
+<li><code>state</code> - The block state for this block entity</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.should_keep_block_entity" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#342-344">Source</a><h4 class="code-header">fn <a href="#method.should_keep_block_entity" class="fn">should_keep_block_entity</a>(
+    &amp;self,
+    old_state: BlockStateId,
+    new_state: BlockStateId,
+) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Returns whether the block entity should be kept when the block state changes.</p>
+<p>This is used when a block changes to a different block type that shares
+the same block entity type (e.g., different chest variants).</p>
+<h5 id="arguments-8"><a class="doc-anchor" href="#arguments-8">§</a>Arguments</h5>
+<ul>
+<li><code>old_state</code> - The previous block state</li>
+<li><code>new_state</code> - The new block state</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.has_analog_output_signal" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#356-358">Source</a><h4 class="code-header">fn <a href="#method.has_analog_output_signal" class="fn">has_analog_output_signal</a>(&amp;self, state: BlockStateId) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Returns whether this block can provide an analog output signal to comparators.</p>
+<p>Override to return <code>true</code> for containers (chests, barrels, hoppers, etc.)
+and other blocks that comparators can read (composters, beehives, etc.).</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.get_analog_output_signal" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#373-380">Source</a><h4 class="code-header">fn <a href="#method.get_analog_output_signal" class="fn">get_analog_output_signal</a>(
+    &amp;self,
+    state: BlockStateId,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.i32.html">i32</a></h4></section></summary><div class="docblock"><p>Returns the analog output signal strength (0-15) for comparators.</p>
+<p>Only called if <code>has_analog_output_signal()</code> returns <code>true</code>.
+For containers, this is typically based on how full they are.</p>
+<h5 id="arguments-9"><a class="doc-anchor" href="#arguments-9">§</a>Arguments</h5>
+<ul>
+<li><code>state</code> - The current block state</li>
+<li><code>world</code> - The world</li>
+<li><code>pos</code> - The position of the block</li>
+</ul>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.get_fluid_state" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#390-396">Source</a><h4 class="code-header">fn <a href="#method.get_fluid_state" class="fn">get_fluid_state</a>(&amp;self, state: BlockStateId) -&gt; <a class="struct" href="../../fluid/struct.FluidState.html" title="struct steel_core::fluid::FluidState">FluidState</a></h4></section></summary><div class="docblock"><p>Returns the fluid state for this block state.</p>
+<p>Default (<code>SimpleWaterloggedBlock</code>): returns water source when <code>WATERLOGGED = true</code>,
+otherwise <code>FluidState::EMPTY</code>.</p>
+<p>Override for liquid blocks (water/lava) to return the appropriate fluid based on LEVEL.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.can_place_liquid" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#410-415">Source</a><h4 class="code-header">fn <a href="#method.can_place_liquid" class="fn">can_place_liquid</a>(&amp;self, state: BlockStateId, fluid: <a class="type" href="../../fluid/type.FluidRef.html" title="type steel_core::fluid::FluidRef">FluidRef</a>) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Vanilla parity: <code>LiquidBlockContainer.canPlaceLiquid()</code>.</p>
+<p>Returns <code>true</code> if the given fluid type may be placed into this block at the
+given state.  Called by the fluid-spread logic; there is no player context
+here (fluid spreading has no associated player).</p>
+<p>Default (<code>SimpleWaterloggedBlock</code>): accepts water when the block has a
+<code>WATERLOGGED</code> property that is currently <code>false</code>.  Override for blocks
+that need different restrictions (e.g. double-slabs, barriers).</p>
+<p>Vanilla signature: <code>canPlaceLiquid(@Nullable LivingEntity, BlockGetter, BlockPos, BlockState, Fluid)</code>
+— the Fluid parameter is a type, not a state.</p>
+</div></details><details class="toggle method-toggle" open><summary><section id="method.place_liquid" class="method"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#426-443">Source</a><h4 class="code-header">fn <a href="#method.place_liquid" class="fn">place_liquid</a>(
+    &amp;self,
+    world: &amp;<a class="struct" href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc">Arc</a>&lt;<a class="struct" href="../../world/struct.World.html" title="struct steel_core::world::World">World</a>&gt;,
+    pos: BlockPos,
+    state: BlockStateId,
+    fluid_state: <a class="struct" href="../../fluid/struct.FluidState.html" title="struct steel_core::fluid::FluidState">FluidState</a>,
+) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Vanilla parity: <code>LiquidBlockContainer.placeLiquid()</code>.</p>
+<p>Attempts to place <code>fluid_state</code> into this block.  Returns <code>true</code> on success,
+<code>false</code> if placement was rejected.</p>
+<p>Default (<code>SimpleWaterloggedBlock</code>): sets <code>WATERLOGGED = true</code> and schedules
+a fluid tick.  Delegates the guard to <a href="../trait.BlockBehavior.html#method.can_place_liquid" title="method steel_core::behavior::BlockBehavior::can_place_liquid"><code>can_place_liquid</code></a>.</p>
+</div></details></div><h2 id="implementors" class="section-header">Implementors<a href="#implementors" class="anchor">§</a></h2><div id="implementors-list"><div class="negative-marker"></div><section id="impl-BlockBehavior-for-BarrelBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/container/barrel_block.rs.html#41-120">Source</a><a href="#impl-BlockBehavior-for-BarrelBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.BarrelBlock.html" title="struct steel_core::behavior::blocks::BarrelBlock">BarrelBlock</a></h3></section><section id="impl-BlockBehavior-for-ButtonBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/redstone/button_block.rs.html#93-200">Source</a><a href="#impl-BlockBehavior-for-ButtonBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.ButtonBlock.html" title="struct steel_core::behavior::blocks::ButtonBlock">ButtonBlock</a></h3></section><section id="impl-BlockBehavior-for-CactusBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/farming/cactus_block.rs.html#56-218">Source</a><a href="#impl-BlockBehavior-for-CactusBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.CactusBlock.html" title="struct steel_core::behavior::blocks::CactusBlock">CactusBlock</a></h3></section><section id="impl-BlockBehavior-for-CactusFlowerBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/farming/cactus_flower_block.rs.html#41-80">Source</a><a href="#impl-BlockBehavior-for-CactusFlowerBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.CactusFlowerBlock.html" title="struct steel_core::behavior::blocks::CactusFlowerBlock">CactusFlowerBlock</a></h3></section><section id="impl-BlockBehavior-for-CandleBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/decoration/candle_block.rs.html#47-140">Source</a><a href="#impl-BlockBehavior-for-CandleBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.CandleBlock.html" title="struct steel_core::behavior::blocks::CandleBlock">CandleBlock</a></h3></section><section id="impl-BlockBehavior-for-CeilingHangingSignBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/decoration/sign_block.rs.html#458-564">Source</a><a href="#impl-BlockBehavior-for-CeilingHangingSignBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.CeilingHangingSignBlock.html" title="struct steel_core::behavior::blocks::CeilingHangingSignBlock">CeilingHangingSignBlock</a></h3></section><section id="impl-BlockBehavior-for-CraftingTableBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/container/crafting_table_block.rs.html#34-51">Source</a><a href="#impl-BlockBehavior-for-CraftingTableBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.CraftingTableBlock.html" title="struct steel_core::behavior::blocks::CraftingTableBlock">CraftingTableBlock</a></h3></section><section id="impl-BlockBehavior-for-CropBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/farming/crop_block.rs.html#145-174">Source</a><a href="#impl-BlockBehavior-for-CropBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.CropBlock.html" title="struct steel_core::behavior::blocks::CropBlock">CropBlock</a></h3></section><section id="impl-BlockBehavior-for-EndPortalFrameBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/portal/end_portal_frame_block.rs.html#26-33">Source</a><a href="#impl-BlockBehavior-for-EndPortalFrameBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.EndPortalFrameBlock.html" title="struct steel_core::behavior::blocks::EndPortalFrameBlock">EndPortalFrameBlock</a></h3></section><section id="impl-BlockBehavior-for-FarmlandBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/farming/farmland_block.rs.html#94-131">Source</a><a href="#impl-BlockBehavior-for-FarmlandBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.FarmlandBlock.html" title="struct steel_core::behavior::blocks::FarmlandBlock">FarmlandBlock</a></h3></section><section id="impl-BlockBehavior-for-FenceBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/building/fence_block.rs.html#126-170">Source</a><a href="#impl-BlockBehavior-for-FenceBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.FenceBlock.html" title="struct steel_core::behavior::blocks::FenceBlock">FenceBlock</a></h3></section><section id="impl-BlockBehavior-for-FireBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/portal/fire.rs.html#90-128">Source</a><a href="#impl-BlockBehavior-for-FireBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.FireBlock.html" title="struct steel_core::behavior::blocks::FireBlock">FireBlock</a></h3></section><section id="impl-BlockBehavior-for-LiquidBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/fluid/liquid_block.rs.html#105-215">Source</a><a href="#impl-BlockBehavior-for-LiquidBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.LiquidBlock.html" title="struct steel_core::behavior::blocks::LiquidBlock">LiquidBlock</a></h3></section><section id="impl-BlockBehavior-for-NetherPortalBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/portal/nether_portal_block.rs.html#29-56">Source</a><a href="#impl-BlockBehavior-for-NetherPortalBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.NetherPortalBlock.html" title="struct steel_core::behavior::blocks::NetherPortalBlock">NetherPortalBlock</a></h3></section><section id="impl-BlockBehavior-for-RedstoneTorchBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/redstone/redstone_torch_block.rs.html#38-71">Source</a><a href="#impl-BlockBehavior-for-RedstoneTorchBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.RedstoneTorchBlock.html" title="struct steel_core::behavior::blocks::RedstoneTorchBlock">RedstoneTorchBlock</a></h3></section><section id="impl-BlockBehavior-for-RedstoneWallTorchBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/redstone/redstone_torch_block.rs.html#90-153">Source</a><a href="#impl-BlockBehavior-for-RedstoneWallTorchBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.RedstoneWallTorchBlock.html" title="struct steel_core::behavior::blocks::RedstoneWallTorchBlock">RedstoneWallTorchBlock</a></h3></section><section id="impl-BlockBehavior-for-RotatedPillarBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/building/rotated_pillar_block.rs.html#35-43">Source</a><a href="#impl-BlockBehavior-for-RotatedPillarBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.RotatedPillarBlock.html" title="struct steel_core::behavior::blocks::RotatedPillarBlock">RotatedPillarBlock</a></h3></section><section id="impl-BlockBehavior-for-StandingSignBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/decoration/sign_block.rs.html#290-354">Source</a><a href="#impl-BlockBehavior-for-StandingSignBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.StandingSignBlock.html" title="struct steel_core::behavior::blocks::StandingSignBlock">StandingSignBlock</a></h3></section><section id="impl-BlockBehavior-for-TorchBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/decoration/torch_block.rs.html#41-75">Source</a><a href="#impl-BlockBehavior-for-TorchBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.TorchBlock.html" title="struct steel_core::behavior::blocks::TorchBlock">TorchBlock</a></h3></section><section id="impl-BlockBehavior-for-WallHangingSignBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/decoration/sign_block.rs.html#591-670">Source</a><a href="#impl-BlockBehavior-for-WallHangingSignBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.WallHangingSignBlock.html" title="struct steel_core::behavior::blocks::WallHangingSignBlock">WallHangingSignBlock</a></h3></section><section id="impl-BlockBehavior-for-WallSignBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/decoration/sign_block.rs.html#370-442">Source</a><a href="#impl-BlockBehavior-for-WallSignBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.WallSignBlock.html" title="struct steel_core::behavior::blocks::WallSignBlock">WallSignBlock</a></h3></section><section id="impl-BlockBehavior-for-WallTorchBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/decoration/torch_block.rs.html#94-142">Source</a><a href="#impl-BlockBehavior-for-WallTorchBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.WallTorchBlock.html" title="struct steel_core::behavior::blocks::WallTorchBlock">WallTorchBlock</a></h3></section><section id="impl-BlockBehavior-for-WeatheringCopperFullBlock" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/blocks/building/weathering_block.rs.html#172-184">Source</a><a href="#impl-BlockBehavior-for-WeatheringCopperFullBlock" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../blocks/struct.WeatheringCopperFullBlock.html" title="struct steel_core::behavior::blocks::WeatheringCopperFullBlock">WeatheringCopperFullBlock</a></h3></section><section id="impl-BlockBehavior-for-DefaultBlockBehavior" class="impl"><a class="src rightside" href="../../../src/steel_core/behavior/block.rs.html#459-463">Source</a><a href="#impl-BlockBehavior-for-DefaultBlockBehavior" class="anchor">§</a><h3 class="code-header">impl <a class="trait" href="../trait.BlockBehavior.html" title="trait steel_core::behavior::BlockBehavior">BlockBehavior</a> for <a class="struct" href="../struct.DefaultBlockBehavior.html" title="struct steel_core::behavior::DefaultBlockBehavior">DefaultBlockBehavior</a></h3></section></div><script src="../../../trait.impl/steel_core/behavior/block/trait.BlockBehavior.js" async></script></section></div></main></body></html>
