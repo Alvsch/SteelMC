@@ -9,17 +9,10 @@ use std::{
 
 use steel_registry::{
     REGISTRY, RegistryExt,
-    data_components::{
-        DataComponentType,
-        components::ItemEnchantments,
-        vanilla_components::{
-            CUSTOM_NAME, ENCHANTMENTS, REPAIR_COST, REPAIRABLE, STORED_ENCHANTMENTS,
-        },
-    },
-    enchantment::Enchantment,
+    data_components::vanilla_components::{ENCHANTMENTS, REPAIR_COST, STORED_ENCHANTMENTS},
     item_stack::ItemStack,
     menu_type::MenuTypeRef,
-    vanilla_enchantments, vanilla_items, vanilla_menu_types,
+    vanilla_items, vanilla_menu_types,
 };
 use steel_utils::{BlockPos, locks::SyncMutex, translations};
 use text_components::TextComponent;

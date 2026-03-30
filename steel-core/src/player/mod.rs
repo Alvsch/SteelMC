@@ -2622,6 +2622,15 @@ impl Player {
             living_base.dead = true;
         }
 
+        {
+            let mut experience = self.experience.lock();
+
+            experience.sync_score(&mut self.entity_data.lock());
+            experience.score = 0;
+        }
+
+        self.sync_entity_data();
+
         // NOTE: Vanilla `ServerPlayer.die()` does NOT set Pose::Dying — only
         // `LivingEntity.die()` does (which ServerPlayer never calls via super).
         // The death screen covers the player model, so the pose is irrelevant.
@@ -2840,11 +2849,8 @@ impl Player {
                 .get_game_rule(ADVANCE_TIME)
                 .as_bool()
                 .expect("gamerule advance_time should always be a bool.");
-            self.send_packet(CSetTime {
-                game_time,
-                day_time,
-                time_of_day_increasing: advance_time,
-            });
+            let rate = if advance_time { 1.0 } else { 0.0 };
+            self.send_packet(CSetTime::new(game_time, day_time, 0.0, rate));
         }
 
         if world.is_raining() {

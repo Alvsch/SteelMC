@@ -203,10 +203,9 @@ impl ItemStack {
 
         let unbreaking_level =
             self.get_enchantment_level(&crate::vanilla_enchantments::UNBREAKING.key);
-        let mut rng = rand::rng();
         let mut effective_amount = 0;
         for _ in 0..amount {
-            if should_consume_durability(unbreaking_level, &mut rng) {
+            if should_consume_durability(unbreaking_level) {
                 effective_amount += 1;
             }
         }
@@ -393,13 +392,7 @@ impl ItemStack {
     }
 
     #[must_use]
-    pub fn get_enchantment_level_by_name(&self, name: &str) -> i32 {
-        let key = Identifier::vanilla(name.to_string());
-        self.get_enchantment_level(&key)
-    }
-
-    #[must_use]
-    fn get_enchantments(&self) -> Option<&ItemEnchantments> {
+    pub fn get_enchantments(&self) -> Option<&ItemEnchantments> {
         self.get(ENCHANTMENTS)
     }
 
@@ -537,27 +530,31 @@ impl ItemStack {
         // Pick a random instrument from the tag and set INSTRUMENT component
     }
 
-    pub fn set_enchantments<R: rand::Rng>(
-        &mut self,
-        enchantments: &[(Identifier, crate::loot_table::NumberProvider)],
-        add: bool,
-        rng: &mut R,
-    ) {
+    pub fn set_enchantments(&mut self, enchantments: &[(Identifier, u32)], add: bool) {
         let mut current = self
             .get(ENCHANTMENTS)
             .cloned()
             .unwrap_or_else(ItemEnchantments::empty);
 
-        for (key, provider) in enchantments {
-            let level = provider.get_int(rng).max(0) as u32;
+        for (key, level) in enchantments {
             if add {
                 let existing = current.get_level(key);
-                current.set(key.clone(), existing + level);
+                current.set(key.clone(), existing + *level);
             } else {
-                current.set(key.clone(), level);
+                current.set(key.clone(), *level);
             }
         }
 
+        self.set(ENCHANTMENTS, current);
+    }
+
+    /// Vanilla `ItemStack.enchant` → `Mutable.upgrade`: keeps the higher of existing vs new level.
+    pub fn upgrade_enchantment(&mut self, enchantment: Identifier, level: u32) {
+        let mut current = self
+            .get(ENCHANTMENTS)
+            .cloned()
+            .unwrap_or_else(ItemEnchantments::empty);
+        current.upgrade(enchantment, level);
         self.set(ENCHANTMENTS, current);
     }
 
@@ -759,12 +756,12 @@ impl ItemStack {
 }
 
 /// Vanilla unbreaking formula: `1 / (unbreaking_level + 1)` chance to consume durability.
-fn should_consume_durability(unbreaking_level: i32, rng: &mut impl rand::Rng) -> bool {
+fn should_consume_durability(unbreaking_level: i32) -> bool {
     if unbreaking_level <= 0 {
         return true;
     }
     // TODO: Armor uses a different formula: `3 / (unbreaking_level + 3)`
-    rng.random_range(0..unbreaking_level + 1) == 0
+    rand::rng().random_range(0..unbreaking_level + 1) == 0
 }
 
 impl std::fmt::Display for ItemStack {
@@ -804,6 +801,25 @@ impl ReadFrom for ItemStack {
 
         // Read DataComponentPatch
         let patch = DataComponentPatch::read(data)?;
+
+        Ok(Self { item, count, patch })
+    }
+}
+
+impl ItemStack {
+    /// Reads an item stack using the delimited (untrusted) component format.
+    ///
+    /// Vanilla uses this for serverbound packets where component data is
+    /// length-prefixed (e.g., `ServerboundSetCreativeModeSlotPacket`).
+    pub fn read_untrusted(data: &mut Cursor<&[u8]>) -> Result<Self> {
+        let count = VarInt::read(data)?.0;
+        if count <= 0 {
+            return Ok(Self::empty());
+        }
+
+        let item_id = VarInt::read(data)?.0 as usize;
+        let item = REGISTRY.items.by_id(item_id).unwrap_or(&ITEMS.air);
+        let patch = DataComponentPatch::read_delimited(data)?;
 
         Ok(Self { item, count, patch })
     }
