@@ -25,7 +25,8 @@ pub const PLAYER_DATA_VERSION: i32 = 1;
 ///
 /// # TODO: Missing vanilla fields
 /// The following fields should be added once their systems are implemented:
-/// - Experience: `XpP` (progress), `XpLevel`, `XpTotal`, `XpSeed`
+/// - Food data: `foodLevel`, `foodSaturationLevel`, `foodExhaustionLevel`, `foodTickTimer`
+/// - Experience: `XpSeed`
 /// - Active potion effects: `active_effects` (List)
 /// - Score: `Score` (Int)
 /// - Ender chest inventory: `EnderItems` (List)
@@ -109,9 +110,15 @@ pub struct PersistentPlayerData {
     /// NBT tag: `XpP` (Float)
     pub experience_progress: f32,
 
-    /// Total cumulative experience points
+    /// The checked value of the Score, cannot decrease below 0 (???)
+    /// TODO: what exactly is experienceTotal
     /// NBT tag: `XpTotal` (Int)
     pub experience_total: i32,
+
+    /// A non decreasing value of the experience orbs added (/xp add, picking up orbs and advancements)
+    /// this value can be negative by using (/xp add ... -x)
+    /// NBT tag: `Score` (Int)
+    pub score: i32,
 }
 
 /// Persistent abilities data.
@@ -171,9 +178,14 @@ impl PersistentPlayerData {
             }
         }
 
-        let (experience_level, experience_progress, experience_total) = {
+        let (experience_level, experience_progress, experience_total, score) = {
             let lock = player.experience.lock();
-            (lock.level(), lock.progress() as f32, lock.total_points())
+            (
+                lock.level(),
+                lock.progress() as f32,
+                lock.total_points(),
+                lock.score,
+            )
         };
 
         Self {
@@ -205,6 +217,7 @@ impl PersistentPlayerData {
             experience_level,
             experience_progress,
             experience_total,
+            score,
         }
     }
 
@@ -273,6 +286,7 @@ impl PersistentPlayerData {
         compound.insert("XpLevel", self.experience_level);
         compound.insert("XpP", self.experience_progress);
         compound.insert("XpTotal", self.experience_total);
+        compound.insert("Score", self.score);
 
         compound
     }
@@ -356,6 +370,7 @@ impl PersistentPlayerData {
         let experience_level = nbt.int("XpLevel").unwrap_or(0);
         let experience_progress = nbt.float("XpP").unwrap_or(0.0);
         let experience_total = nbt.int("XpTotal").unwrap_or(0);
+        let score = nbt.int("Score").unwrap_or(0);
 
         Some(Self {
             pos,
@@ -378,6 +393,7 @@ impl PersistentPlayerData {
             experience_level,
             experience_progress,
             experience_total,
+            score,
         })
     }
 }
@@ -522,7 +538,9 @@ impl PersistentPlayerData {
 
         {
             let mut experience = player.experience.lock();
-            experience.set_total_points(self.experience_total);
+            experience.set_levels(self.experience_level);
+            experience.set_progress(f64::from(self.experience_progress));
+            experience.score = self.score;
         }
     }
 }

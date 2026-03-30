@@ -2902,6 +2902,19 @@ impl Player {
             living_base.dead = true;
         }
 
+        {
+            let mut experience = self.experience.lock();
+
+            experience.sync_score(&mut self.entity_data.lock());
+            experience.score = 0;
+        }
+
+        self.sync_entity_data();
+
+        // NOTE: Vanilla `ServerPlayer.die()` does NOT set Pose::Dying — only
+        // `LivingEntity.die()` does (which ServerPlayer never calls via super).
+        // The death screen covers the player model, so the pose is irrelevant.
+
         // Broadcast entity event 3 (death sound) to all nearby players.
         let chunk_pos = *self.last_chunk_pos.lock();
         self.world.broadcast_to_nearby(
