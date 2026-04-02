@@ -55,12 +55,12 @@ use std::{
 use steel_protocol::packet_traits::{ClientPacket, EncodedPacket};
 use steel_protocol::packets::game::CSystemChatMessage;
 use steel_protocol::packets::game::{
-    AnimateAction, AttributeModifierData, AttributeModifierOperation, AttributeSnapshot,
-    CAddEntity, CAnimate, CChangeDifficulty, CDamageEvent, CEntityEvent, CEntityPositionSync,
-    CHurtAnimation, COpenSignEditor, CPlayerCombatKill, CPlayerPosition, CRemoveEntities, CRespawn,
-    CSetEntityData, CSetHealth, CSetHeldSlot, CSetTime, CUpdateAttributes, ClientCommandAction,
-    PlayerAction, PlayerCommandAction, SAcceptTeleportation, SPickItemFromBlock, SPlayerAbilities,
-    SPlayerAction, SPlayerCommand, SSetCarriedItem, SUseItem, SUseItemOn,
+    AnimateAction, CAddEntity, CAnimate, CChangeDifficulty, CDamageEvent, CEntityEvent,
+    CEntityPositionSync, CHurtAnimation, COpenSignEditor, CPlayerCombatKill, CPlayerPosition,
+    CRemoveEntities, CRespawn, CSetEntityData, CSetHealth, CSetHeldSlot, CSetTime,
+    CUpdateAttributes, ClientCommandAction, PlayerAction, PlayerCommandAction,
+    SAcceptTeleportation, SPickItemFromBlock, SPlayerAbilities, SPlayerAction, SPlayerCommand,
+    SSetCarriedItem, SUseItem, SUseItemOn,
 };
 use steel_protocol::utils::ConnectionProtocol;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
@@ -68,13 +68,13 @@ use steel_registry::blocks::shapes::AABBd;
 use steel_registry::entity_data::EntityPose;
 use steel_registry::entity_types::EntityTypeRef;
 use steel_registry::game_rules::GameRuleValue;
-use steel_registry::vanilla_entities;
 use steel_registry::vanilla_entity_data::PlayerEntityData;
 use steel_registry::vanilla_game_rules::{
     ADVANCE_TIME, ELYTRA_MOVEMENT_CHECK, IMMEDIATE_RESPAWN, KEEP_INVENTORY,
     NATURAL_HEALTH_REGENERATION, PLAYER_MOVEMENT_CHECK, SHOW_DEATH_MESSAGES,
 };
 use steel_registry::{RegistryEntry, vanilla_chat_types};
+use steel_registry::{vanilla_attributes, vanilla_entities};
 use steel_utils::entity_events::EntityStatus;
 
 use steel_utils::Identifier;
@@ -90,6 +90,7 @@ use text_components::{
 };
 use uuid::Uuid;
 
+use crate::entity::attribute::{AttributeMap, AttributeModifier, AttributeModifierOperation};
 use crate::entity::{
     DEATH_DURATION, Entity, EntityLevelCallback, LivingEntityBase, NullEntityCallback,
     RemovalReason,
@@ -138,14 +139,7 @@ bitflags! {
     }
 }
 
-/// Vanilla sprint speed modifier.
 const SPRINT_SPEED_MODIFIER_AMOUNT: f64 = 0.3;
-
-/// Vanilla base movement speed
-const BASE_MOVEMENT_SPEED: f64 = 0.100_000_001_490_116_12;
-
-/// Vanilla attribute registry ID
-const ATTRIBUTE_MOVEMENT_SPEED_ID: i32 = 22;
 
 use crate::inventory::{
     MenuInstance, MenuProvider,
@@ -251,6 +245,9 @@ pub struct Player {
 
     /// The player's movement speed.
     speed: AtomicCell<f32>,
+
+    /// Entity attribute map (movement speed, max health, gravity, etc.).
+    attributes: SyncMutex<AttributeMap>,
 
     /// The last chunk position of the player.
     pub last_chunk_pos: SyncMutex<ChunkPos>,
@@ -367,6 +364,14 @@ impl Player {
 
         let pos = DVec3::new(0.0, 0.0, 0.0);
 
+        let attributes = AttributeMap::new_for_entity(vanilla_entities::PLAYER);
+        let max_health = attributes
+            .get_value(vanilla_attributes::MAX_HEALTH)
+            .unwrap_or(20.0) as f32;
+        let speed = attributes
+            .get_value(vanilla_attributes::MOVEMENT_SPEED)
+            .unwrap_or(0.1) as f32;
+
         Self {
             gameprofile,
             connection,
@@ -380,10 +385,11 @@ impl Player {
             movement: SyncMutex::new(MovementState::new()),
             entity_data: SyncMutex::new({
                 let mut data = PlayerEntityData::new();
-                data.health.set(20.0);
+                data.health.set(max_health);
                 data
             }),
-            speed: AtomicCell::new(0.1), // Default walking speed
+            speed: AtomicCell::new(speed),
+            attributes: SyncMutex::new(attributes),
             last_chunk_pos: SyncMutex::new(ChunkPos::new(0, 0)),
             last_tracking_view: SyncMutex::new(None),
             chunk_sender: SyncMutex::new(ChunkSender::default()),
@@ -504,11 +510,24 @@ impl Player {
             // - Managing game mode specific logic
             // - Updating advancements
             // - Handling falling
-            // - Vanilla Player.aiStep() calls self.setSpeed(getAttributeValue(MOVEMENT_SPEED))
-            //   every tick to refresh speed from the attribute system. Add when attribute
-            //   system is implemented.
+
+            // aiStep in vanilla
+            if let Some(speed) = self
+                .attributes
+                .lock()
+                .get_value(vanilla_attributes::MOVEMENT_SPEED)
+            {
+                self.speed.store(speed as f32);
+            }
+
             self.tick_regeneration();
+
+            if self.is_sprinting() && !self.food_data.lock().has_enough_food() {
+                self.set_sprinting(false);
+            }
         }
+
+        self.refresh_dirty_attributes();
 
         self.broadcast_inventory_changes();
         self.update_pose();
@@ -545,6 +564,15 @@ impl Player {
                     total_experience: experience.total_points(),
                 });
                 experience.dirty = false;
+            }
+        }
+
+        {
+            let snapshots = self.attributes.lock().drain_dirty_sync();
+            if !snapshots.is_empty() {
+                let packet = CUpdateAttributes::new(self.id, snapshots);
+                let chunk_pos = *self.last_chunk_pos.lock();
+                self.world.broadcast_to_nearby(chunk_pos, packet, None);
             }
         }
 
@@ -1060,7 +1088,7 @@ impl Player {
                     }
                 }
 
-                if packet.on_ground && self.is_sprinting() {
+                if self.is_sprinting() {
                     let dx = validation.move_delta.x;
                     let dz = validation.move_delta.z;
                     let horizontal_dist_sq = dx * dx + dz * dz;
@@ -1386,8 +1414,8 @@ impl Player {
     /// Sends the current world difficulty to the client.
     pub fn send_difficulty(&self) {
         let level_data = self.world.level_data.read();
-        let difficulty = level_data.difficulty;
-        let locked = level_data.difficulty_locked;
+        let difficulty = level_data.data().difficulty;
+        let locked = level_data.data().difficulty_locked;
         drop(level_data);
         self.send_packet(CChangeDifficulty { difficulty, locked });
     }
@@ -1396,9 +1424,9 @@ impl Player {
     pub fn handle_change_difficulty(&self, difficulty: Difficulty) {
         // TODO: implement op-level permission check
         let mut level_data = self.world.level_data.write();
-        if level_data.difficulty_locked {
+        if level_data.data().difficulty_locked {
             let locked = true;
-            let current = level_data.difficulty;
+            let current = level_data.data().difficulty;
             drop(level_data);
             self.send_packet(CChangeDifficulty {
                 difficulty: current,
@@ -1408,7 +1436,7 @@ impl Player {
         }
 
         level_data.data_mut().difficulty = difficulty;
-        let locked = level_data.difficulty_locked;
+        let locked = level_data.data().difficulty_locked;
         drop(level_data);
 
         let packet = CChangeDifficulty { difficulty, locked };
@@ -1417,7 +1445,7 @@ impl Player {
 
     /// Ticks food/hunger regeneration and starvation.
     fn tick_regeneration(&self) {
-        let difficulty = self.world.level_data.read().difficulty;
+        let difficulty = self.world.level_data.read().data().difficulty;
         let natural_regen =
             self.world.get_game_rule(NATURAL_HEALTH_REGENERATION) == GameRuleValue::Bool(true);
         let tick = self.tick_count.load(Ordering::Relaxed);
@@ -1481,13 +1509,13 @@ impl Player {
     }
 
     /// If the player's health is at or below zero (e.g. they disconnected while dead),
-    /// resets health to 20.0 so they don't enter a zombie state on rejoin.
+    /// resets health to max so they don't enter a zombie state on rejoin.
     /// Returns `true` if health was reset.
     pub fn reset_health_if_dead(&self) -> bool {
         let mut entity_data = self.entity_data.lock();
         let health = *entity_data.health.get();
         if health <= 0.0 {
-            entity_data.health.set(20.0);
+            entity_data.health.set(self.get_max_health());
             drop(entity_data);
 
             let mut living_base = self.living_base.lock();
@@ -1880,10 +1908,11 @@ impl Player {
     ///
     /// Matches vanilla `LivingEntity.getGravity()` which reads from `Attributes.GRAVITY`.
     /// Default is 0.08 blocks/tick².
-    const fn get_gravity(&self) -> f64 {
-        // TODO: Read from attribute system when implemented
-        let _ = self; // Silence unused warning until attributes are implemented
-        movement::DEFAULT_GRAVITY
+    fn get_gravity(&self) -> f64 {
+        self.attributes
+            .lock()
+            .get_value(vanilla_attributes::GRAVITY)
+            .unwrap_or(0.08)
     }
 
     /// Applies gravity to the player's velocity.
@@ -2011,7 +2040,10 @@ impl Player {
 
     /// Handles a player command packet (sprinting, elytra, leaving bed, etc).
     // this is just temporary there because the logic is not yet implemented complete for the other branches
-    #[expect(clippy::match_same_arms, reason = "arms are still todos")]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "There is still a TODO there, this will eventually go away by itself."
+    )]
     pub fn handle_player_command(&self, packet: SPlayerCommand) {
         if !self.client_loaded.load(Ordering::Relaxed) {
             return;
@@ -2086,41 +2118,27 @@ impl Player {
         // Shared flags are updated once per tick in tick() → update_shared_flags().
     }
 
-    /// Applies or removes the sprint speed modifier and broadcasts the attribute
-    /// change to nearby players via `CUpdateAttributes`.
+    /// Adds or removes the sprint speed modifier on `MOVEMENT_SPEED`.
     ///
-    /// Matches vanilla `LivingEntity.setSprinting()` which adds/removes the
-    /// `SPEED_MODIFIER_SPRINTING` attribute modifier (+30% `ADD_MULTIPLIED_TOTAL`).
+    /// Vanilla: `LivingEntity.setSprinting()` — `SPEED_MODIFIER_SPRINTING`.
     fn apply_sprint_speed_modifier(&self, sprinting: bool) {
-        // Compute effective speed server-side.
-        // Vanilla: base * (1 + modifier_sum) for ADD_MULTIPLIED_TOTAL
-        let effective_speed = if sprinting {
-            BASE_MOVEMENT_SPEED * (1.0 + SPRINT_SPEED_MODIFIER_AMOUNT)
+        let mut attrs = self.attributes.lock();
+        if sprinting {
+            attrs.add_modifier(
+                vanilla_attributes::MOVEMENT_SPEED,
+                AttributeModifier {
+                    id: Identifier::vanilla_static("sprinting"),
+                    amount: SPRINT_SPEED_MODIFIER_AMOUNT,
+                    operation: AttributeModifierOperation::AddMultipliedTotal,
+                },
+                false,
+            );
         } else {
-            BASE_MOVEMENT_SPEED
-        };
-        self.speed.store(effective_speed as f32);
-
-        // Build the attribute snapshot with or without the sprint modifier.
-        let modifiers = if sprinting {
-            vec![AttributeModifierData {
-                id: Identifier::vanilla_static("sprinting"),
-                amount: SPRINT_SPEED_MODIFIER_AMOUNT,
-                operation: AttributeModifierOperation::AddMultipliedTotal,
-            }]
-        } else {
-            Vec::new()
-        };
-
-        let snapshot = AttributeSnapshot {
-            attribute_id: ATTRIBUTE_MOVEMENT_SPEED_ID,
-            base_value: BASE_MOVEMENT_SPEED,
-            modifiers,
-        };
-
-        let packet = CUpdateAttributes::new(self.id, vec![snapshot]);
-        let chunk_pos = *self.last_chunk_pos.lock();
-        self.world.broadcast_to_nearby(chunk_pos, packet, None);
+            attrs.remove_modifier(
+                vanilla_attributes::MOVEMENT_SPEED,
+                &Identifier::vanilla_static("sprinting"),
+            );
+        }
     }
 
     /// Handles the use of an item on a block.
@@ -2785,7 +2803,7 @@ impl Player {
         // TODO: well so basically this isn't done in hurt but rather on the ATTACKER side (so Mob.doHurtTarget)
         let mut amount = amount;
         if source.scales_with_difficulty() {
-            let difficulty = self.world.level_data.read().difficulty;
+            let difficulty = self.world.level_data.read().data().difficulty;
             match difficulty {
                 Difficulty::Peaceful => {
                     amount = 0.0;
@@ -3028,12 +3046,15 @@ impl Player {
 
         {
             let mut entity_data = self.entity_data.lock();
-            entity_data.health.set(20.0);
+            entity_data.health.set(self.get_max_health());
             entity_data.pose.set(EntityPose::Standing);
         }
 
         // Reset food data to defaults
         *self.food_data.lock() = FoodData::new();
+
+        // Clear transient attribute modifiers (sprint, potion effects, etc.)
+        self.attributes.lock().remove_all_transient();
 
         self.health_sync.lock().reset_for_respawn();
 
@@ -3294,6 +3315,10 @@ impl Entity for Player {
 }
 
 impl LivingEntity for Player {
+    fn attributes(&self) -> &SyncMutex<AttributeMap> {
+        &self.attributes
+    }
+
     fn get_health(&self) -> f32 {
         *self.entity_data.lock().health.get()
     }
@@ -3302,11 +3327,6 @@ impl LivingEntity for Player {
         let max_health = self.get_max_health();
         let clamped = health.clamp(0.0, max_health);
         self.entity_data.lock().health.set(clamped);
-    }
-
-    fn get_max_health(&self) -> f32 {
-        // TODO: Get from attributes system when implemented
-        20.0
     }
 
     fn living_base(&self) -> &SyncMutex<LivingEntityBase> {
@@ -3322,13 +3342,6 @@ impl LivingEntity for Player {
             .lock()
             .player_absorption
             .set(amount.max(0.0));
-        // Dirty flag set automatically, will sync on next tick
-    }
-
-    fn get_armor_value(&self) -> i32 {
-        // TODO: Calculate from equipped items when data components are implemented
-        // Will iterate over ARMOR_SLOTS and sum armor values from each piece
-        0
     }
 
     fn is_sprinting(&self) -> bool {

@@ -25,7 +25,6 @@ pub const PLAYER_DATA_VERSION: i32 = 1;
 ///
 /// # TODO: Missing vanilla fields
 /// The following fields should be added once their systems are implemented:
-/// - Food data: `foodLevel`, `foodSaturationLevel`, `foodExhaustionLevel`, `foodTickTimer`
 /// - Experience: `XpSeed`
 /// - Active potion effects: `active_effects` (List)
 /// - Score: `Score` (Int)

@@ -1,5 +1,6 @@
 use std::{env, fs, path::Path, process::Command};
 
+mod attributes;
 mod banner_patterns;
 mod biomes;
 mod block_entity_types;
@@ -65,6 +66,7 @@ mod tag_utils;
 
 const FMT: bool = cfg!(feature = "fmt");
 
+const ATTRIBUTES: &str = "attributes";
 const BLOCKS: &str = "blocks";
 const BLOCK_TAGS: &str = "block_tags";
 const ITEMS: &str = "items";
@@ -136,6 +138,7 @@ pub fn main() {
     }
 
     let vanilla_builds = [
+        (attributes::build(), ATTRIBUTES),
         (blocks::build(), BLOCKS),
         (block_tags::build(), BLOCK_TAGS),
         (items::build(), ITEMS),

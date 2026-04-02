@@ -31,7 +31,7 @@ pub mod food_constants {
     /// Minimum food level required for slow natural regeneration
     pub const HEAL_LEVEL: i32 = 18;
 
-    /// Food level at or above which the player can sprint
+    /// Sprint threshold — player can sprint when food level is above this value
     pub const SPRINT_LEVEL: i32 = 6;
 
     /// Poor saturation modifier

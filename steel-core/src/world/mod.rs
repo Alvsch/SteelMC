@@ -369,7 +369,10 @@ impl World {
         rule: GameRuleRef,
         guard: &LevelDataManager,
     ) -> GameRuleValue {
-        guard.game_rules_values.get(rule, &REGISTRY.game_rules)
+        guard
+            .data()
+            .game_rules_values
+            .get(rule, &REGISTRY.game_rules)
     }
 
     /// Sets the value of a game rule.
@@ -394,6 +397,12 @@ impl World {
             .set(rule, value, &REGISTRY.game_rules)
     }
 
+    /// Gets the world seed.
+    #[must_use]
+    pub fn seed(&self) -> i64 {
+        self.level_data.read().data().seed
+    }
+
     /// Gets the obfuscated seed for sending to clients.
     ///
     /// This uses SHA-256 hashing to prevent clients from easily extracting
@@ -404,7 +413,7 @@ impl World {
         reason = "panic is unreachable: SHA-256 always produces 32 bytes"
     )]
     pub fn obfuscated_seed(&self) -> i64 {
-        let seed = self.level_data.read().seed;
+        let seed = self.seed();
         let mut hasher = Sha256::new();
         hasher.update(seed.to_be_bytes());
         let result = hasher.finalize();

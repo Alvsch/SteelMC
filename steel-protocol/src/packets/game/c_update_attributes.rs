@@ -25,6 +25,10 @@ pub struct AttributeModifierData {
 #[derive(WriteTo, Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 #[write(as = VarInt)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "Since it matches vanilla `AttributeModifier.Operation` and explains what it does i guess"
+)]
 pub enum AttributeModifierOperation {
     AddValue = 0,
     AddMultipliedBase = 1,

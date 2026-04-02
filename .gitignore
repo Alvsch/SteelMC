@@ -20,7 +20,9 @@ profile.json.gz
 *.gz
 *.class
 
+# ICE crash reports
+rustc-ice-*
+
 # IDE
 .vscode/settings.json
 .idea
-
