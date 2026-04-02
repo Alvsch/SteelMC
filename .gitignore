@@ -26,3 +26,6 @@ rustc-ice-*
 # IDE
 .vscode/settings.json
 .idea
+
+.DS_STORE
+rustc-ice-*.txt
