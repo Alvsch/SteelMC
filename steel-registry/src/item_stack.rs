@@ -9,6 +9,7 @@ use steel_utils::{
     codec::VarInt,
     serial::{ReadFrom, WriteTo},
 };
+use text_components::TextComponent;
 
 use crate::{
     REGISTRY, RegistryEntry, RegistryExt,
@@ -16,8 +17,8 @@ use crate::{
         Component, ComponentData, ComponentPatchEntry, DataComponentMap, DataComponentPatch,
         DataComponentType,
         vanilla_components::{
-            DAMAGE, ENCHANTMENTS, EQUIPPABLE, Equippable, EquippableSlot, ItemEnchantments,
-            MAX_DAMAGE, MAX_STACK_SIZE, TOOL, Tool, UNBREAKABLE,
+            CUSTOM_NAME, DAMAGE, ENCHANTMENTS, EQUIPPABLE, Equippable, EquippableSlot, ITEM_NAME,
+            ItemEnchantments, MAX_DAMAGE, MAX_STACK_SIZE, REPAIRABLE, TOOL, Tool, UNBREAKABLE,
         },
     },
     items::ItemRef,
@@ -530,7 +531,11 @@ impl ItemStack {
         // Pick a random instrument from the tag and set INSTRUMENT component
     }
 
-    pub fn set_enchantments(&mut self, enchantments: &[(Identifier, u32)], add: bool) {
+    pub fn set_enchantments<'a>(
+        &mut self,
+        enchantments: impl IntoIterator<Item = (&'a Identifier, &'a u32)>,
+        add: bool,
+    ) {
         let mut current = self
             .get(ENCHANTMENTS)
             .cloned()
@@ -753,7 +758,35 @@ impl ItemStack {
 
         true
     }
+
+    /// Returns the custom name that is stored in the Data Components
+    /// In case of a written book the title is returned
+    pub fn custom_name(&self) -> Option<&TextComponent> {
+        self.get(CUSTOM_NAME)
+        // TODO: WRITTEN_BOOK_CONTENT and titles
+        // let Some(book_content) = self.get(WRITTEN_BOOK_CONTENT) else {
+        //   return None;
+        //;
+    }
+
+    pub fn hover_name(&self) -> &TextComponent {
+        if let Some(custom_name) = self.custom_name() {
+            custom_name
+        } else {
+            self.get(ITEM_NAME).unwrap_or(&EMPTY)
+        }
+    }
+
+    pub fn is_valid_repair_item(&self, item: ItemRef) -> bool {
+        let Some(repairable) = self.get(REPAIRABLE) else {
+            return false;
+        };
+
+        repairable.is_valid_repair_item(item)
+    }
 }
+
+static EMPTY: TextComponent = TextComponent::new();
 
 /// Vanilla unbreaking formula: `1 / (unbreaking_level + 1)` chance to consume durability.
 fn should_consume_durability(unbreaking_level: i32) -> bool {

@@ -3,6 +3,8 @@
 //! This module provides the core types for storing component values in an ABI-stable way.
 //! Vanilla components get dedicated enum variants for zero-cost access, while plugin
 //! components use the `Other` variant with opaque bytes.
+use crate::data_components::Repairable;
+
 use super::components::{Equippable, ItemEnchantments, Tool};
 use text_components::TextComponent;
 
@@ -19,6 +21,7 @@ pub enum ComponentDataDiscriminant {
     Tool,
     Equippable,
     Enchantments,
+    Repairable,
     TextComponent,
     Todo,
     Other,
@@ -72,6 +75,8 @@ pub enum ComponentData {
     Equippable(Equippable),
     /// minecraft:enchantments / minecraft:stored_enchantments
     Enchantments(ItemEnchantments),
+    /// minecraft:repairable
+    Repairable(Repairable),
     /// TextComponent component (e.g., CustomName, ItemName)
     TextComponent(Box<TextComponent>),
 
@@ -113,6 +118,7 @@ impl ComponentData {
             Self::Tool(_) => ComponentDataDiscriminant::Tool,
             Self::Equippable(_) => ComponentDataDiscriminant::Equippable,
             Self::Enchantments(_) => ComponentDataDiscriminant::Enchantments,
+            Self::Repairable(_) => ComponentDataDiscriminant::Repairable,
             Self::TextComponent(_) => ComponentDataDiscriminant::TextComponent,
             Self::Todo => ComponentDataDiscriminant::Todo,
             Self::Other(_) => ComponentDataDiscriminant::Other,
@@ -139,6 +145,7 @@ impl ComponentData {
             Self::Tool(v) => v.hash_component(&mut hasher),
             Self::Equippable(v) => v.hash_component(&mut hasher),
             Self::Enchantments(v) => v.hash_component(&mut hasher),
+            Self::Repairable(v) => v.hash_component(&mut hasher),
             Self::TextComponent(v) => v.hash_component(&mut hasher),
 
             // Stub/plugin types - hash as empty map for now

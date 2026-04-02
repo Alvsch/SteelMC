@@ -10,7 +10,9 @@ use super::registry::DataComponentRegistry;
 pub use super::registry::DataComponentType;
 
 // Re-export component types for convenience
-pub use super::components::{Equippable, EquippableSlot, ItemEnchantments, Tool, ToolRule};
+pub use super::components::{
+    Equippable, EquippableSlot, ItemEnchantments, Repairable, Tool, ToolRule,
+};
 
 // ==================== Fully Implemented Components ====================
 
@@ -127,7 +129,7 @@ pub const ATTACK_RANGE: DataComponentType<()> =
 pub const ENCHANTABLE: DataComponentType<()> =
     DataComponentType::new(Identifier::vanilla_static("enchantable"));
 
-pub const REPAIRABLE: DataComponentType<()> =
+pub const REPAIRABLE: DataComponentType<Repairable> =
     DataComponentType::new(Identifier::vanilla_static("repairable"));
 
 pub const DEATH_PROTECTION: DataComponentType<()> =

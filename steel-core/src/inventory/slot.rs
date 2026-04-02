@@ -788,7 +788,7 @@ impl Slot for AnvilResultSlot {
     }
 
     /// Result slots don't allow partial removal.
-    fn allow_modification(&self, _guard: &ContainerLockGuard, player: &Player) -> bool {
+    fn allow_modification(&self, _guard: &ContainerLockGuard, _player: &Player) -> bool {
         false
     }
 

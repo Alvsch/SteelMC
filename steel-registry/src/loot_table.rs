@@ -1715,7 +1715,7 @@ impl LootFunction {
                 item.set_instrument(options, ctx.rng);
             }
             LootFunction::SetEnchantments { enchantments, add } => {
-                let resolved: Vec<_> = enchantments
+                let resolved: FxHashMap<Identifier, u32> = enchantments
                     .iter()
                     .map(|(key, provider)| (key.clone(), provider.get_int(ctx.rng).max(0) as u32))
                     .collect();

@@ -9,7 +9,11 @@ use std::{
 
 use steel_registry::{
     REGISTRY, RegistryExt,
-    data_components::vanilla_components::{ENCHANTMENTS, REPAIR_COST, STORED_ENCHANTMENTS},
+    data_components::{
+        components::ItemEnchantments,
+        vanilla_components::{CUSTOM_NAME, ENCHANTMENTS, REPAIR_COST, STORED_ENCHANTMENTS},
+    },
+    enchantment::Enchantment,
     item_stack::ItemStack,
     menu_type::MenuTypeRef,
     vanilla_items, vanilla_menu_types,
@@ -67,6 +71,7 @@ pub struct AnvilMenu {
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
     repair_durability_cost: AtomicI32,
+    item_name: SyncMutex<Option<TextComponent>>,
 }
 
 impl AnvilMenu {
@@ -100,6 +105,7 @@ impl AnvilMenu {
             result_container,
             block_pos: pos,
             repair_durability_cost: AtomicI32::new(0),
+            item_name: SyncMutex::new(None),
         }
     }
 
@@ -110,8 +116,8 @@ impl AnvilMenu {
             .get_disjoint_mut([0, 1])
             .expect("failed to get");
 
-        let mut additional_cost = 0i32;
-        let mut rename_cost = 0i32;
+        let mut additional_cost = 0_u32;
+        let mut rename_cost = 0_i32;
         self.behavior.set_data(0, 1);
 
         if first.is_empty() || !Self::can_store_enchantments(first) {
@@ -124,14 +130,13 @@ impl AnvilMenu {
 
         let mut result = first.clone();
         let mut enchantments = first.get_enchantments().cloned().unwrap_or_default();
-        let prior_repair_cost: i64 = *first.get(REPAIR_COST).unwrap_or(&0) as i64
-            + *second.get(REPAIR_COST).unwrap_or(&0) as i64;
+        let prior_repair_cost: i64 = i64::from(*first.get(REPAIR_COST).unwrap_or(&0))
+            + i64::from(*second.get(REPAIR_COST).unwrap_or(&0));
 
         if !second.is_empty() {
             let has_stored_enchantments = second.has(STORED_ENCHANTMENTS);
 
-            if result.is_damageable_item() {
-                // && first.is_valid_repair_item(second) {
+            if result.is_damageable_item() && first.is_valid_repair_item(second.item) {
                 let mut repair_per_unit =
                     result.get_damage_value().min(result.get_max_damage() / 4);
                 if repair_per_unit <= 0 {
@@ -175,13 +180,14 @@ impl AnvilMenu {
                 }
 
                 // Enchantment merging
-                let sacrifice_enchantments = second.get_enchantments().cloned().unwrap_or_default();
+                let sacrifice_enchantments: ItemEnchantments =
+                    second.get_enchantments().cloned().unwrap_or_default();
                 let mut any_compatible = false;
                 let mut any_incompatible = false;
 
-                for (ident, &level) in sacrifice_enchantments.iter() {
-                    let existing_level = enchantments.get_level(ident);
-                    let mut merged_level = if existing_level == level {
+                for (ident, level) in sacrifice_enchantments {
+                    let existing_level = enchantments.get_level(&ident);
+                    let mut merged_level: u32 = if existing_level == level {
                         level + 1
                     } else {
                         existing_level.max(level)
@@ -189,77 +195,83 @@ impl AnvilMenu {
 
                     let enchantment = REGISTRY
                         .enchantments
-                        .by_key(ident)
+                        .by_key(&ident)
                         .expect("should exist because we got it from item enchantments");
-                    //     let mut can_apply = enchantment.slots
-                    //         || first.is(&vanilla_items::ITEMS.enchanted_book)
-                    //         || player.has_infinite_materials();
+                    let mut can_apply = enchantment.can_enchant(first.item)
+                        || first.is(&vanilla_items::ITEMS.enchanted_book)
+                        || player.has_infinite_materials();
 
-                    //     for existing_holder in enchantments.keys() {
-                    //         if existing_holder != enchantment
-                    //             && !Enchantment::are_compatible(holder, existing_holder)
-                    //         {
-                    //             can_apply = false;
-                    //             additional_cost += 1;
-                    //         }
-                    //     }
+                    for (existing_key, _) in first
+                        .get_enchantments()
+                        .unwrap_or(&ItemEnchantments::empty())
+                        .iter()
+                    {
+                        if *existing_key == enchantment.key {
+                            continue;
+                        }
+                        let Some(existing) = REGISTRY.enchantments.by_key(existing_key) else {
+                            continue;
+                        };
+                        if !Enchantment::are_compatible(enchantment, existing) {
+                            can_apply = false;
+                            additional_cost += 1;
+                        }
+                    }
 
-                    //     if !can_apply {
-                    //         any_incompatible = true;
-                    //     } else {
-                    //         any_compatible = true;
-                    //         merged_level = merged_level.min(enchantment.get_max_level());
-                    //         enchantments.set(holder, merged_level);
+                    if can_apply {
+                        any_compatible = true;
+                        merged_level = merged_level.min(enchantment.max_level);
+                        enchantments.set(ident, merged_level);
 
-                    //         let mut anvil_cost = enchantment.get_anvil_cost();
-                    //         if has_stored_enchantments {
-                    //             anvil_cost = (anvil_cost / 2).max(1);
-                    //         }
-                    //         additional_cost += anvil_cost * merged_level;
+                        let mut anvil_cost: i32 = enchantment.anvil_cost;
+                        if has_stored_enchantments {
+                            anvil_cost = (anvil_cost / 2).max(1);
+                        }
+                        additional_cost += anvil_cost as u32 * merged_level;
 
-                    //         if first.count > 1 {
-                    //             additional_cost = 40;
-                    //         }
-                    //     }
+                        if first.count > 1 {
+                            additional_cost = 40;
+                        }
+                    } else {
+                        any_incompatible = true;
+                    }
                 }
 
-                // if any_incompatible && !any_compatible {
-                //     self.result_container.lock().set_item(0, ItemStack::empty());
-                //     self.behavior.set_data(0, 0);
-                //     return;
-                // }
+                if any_incompatible && !any_compatible {
+                    self.result_container.lock().set_item(0, ItemStack::empty());
+                    self.behavior.set_data(0, 0);
+                    return;
+                }
             }
         }
 
         // TODO: missing packet implementation
         //// --- Renaming ---
-        //if let Some(name) = &self.item_name {
-        //    if !name.is_empty() {
-        //        if name != &first.get_hover_name() {
-        //            rename_cost = 1;
-        //            additional_cost += rename_cost;
-        //            result.set(CUSTOM_NAME, TextComponent::from(name.clone()));
-        //        }
-        //    }
-        //} else if first.has(CUSTOM_NAME) {
-        //    rename_cost = 1;
-        //    additional_cost += rename_cost;
-        //    result.remove(CUSTOM_NAME);
-        //}
+        if let Some(name) = self.item_name.lock().as_ref() {
+            if name != first.hover_name() {
+                rename_cost = 1;
+                additional_cost += rename_cost as u32;
+                result.set(CUSTOM_NAME, name.clone());
+            }
+        } else if first.has(CUSTOM_NAME) {
+            rename_cost = 1;
+            additional_cost += rename_cost as u32;
+            result.remove(CUSTOM_NAME);
+        }
 
         // --- Final cost calculation ---
-        let total_cost = if additional_cost <= 0 {
+        let total_cost = if additional_cost == 0 {
             0
         } else {
-            (prior_repair_cost + additional_cost as i64).clamp(0, i32::MAX as i64) as i32
+            (prior_repair_cost + i64::from(additional_cost)).clamp(0, i64::from(i32::MAX)) as i32
         };
         self.behavior.set_data(0, total_cost as i16);
 
-        if additional_cost <= 0 {
+        if additional_cost == 0 {
             result = ItemStack::empty();
         }
 
-        let only_renaming = rename_cost == additional_cost && rename_cost > 0;
+        let only_renaming = rename_cost == additional_cost as i32 && rename_cost > 0;
         if only_renaming && total_cost >= 40 {
             self.behavior.set_data(0, 39);
         }
@@ -275,11 +287,11 @@ impl AnvilMenu {
             if final_repair_cost < second_repair_cost {
                 final_repair_cost = second_repair_cost;
             }
-            if rename_cost != additional_cost || rename_cost == 0 {
+            if rename_cost != additional_cost as i32 || rename_cost == 0 {
                 final_repair_cost = Self::calculate_increased_repair_cost(final_repair_cost);
             }
             result.set(REPAIR_COST, final_repair_cost);
-            //EnchantmentHelper::set_enchantments(&mut result, enchantments.to_immutable());
+            result.set_enchantments(enchantments.iter(), false);
         }
 
         self.result_container.lock().set_item(0, result);
@@ -294,7 +306,7 @@ impl AnvilMenu {
         })
     }
 
-    fn calculate_increased_repair_cost(old_repair_cost: i32) -> i32 {
+    const fn calculate_increased_repair_cost(old_repair_cost: i32) -> i32 {
         old_repair_cost.saturating_mul(2).saturating_add(1)
     }
 }
