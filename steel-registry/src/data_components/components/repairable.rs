@@ -5,7 +5,7 @@ use simdnbt::{
 };
 use steel_utils::{
     Identifier,
-    hash::{ComponentHasher, HashComponent},
+    hash::{ComponentHasher, HashComponent, HashEntry},
 };
 
 use crate::{
@@ -16,17 +16,15 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Repairable {
-    Items { items: Vec<ItemRef> },
-    Tag { tag: String },
+    Item { item: ItemRef },
+    Tag { tag: Identifier },
 }
 
 impl Repairable {
-    pub fn is_valid_repair_item(&self, item: ItemRef) -> bool {
+    pub fn is_valid_repair_item(&self, item_ref: ItemRef) -> bool {
         match self {
-            Repairable::Items { items } => items.contains(&item),
-            Repairable::Tag { tag } => REGISTRY
-                .items
-                .is_in_tag(item, &tag.as_str().parse::<Identifier>().expect("this conversion should work, otherwise an invalid tag was put in and we should panic")),
+            Repairable::Item { item } => item == &item_ref,
+            Repairable::Tag { tag } => REGISTRY.items.is_in_tag(item_ref, tag),
         }
     }
 }
@@ -55,14 +53,8 @@ impl ToNbtTag for Repairable {
     fn to_nbt_tag(self) -> simdnbt::owned::NbtTag {
         let mut compound = NbtCompound::new();
         match self {
-            Repairable::Items { items } => {
-                compound.insert(
-                    "items",
-                    items
-                        .iter()
-                        .map(|it| it.key.to_string())
-                        .collect::<Vec<String>>(),
-                );
+            Repairable::Item { item } => {
+                compound.insert("items", item.key.to_string());
             }
             Repairable::Tag { tag } => {
                 compound.insert("items", tag);
@@ -77,25 +69,26 @@ impl FromNbtTag for Repairable {
     fn from_nbt_tag(tag: BorrowedNbtTag) -> Option<Self> {
         if let Some(compound) = tag.compound()
             && let Some(items_tag) = compound.get("items")
+            && let Some(item) = items_tag.string()
+            && !item.is_empty()
         {
-            if let Some(list) = items_tag.list()
-                && let Some(strings) = list.strings()
-                && !strings.is_empty()
-            {
-                return Some(Self::Items {
-                    items: strings
-                        .iter()
-                        .filter_map(|key| {
-                            REGISTRY.items.by_key(&Identifier::vanilla(key.to_string()))
-                        })
-                        .collect(),
-                });
-            } else if let Some(tag) = items_tag.string()
-                && !tag.is_empty()
-            {
-                return Some(Self::Tag {
-                    tag: tag.to_string(),
-                });
+            let item_str = item.to_str();
+            if item_str.starts_with("#") {
+                let ident = item_str.split_at(1).1.parse::<Identifier>().ok()?;
+
+                if REGISTRY
+                    .items
+                    .tag_keys()
+                    .find(|tag| *tag == &ident)
+                    .is_some()
+                {
+                    return Some(Self::Tag { tag: ident });
+                }
+                return None;
+            }
+            let ident = item_str.parse::<Identifier>().ok()?;
+            if let Some(item) = REGISTRY.items.by_key(&ident) {
+                return Some(Self::Item { item });
             }
         }
 
@@ -105,17 +98,55 @@ impl FromNbtTag for Repairable {
 
 impl HashComponent for Repairable {
     fn hash_component(&self, hasher: &mut ComponentHasher) {
-        match self {
-            Repairable::Items { items } => {
-                hasher.start_list();
+        hasher.start_map();
 
-                // TODO
+        let mut key_hasher = ComponentHasher::new();
+        key_hasher.put_string("items");
 
-                hasher.end_list();
-            }
-            Repairable::Tag { tag } => {
-                hasher.put_string(tag);
-            }
-        }
+        let mut value_hasher = ComponentHasher::new();
+        value_hasher.put_string(&match self {
+            Repairable::Item { item } => item.key.to_string(),
+            Repairable::Tag { tag } => format!("#{tag}"),
+        });
+
+        let entry = HashEntry::new(key_hasher, value_hasher);
+        hasher.put_raw_bytes(&entry.key_bytes);
+        hasher.put_raw_bytes(&entry.value_bytes);
+
+        hasher.end_map();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_utils::{Identifier, hash::HashComponent};
+
+    use crate::{RegistryExt, data_components::Repairable, items::ItemRegistry, vanilla_items};
+
+    fn create_test_registry() -> ItemRegistry {
+        let mut registry = ItemRegistry::new();
+        vanilla_items::register_items(&mut registry);
+        registry.freeze();
+        registry
+    }
+
+    #[test]
+    fn test_repairable_item() {
+        let repairable = Repairable::Item {
+            item: create_test_registry()
+                .by_key(&Identifier::vanilla_static("phantom_membrane"))
+                .unwrap(),
+        };
+        let hash = repairable.compute_hash();
+        assert_eq!(hash, 0x45fbfc46_u32 as i32, "should match vanilla client");
+    }
+
+    #[test]
+    fn test_repairable_tag() {
+        let repairable = Repairable::Tag {
+            tag: Identifier::vanilla_static("diamond_tool_materials"),
+        };
+        let hash = repairable.compute_hash();
+        assert_eq!(hash, 1788140035_u32 as i32, "should match vanilla client");
     }
 }
