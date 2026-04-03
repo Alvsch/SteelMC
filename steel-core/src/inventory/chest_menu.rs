@@ -5,7 +5,7 @@
 //! - Slots `rows * 9` to `rows * 9 + 26`: Main inventory (27 slots)
 //! - Slots `rows * 9 + 27` to `rows * 9 + 35`: Hotbar (9 slots)
 
-use std::mem;
+use std::{any::Any, mem};
 
 use steel_registry::item_stack::ItemStack;
 use steel_registry::menu_type::MenuTypeRef;
@@ -291,6 +291,14 @@ impl MenuInstance for ChestMenu {
 
     fn container_id(&self) -> u8 {
         self.behavior.container_id
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

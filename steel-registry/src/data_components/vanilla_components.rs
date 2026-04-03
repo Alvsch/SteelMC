@@ -58,6 +58,12 @@ pub const ENCHANTMENT_GLINT_OVERRIDE: DataComponentType<bool> =
 pub const POTION_DURATION_SCALE: DataComponentType<f32> =
     DataComponentType::new(Identifier::vanilla_static("potion_duration_scale"));
 
+pub const ENCHANTMENTS: DataComponentType<ItemEnchantments> =
+    DataComponentType::new(Identifier::vanilla_static("enchantments"));
+
+pub const REPAIRABLE: DataComponentType<Repairable> =
+    DataComponentType::new(Identifier::vanilla_static("repairable"));
+
 // ==================== Stub Component Keys ====================
 // These components are registered but use placeholder serialization.
 // They use the Todo ComponentData variant.
@@ -81,9 +87,6 @@ pub const LORE: DataComponentType<()> = DataComponentType::new(Identifier::vanil
 
 pub const RARITY: DataComponentType<()> =
     DataComponentType::new(Identifier::vanilla_static("rarity"));
-
-pub const ENCHANTMENTS: DataComponentType<ItemEnchantments> =
-    DataComponentType::new(Identifier::vanilla_static("enchantments"));
 
 pub const CAN_PLACE_ON: DataComponentType<()> =
     DataComponentType::new(Identifier::vanilla_static("can_place_on"));
@@ -128,9 +131,6 @@ pub const ATTACK_RANGE: DataComponentType<()> =
 
 pub const ENCHANTABLE: DataComponentType<()> =
     DataComponentType::new(Identifier::vanilla_static("enchantable"));
-
-pub const REPAIRABLE: DataComponentType<Repairable> =
-    DataComponentType::new(Identifier::vanilla_static("repairable"));
 
 pub const DEATH_PROTECTION: DataComponentType<()> =
     DataComponentType::new(Identifier::vanilla_static("death_protection"));

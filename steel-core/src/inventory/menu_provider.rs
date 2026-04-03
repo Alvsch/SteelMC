@@ -1,5 +1,7 @@
 //! Menu provider for opening menus.
 
+use std::any::Any;
+
 use steel_registry::menu_type::MenuTypeRef;
 use text_components::TextComponent;
 
@@ -15,6 +17,12 @@ pub trait MenuInstance: Menu + Send + Sync {
 
     /// Returns the container ID for this menu.
     fn container_id(&self) -> u8;
+
+    /// Returns a reference to the menu as `Any` for downcasting.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Returns a mutable reference to the menu as `Any` for downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 /// Trait for types that can create menus.

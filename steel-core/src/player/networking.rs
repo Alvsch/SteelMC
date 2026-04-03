@@ -16,12 +16,13 @@ use steel_protocol::packets::game::{
     SChatSessionUpdate, SChunkBatchReceived, SClientCommand, SClientTickEnd, SCommandSuggestion,
     SContainerButtonClick, SContainerClick, SContainerClose, SContainerSlotStateChanged,
     SMovePlayerPos, SMovePlayerPosRot, SMovePlayerRot, SMovePlayerStatusOnly, SPickItemFromBlock,
-    SPlayerAbilities, SPlayerAction, SPlayerInput, SPlayerLoad, SSetCarriedItem,
+    SPlayerAbilities, SPlayerAction, SPlayerInput, SPlayerLoad, SRenameItem, SSetCarriedItem,
     SSetCreativeModeSlot, SSignUpdate, SSwing, SUseItem, SUseItemOn,
 };
 
 use steel_protocol::utils::{ConnectionProtocol, PacketError, RawPacket};
 use steel_registry::packets::play;
+use steel_registry::vanilla_menu_types;
 use steel_utils::locks::{AsyncMutex, SyncMutex};
 use steel_utils::translations;
 use text_components::TextComponent;
@@ -35,6 +36,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
 use crate::command::sender::CommandSender;
+use crate::inventory::anvil_menu::AnvilMenu;
 use crate::player::Player;
 use crate::player::connection::NetworkConnection;
 use crate::server::Server;
@@ -285,6 +287,17 @@ impl JavaConnection {
                 player.client_loaded.store(true, Ordering::Relaxed);
                 // Send initial inventory to client
                 player.send_inventory_to_remote();
+            }
+            play::S_RENAME_ITEM => {
+                let packet: SRenameItem = SRenameItem::read_packet(data)?;
+                let mut lock = player.open_menu.lock();
+                if let Some(open_menu) = &mut *lock
+                    && open_menu.menu_type() == vanilla_menu_types::ANVIL
+                    && open_menu.still_valid()
+                    && let Some(anvil_menu) = open_menu.as_any_mut().downcast_mut::<AnvilMenu>()
+                {
+                    anvil_menu.set_item_name(packet.name, &player);
+                }
             }
             play::S_CHAT_COMMAND => {
                 server.command_dispatcher.read().handle_command(

@@ -1,5 +1,6 @@
 //! Anvil Menus
 use std::{
+    any::Any,
     mem,
     sync::{
         Arc,
@@ -71,7 +72,7 @@ pub struct AnvilMenu {
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
     repair_durability_cost: AtomicI32,
-    item_name: SyncMutex<Option<TextComponent>>,
+    item_name: SyncMutex<Option<String>>,
 }
 
 impl AnvilMenu {
@@ -109,7 +110,12 @@ impl AnvilMenu {
         }
     }
 
-    fn create_result(&mut self, player: &Player) {
+    /// Creates the resulting item from the combining and renaming of the two input items
+    ///
+    ///# Panics
+    /// if the input container doesnt have the shape 1x2
+    #[expect(clippy::too_many_lines, reason = "not my choice its so long .-.")]
+    pub fn create_result(&mut self, player: &Arc<Player>) {
         let mut input_container = self.input_container.lock();
         let [first, second] = input_container
             .items_mut()
@@ -248,10 +254,10 @@ impl AnvilMenu {
         // TODO: missing packet implementation
         //// --- Renaming ---
         if let Some(name) = self.item_name.lock().as_ref() {
-            if name != first.hover_name() {
+            if name != &first.hover_name().to_string() {
                 rename_cost = 1;
                 additional_cost += rename_cost as u32;
-                result.set(CUSTOM_NAME, name.clone());
+                result.set(CUSTOM_NAME, TextComponent::from(name.clone()));
             }
         } else if first.has(CUSTOM_NAME) {
             rename_cost = 1;
@@ -296,6 +302,40 @@ impl AnvilMenu {
 
         self.result_container.lock().set_item(0, result);
         self.behavior.broadcast_changes(&player.connection);
+    }
+
+    /// Sets the item name of the item
+    pub fn set_item_name(&mut self, name: String, player: &Arc<Player>) {
+        let Some(validated_name) = Self::validate_item_name(name) else {
+            return;
+        };
+
+        {
+            let mut guard = self.item_name.lock();
+            let Some(ref mut item_name) = *guard else {
+                return;
+            };
+            if validated_name == *item_name {
+                return;
+            }
+            let mut result_container = self.result_container.lock();
+            let result_item = result_container.get_item_mut(0);
+            if result_item.is_empty() {
+                result_item.set(CUSTOM_NAME, TextComponent::from(validated_name));
+            } else {
+                result_item.remove(CUSTOM_NAME);
+            }
+        }
+
+        self.create_result(player);
+    }
+
+    fn validate_item_name(name: String) -> Option<String> {
+        let filtered = name
+            .chars()
+            .filter(|char| char != &'§' && char >= &' ' && char != &'\x7F')
+            .collect::<String>();
+        (filtered.len() <= 50).then_some(filtered)
     }
 
     fn can_store_enchantments(item_stack: &ItemStack) -> bool {
@@ -434,6 +474,14 @@ impl MenuInstance for AnvilMenu {
 
     fn container_id(&self) -> u8 {
         self.behavior.container_id
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 

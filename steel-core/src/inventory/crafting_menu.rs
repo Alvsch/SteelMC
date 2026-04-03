@@ -6,6 +6,7 @@
 //! - Slots 10-36: Main inventory (27 slots)
 //! - Slots 37-45: Hotbar (9 slots)
 
+use std::any::Any;
 use std::{mem, sync::Arc};
 
 use steel_registry::item_stack::ItemStack;
@@ -336,6 +337,14 @@ impl MenuInstance for CraftingMenu {
 
     fn container_id(&self) -> u8 {
         self.behavior.container_id
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }
 
