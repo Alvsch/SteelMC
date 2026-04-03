@@ -85,15 +85,18 @@ use text_components::{
 };
 use uuid::Uuid;
 
-use crate::entity::{
-    DEATH_DURATION, Entity, EntityLevelCallback, LivingEntityBase, NullEntityCallback,
-    RemovalReason,
-};
 use crate::player::player_inventory::PlayerInventory;
 use crate::server::Server;
 use crate::{command::commands::gamemode::get_gamemode_translation, inventory::SyncPlayerInv};
 use crate::{config::STEEL_CONFIG, player::experience::Experience};
 use crate::{config::WorldGeneratorTypes, entity::damage::DamageSource};
+use crate::{
+    entity::{
+        DEATH_DURATION, Entity, EntityLevelCallback, LivingEntityBase, NullEntityCallback,
+        RemovalReason,
+    },
+    inventory::slots::slot::Slot,
+};
 use steel_registry::vanilla_damage_types;
 
 use steel_crypto::{SignatureValidator, public_key_from_bytes, signature::NoValidation};
@@ -125,7 +128,6 @@ use crate::inventory::{
     inventory_menu::InventoryMenu,
     lock::{ContainerId, ContainerLockGuard},
     menu::Menu,
-    slot::Slot,
 };
 
 /// Re-export `PreviousMessage` as `PreviousMessageEntry` for use in `signature_cache`

@@ -16,6 +16,12 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, translations};
 use text_components::TextComponent;
 
+use crate::inventory::slots::slot::{
+    Slot, SlotType, SyncCraftingContainer, SyncResultContainer, add_standard_inventory_slots,
+};
+use crate::inventory::slots::{
+    CraftingHandler, ProcessingInputSlot, ProcessingResultSlot, RecipeHandlerType,
+};
 use crate::inventory::{
     SyncPlayerInv,
     container::Container,
@@ -23,10 +29,6 @@ use crate::inventory::{
     lock::{ContainerLockGuard, ContainerRef},
     menu::{Menu, MenuBehavior},
     menu_provider::{MenuInstance, MenuProvider},
-    slot::{
-        CraftingGridSlot, CraftingResultSlot, Slot, SlotType, SyncCraftingContainer,
-        SyncResultContainer, add_standard_inventory_slots,
-    },
 };
 use crate::player::Player;
 
@@ -80,19 +82,25 @@ impl CraftingMenu {
         let result_container: SyncResultContainer =
             Arc::new(SyncMutex::new(ResultContainer::new()));
 
-        // Slot 0: Crafting result
-        menu_slots.push(SlotType::CraftingResult(CraftingResultSlot::new_3x3(
-            result_container.clone(),
+        let handler = RecipeHandlerType::Crafting(CraftingHandler::new(
             crafting_container.clone(),
-        )));
+            result_container.clone(),
+            3,
+        ));
+
+        // Slot 0: Crafting result
+        menu_slots.push(SlotType::ProcessingResultSlot(ProcessingResultSlot {
+            container_ref: ContainerRef::ResultContainer(result_container.clone()),
+            handler: handler.clone(),
+        }));
 
         // Slots 1-9: 3x3 Crafting grid
         for i in 0..9 {
-            menu_slots.push(SlotType::CraftingGrid(CraftingGridSlot::new_3x3(
-                crafting_container.clone(),
-                result_container.clone(),
-                i,
-            )));
+            menu_slots.push(SlotType::ProcessingInputSlot(ProcessingInputSlot {
+                container_ref: ContainerRef::CraftingContainer(crafting_container.clone()),
+                handler: handler.clone(),
+                index: i,
+            }));
         }
 
         // Slots 10-45: Standard inventory (main inventory + hotbar)

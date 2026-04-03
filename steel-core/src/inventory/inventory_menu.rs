@@ -21,9 +21,13 @@ use crate::inventory::{
     lock::{ContainerLockGuard, ContainerRef},
     menu::{Menu, MenuBehavior},
     recipe_manager,
-    slot::{
-        ArmorSlot, CraftingGridSlot, CraftingResultSlot, NormalSlot, Slot, SlotType,
-        SyncCraftingContainer, SyncResultContainer, add_standard_inventory_slots,
+    slots::{
+        ArmorSlot, CraftingHandler, NormalSlot, ProcessingInputSlot, ProcessingResultSlot,
+        RecipeHandlerType,
+        slot::{
+            Slot, SlotType, SyncCraftingContainer, SyncResultContainer,
+            add_standard_inventory_slots,
+        },
     },
 };
 use crate::player::Player;
@@ -83,19 +87,25 @@ impl InventoryMenu {
         let result_container: SyncResultContainer =
             Arc::new(SyncMutex::new(ResultContainer::new()));
 
-        // Slot 0: Crafting result
-        menu_slots.push(SlotType::CraftingResult(CraftingResultSlot::new(
-            result_container.clone(),
+        let handler = RecipeHandlerType::Crafting(CraftingHandler::new(
             crafting_container.clone(),
-        )));
+            result_container.clone(),
+            2,
+        ));
+
+        // Slot 0: Crafting result
+        menu_slots.push(SlotType::ProcessingResultSlot(ProcessingResultSlot {
+            container_ref: ContainerRef::ResultContainer(result_container.clone()),
+            handler: handler.clone(),
+        }));
 
         // Slots 1-4: 2x2 Crafting grid
         for i in 0..4 {
-            menu_slots.push(SlotType::CraftingGrid(CraftingGridSlot::new(
-                crafting_container.clone(),
-                result_container.clone(),
-                i,
-            )));
+            menu_slots.push(SlotType::ProcessingInputSlot(ProcessingInputSlot {
+                container_ref: ContainerRef::CraftingContainer(crafting_container.clone()),
+                index: i,
+                handler: handler.clone(),
+            }));
         }
 
         // Slots 5-8: Armor (head, chest, legs, feet)

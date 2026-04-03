@@ -232,6 +232,23 @@ fn generate_builder_calls(item: &Item) -> Vec<TokenStream> {
                 builder_calls
                     .push(quote! { .builder_set(vanilla_components::TOOL, Some(#tool_token)) });
             }
+            "minecraft:repairable" => {
+                let string = value
+                    .as_object()
+                    .expect("repairable component should be a map with one key 'items'")
+                    .get("items")
+                    .expect("repairable component should have key 'items'")
+                    .as_str()
+                    .expect("repairable component should have value for key 'items'");
+                let (namespace, path) = string
+                    .split_once(":")
+                    .expect("invalid string input for repairable");
+                if let Some(rest) = namespace.strip_prefix('#') {
+                    builder_calls.push(quote! { .builder_set(vanilla_components::REPAIRABLE, Some(vanilla_components::Repairable::Tag { tag: Identifier::new(#rest, #path) })) });
+                } else {
+                    builder_calls.push(quote! { .builder_set(vanilla_components::REPAIRABLE, Some(vanilla_components::Repairable::Item { item: Identifier::new(#namespace, #path) })) });
+                }
+            }
             _ => {
                 // TODO: Implement more
             }

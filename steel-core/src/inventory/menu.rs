@@ -29,11 +29,9 @@ use steel_registry::{
     item_stack::ItemStack, menu_type::MenuTypeRef,
 };
 
+use crate::inventory::slots::slot::{Slot, SlotType};
 use crate::{
-    inventory::{
-        lock::{ContainerId, ContainerLockGuard, ContainerRef},
-        slot::{Slot, SlotType},
-    },
+    inventory::lock::{ContainerId, ContainerLockGuard, ContainerRef},
     player::{Player, PlayerConnection, connection::NetworkConnection},
 };
 use std::sync::Arc;
@@ -1246,6 +1244,9 @@ pub trait Menu {
                 ClickType::QuickCraft => unreachable!(),
             }
         }
+        if slot_num >= 0 && (slot_num as usize) < self.behavior().slots.len() {
+            self.slots_changed(slot_num as usize, player);
+        }
     }
 
     /// Handles quick move (shift-click).
@@ -1455,4 +1456,6 @@ pub trait Menu {
             }
         }
     }
+
+    fn slots_changed(&mut self, _slot_index: usize, _player: &Player) {}
 }

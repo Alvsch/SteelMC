@@ -17,7 +17,7 @@ use crate::inventory::{
     lock::{ContainerLockGuard, ContainerRef},
     menu::{Menu, MenuBehavior},
     menu_provider::{MenuInstance, MenuProvider},
-    slot::{NormalSlot, Slot, SlotType, add_standard_inventory_slots},
+    slots::{NormalSlot, Slot, SlotType, add_standard_inventory_slots},
 };
 use crate::player::Player;
 

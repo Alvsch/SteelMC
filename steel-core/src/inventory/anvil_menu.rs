@@ -30,7 +30,7 @@ use crate::{
         lock::ContainerRef,
         menu::{Menu, MenuBehavior},
         simple_menu::SimpleContainer,
-        slot::{
+        slots::{
             AnvilResultSlot, NormalSlot, Slot, SlotType, SyncResultContainer,
             add_standard_inventory_slots,
         },
@@ -61,6 +61,7 @@ pub mod slots {
 }
 
 /// Anvil Menu Behavior
+/// FIXME: Stopping the server while having items in the anvil deletes them instead of adding them to your inventory
 pub struct AnvilMenu {
     /// The Menu Behavior
     behavior: MenuBehavior,
@@ -71,7 +72,7 @@ pub struct AnvilMenu {
     /// The Position
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
-    repair_durability_cost: AtomicI32,
+    cost: Arc<AtomicI32>,
     item_name: SyncMutex<Option<String>>,
 }
 
@@ -83,6 +84,7 @@ impl AnvilMenu {
 
         let simple_container = Arc::new(SyncMutex::new(SimpleContainer::new(2)));
         let container_ref = ContainerRef::SimpleContainer(simple_container.clone());
+        let cost = Arc::new(AtomicI32::new(0));
 
         let result_container: SyncResultContainer =
             Arc::new(SyncMutex::new(ResultContainer::new()));
@@ -92,6 +94,7 @@ impl AnvilMenu {
         menu_slots.push(SlotType::AnvilResult(AnvilResultSlot::new(
             simple_container.clone(),
             result_container.clone(),
+            cost.clone(),
         )));
 
         add_standard_inventory_slots(&mut menu_slots, &inventory);
@@ -105,7 +108,7 @@ impl AnvilMenu {
             input_container: simple_container,
             result_container,
             block_pos: pos,
-            repair_durability_cost: AtomicI32::new(0),
+            cost: cost.clone(),
             item_name: SyncMutex::new(None),
         }
     }
@@ -114,13 +117,21 @@ impl AnvilMenu {
     ///
     ///# Panics
     /// if the input container doesnt have the shape 1x2
+    #[tracing::instrument(skip(self, player), level = "info", fields(player = %player.gameprofile.name))]
     #[expect(clippy::too_many_lines, reason = "not my choice its so long .-.")]
-    pub fn create_result(&mut self, player: &Arc<Player>) {
+    pub fn create_result(&mut self, player: &Player) {
+        tracing::info!("AnvilMenu::create_result");
         let mut input_container = self.input_container.lock();
         let [first, second] = input_container
             .items_mut()
             .get_disjoint_mut([0, 1])
             .expect("failed to get");
+
+        log::warn!(
+            "first = {:?}; second = {:?}",
+            first.item.key,
+            second.item.key
+        );
 
         let mut additional_cost = 0_u32;
         let mut rename_cost = 0_i32;
@@ -129,10 +140,15 @@ impl AnvilMenu {
         if first.is_empty() || !Self::can_store_enchantments(first) {
             self.result_container.lock().set_item(0, ItemStack::empty());
             self.behavior.set_data(0, 0);
+            tracing::error!(
+                first_is_empty = %(first.is_empty()),
+                first_can_store_enchantments = %Self::can_store_enchantments(first),
+                "1 returned early",
+            );
             return;
         }
 
-        self.repair_durability_cost.store(0, Ordering::Relaxed);
+        self.cost.store(0, Ordering::Relaxed);
 
         let mut result = first.clone();
         let mut enchantments = first.get_enchantments().cloned().unwrap_or_default();
@@ -141,6 +157,11 @@ impl AnvilMenu {
 
         if !second.is_empty() {
             let has_stored_enchantments = second.has(STORED_ENCHANTMENTS);
+            log::error!(
+                "result.is_damageable_item() = {}, first.is_valid_repair_item(second.item) = {}",
+                result.is_damageable_item(),
+                first.is_valid_repair_item(second.item)
+            );
 
             if result.is_damageable_item() && first.is_valid_repair_item(second.item) {
                 let mut repair_per_unit =
@@ -148,6 +169,7 @@ impl AnvilMenu {
                 if repair_per_unit <= 0 {
                     self.result_container.lock().set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
+                    tracing::error!("2 returned early {repair_per_unit}");
                     return;
                 }
 
@@ -160,14 +182,17 @@ impl AnvilMenu {
                     repair_per_unit = result.get_damage_value().min(result.get_max_damage() / 4);
                 }
 
-                self.repair_durability_cost
-                    .store(materials_used, Ordering::Relaxed);
+                self.cost.store(materials_used, Ordering::Relaxed);
             } else {
                 if !has_stored_enchantments
                     && (!result.is(second.item) || !result.is_damageable_item())
                 {
                     self.result_container.lock().set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
+                    tracing::error!(
+                        "3 returned early has_stored_enchantments = {has_stored_enchantments}; result.is_damageable_item() = {}",
+                        result.is_damageable_item()
+                    );
                     return;
                 }
 
@@ -246,12 +271,15 @@ impl AnvilMenu {
                 if any_incompatible && !any_compatible {
                     self.result_container.lock().set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
+                    tracing::error!(
+                        "4 returned early any_incompatible = {any_incompatible}; !any_compatible = {}",
+                        !any_compatible
+                    );
                     return;
                 }
             }
         }
 
-        // TODO: missing packet implementation
         //// --- Renaming ---
         if let Some(name) = self.item_name.lock().as_ref() {
             if name != &first.hover_name().to_string() {
@@ -271,6 +299,9 @@ impl AnvilMenu {
         } else {
             (prior_repair_cost + i64::from(additional_cost)).clamp(0, i64::from(i32::MAX)) as i32
         };
+        tracing::info!(
+            "anvil cost: additional={additional_cost} prior={prior_repair_cost} total={total_cost} rename={rename_cost}"
+        );
         self.behavior.set_data(0, total_cost as i16);
 
         if additional_cost == 0 {
@@ -300,11 +331,12 @@ impl AnvilMenu {
             result.set_enchantments(enchantments.iter(), false);
         }
 
-        self.result_container.lock().set_item(0, result);
-        self.behavior.broadcast_changes(&player.connection);
+        self.result_container.lock().set_item(0, result.clone());
+        tracing::info!("Set result item to : {result:?}");
     }
 
     /// Sets the item name of the item
+    #[tracing::instrument(skip(self, player) level = "info")]
     pub fn set_item_name(&mut self, name: String, player: &Arc<Player>) {
         let Some(validated_name) = Self::validate_item_name(name) else {
             return;
@@ -312,22 +344,14 @@ impl AnvilMenu {
 
         {
             let mut guard = self.item_name.lock();
-            let Some(ref mut item_name) = *guard else {
-                return;
-            };
-            if validated_name == *item_name {
-                return;
-            }
-            let mut result_container = self.result_container.lock();
-            let result_item = result_container.get_item_mut(0);
-            if result_item.is_empty() {
-                result_item.set(CUSTOM_NAME, TextComponent::from(validated_name));
-            } else {
-                result_item.remove(CUSTOM_NAME);
+            match &*guard {
+                Some(current) if *current == validated_name => return,
+                _ => *guard = Some(validated_name),
             }
         }
 
         self.create_result(player);
+        self.behavior.broadcast_changes(&player.connection);
     }
 
     fn validate_item_name(name: String) -> Option<String> {
@@ -464,6 +488,9 @@ impl Menu for AnvilMenu {
         }
 
         self.result_container.lock().set_item(0, ItemStack::empty());
+    }
+    fn slots_changed(&mut self, slot_index: usize, player: &Player) {
+        self.create_result(player);
     }
 }
 

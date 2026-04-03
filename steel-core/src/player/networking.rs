@@ -34,6 +34,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::select;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
+use tracing::info_span;
 
 use crate::command::sender::CommandSender;
 use crate::inventory::anvil_menu::AnvilMenu;
@@ -291,13 +292,28 @@ impl JavaConnection {
             play::S_RENAME_ITEM => {
                 let packet: SRenameItem = SRenameItem::read_packet(data)?;
                 let mut lock = player.open_menu.lock();
-                if let Some(open_menu) = &mut *lock
-                    && open_menu.menu_type() == vanilla_menu_types::ANVIL
+
+                let span = info_span!("SRenameItem packet received", name = packet.name);
+                let _ = span.enter();
+                tracing::info!("SRenameItem packet received");
+                let Some(open_menu) = &mut *lock else {
+                    log::error!("failed to get open_menu out of the lock? maybe its empty");
+                    return Err(PacketError::Other("asdf".to_string()));
+                };
+                if open_menu.menu_type() == vanilla_menu_types::ANVIL
                     && open_menu.still_valid()
                     && let Some(anvil_menu) = open_menu.as_any_mut().downcast_mut::<AnvilMenu>()
                 {
                     anvil_menu.set_item_name(packet.name, &player);
+                } else {
+                    log::error!(
+                        "maybe downcast failed? anvil_menu_type = {}; still_valid = {}",
+                        open_menu.menu_type() == vanilla_menu_types::ANVIL,
+                        open_menu.still_valid()
+                    );
                 }
+
+                drop(span);
             }
             play::S_CHAT_COMMAND => {
                 server.command_dispatcher.read().handle_command(

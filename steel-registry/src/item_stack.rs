@@ -778,7 +778,9 @@ impl ItemStack {
     }
 
     pub fn is_valid_repair_item(&self, item: ItemRef) -> bool {
+        log::info!("is_valid_repair_item {:?}", item.key);
         let Some(repairable) = self.get(REPAIRABLE) else {
+            log::error!("{:?} doesnt have a REPAIRABLE DataComponent", self.item.key);
             return false;
         };
 
