@@ -4,6 +4,7 @@ use steel_macros::block_behavior;
 use steel_registry::{
     blocks::{BlockRef, block_state_ext::BlockStateExt, properties::BlockStateProperties},
     items::item::BlockHitResult,
+    vanilla_blocks,
 };
 use steel_utils::BlockStateId;
 
@@ -26,12 +27,31 @@ impl AnvilBlock {
     pub const fn new(block: BlockRef) -> Self {
         Self { block }
     }
+
+    pub fn damage(state: BlockStateId) -> Option<BlockStateId> {
+        let block = state.get_block();
+        if block == vanilla_blocks::ANVIL {
+            Some(
+                vanilla_blocks::CHIPPED_ANVIL
+                    .default_state()
+                    .copy_value(&BlockStateProperties::FACING, &state),
+            )
+        } else if block == vanilla_blocks::CHIPPED_ANVIL {
+            Some(
+                vanilla_blocks::DAMAGED_ANVIL
+                    .default_state()
+                    .copy_value(&BlockStateProperties::FACING, &state),
+            )
+        } else {
+            None
+        }
+    }
 }
 
 impl BlockBehavior for AnvilBlock {
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         Some(self.block.default_state().set_value(
-            &BlockStateProperties::FACING,
+            &BlockStateProperties::HORIZONTAL_FACING,
             context.horizontal_direction.rotate_y_clockwise(),
         ))
     }
