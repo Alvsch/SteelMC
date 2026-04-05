@@ -1,11 +1,11 @@
 //! Menu provider for opening menus.
 
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use steel_registry::menu_type::MenuTypeRef;
 use text_components::TextComponent;
 
-use crate::inventory::menu::Menu;
+use crate::{inventory::menu::Menu, world::World};
 
 /// Trait for menu instances that can be opened by players.
 ///
@@ -33,5 +33,5 @@ pub trait MenuProvider {
     fn title(&self) -> TextComponent;
 
     /// Creates a menu with the given container ID.
-    fn create(&self, container_id: u8) -> Box<dyn MenuInstance>;
+    fn create(&self, container_id: u8, world: &Arc<World>) -> Box<dyn MenuInstance>;
 }

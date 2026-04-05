@@ -2255,7 +2255,7 @@ impl Player {
 
         // Generate a new container ID and create the menu
         let container_id = self.next_container_counter();
-        let mut menu = provider.create(container_id);
+        let mut menu = provider.create(container_id, &self.world);
 
         // Send the open screen packet to the client
         self.send_packet(COpenScreen {

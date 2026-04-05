@@ -87,6 +87,7 @@ pub struct ProcessingResultSlot {
 }
 
 impl ProcessingResultSlot {
+    #[must_use]
     pub fn container_ref(&self) -> ContainerRef {
         self.container_ref.clone()
     }

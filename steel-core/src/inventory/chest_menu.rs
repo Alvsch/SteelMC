@@ -5,21 +5,24 @@
 //! - Slots `rows * 9` to `rows * 9 + 26`: Main inventory (27 slots)
 //! - Slots `rows * 9 + 27` to `rows * 9 + 35`: Hotbar (9 slots)
 
-use std::{any::Any, mem};
+use std::{any::Any, mem, sync::Arc};
 
 use steel_registry::item_stack::ItemStack;
 use steel_registry::menu_type::MenuTypeRef;
 use steel_registry::vanilla_menu_types;
 use text_components::TextComponent;
 
-use crate::inventory::{
-    SyncPlayerInv,
-    lock::{ContainerLockGuard, ContainerRef},
-    menu::{Menu, MenuBehavior},
-    menu_provider::{MenuInstance, MenuProvider},
-    slots::{NormalSlot, Slot, SlotType, add_standard_inventory_slots},
-};
 use crate::player::Player;
+use crate::{
+    inventory::{
+        SyncPlayerInv,
+        lock::{ContainerLockGuard, ContainerRef},
+        menu::{Menu, MenuBehavior},
+        menu_provider::{MenuInstance, MenuProvider},
+        slots::{NormalSlot, Slot, SlotType, add_standard_inventory_slots},
+    },
+    world::World,
+};
 
 /// Number of slots per row in a chest menu.
 pub const SLOTS_PER_ROW: usize = 9;
@@ -359,7 +362,7 @@ impl MenuProvider for ChestMenuProvider {
         self.title.clone()
     }
 
-    fn create(&self, container_id: u8) -> Box<dyn MenuInstance> {
+    fn create(&self, container_id: u8, world: &Arc<World>) -> Box<dyn MenuInstance> {
         Box::new(ChestMenu::new(
             self.inventory.clone(),
             container_id,

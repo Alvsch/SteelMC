@@ -18,6 +18,11 @@ pub trait BlockStateExt {
     fn try_get_value<T, P: Property<T>>(&self, property: &P) -> Option<T>;
     #[must_use]
     fn set_value<T, P: Property<T>>(&self, property: &P, value: T) -> BlockStateId;
+    fn copy_value<T, P: Property<T>, O: BlockStateExt>(
+        &self,
+        property: &P,
+        other: &O,
+    ) -> BlockStateId;
     fn get_property_str(&self, name: &str) -> Option<String>;
     fn get_collision_shape(&self) -> &'static [blocks::shapes::AABB];
     fn get_outline_shape(&self) -> &'static [blocks::shapes::AABB];
@@ -62,6 +67,14 @@ impl BlockStateExt for BlockStateId {
 
     fn set_value<T, P: Property<T>>(&self, property: &P, value: T) -> BlockStateId {
         REGISTRY.blocks.set_property(*self, property, value)
+    }
+
+    fn copy_value<T, P: Property<T>, O: BlockStateExt>(
+        &self,
+        property: &P,
+        other: &O,
+    ) -> BlockStateId {
+        self.set_value(property, other.get_value(property))
     }
 
     fn get_property_str(&self, name: &str) -> Option<String> {

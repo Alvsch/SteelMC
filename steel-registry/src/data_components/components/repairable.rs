@@ -27,7 +27,7 @@ impl Repairable {
                 let Some(item) = REGISTRY.items.by_key(item) else {
                     return false;
                 };
-                item == &item_ref
+                item == item_ref
             }
             Repairable::Tag { tag } => REGISTRY.items.is_in_tag(item_ref, tag),
         }
@@ -94,7 +94,7 @@ impl FromNbtTag for Repairable {
                 return None;
             }
             let ident = item_str.parse::<Identifier>().ok()?;
-            if let Some(item) = REGISTRY.items.by_key(&ident) {
+            if REGISTRY.items.by_key(&ident).is_some() {
                 return Some(Self::Item { item: ident });
             }
         }

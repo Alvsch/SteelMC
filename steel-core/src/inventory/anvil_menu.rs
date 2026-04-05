@@ -36,6 +36,7 @@ use crate::{
         },
     },
     player::Player,
+    world::World,
 };
 
 use super::lock::ContainerLockGuard;
@@ -72,19 +73,26 @@ pub struct AnvilMenu {
     /// The Position
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
-    cost: Arc<AtomicI32>,
+    repair_item_count: Arc<AtomicI32>,
+    level_cost: Arc<AtomicI32>,
     item_name: SyncMutex<Option<String>>,
 }
 
 impl AnvilMenu {
     /// Creates a new Anvil Menu
     #[must_use]
-    pub fn new(inventory: SyncPlayerInv, container_id: u8, pos: BlockPos) -> Self {
+    pub fn new(
+        inventory: SyncPlayerInv,
+        container_id: u8,
+        pos: BlockPos,
+        world: &Arc<World>,
+    ) -> Self {
         let mut menu_slots = Vec::with_capacity(slots::TOTAL_SLOTS);
 
         let simple_container = Arc::new(SyncMutex::new(SimpleContainer::new(2)));
         let container_ref = ContainerRef::SimpleContainer(simple_container.clone());
-        let cost = Arc::new(AtomicI32::new(0));
+        let repair_item_count = Arc::new(AtomicI32::new(0));
+        let level_cost = Arc::new(AtomicI32::new(0));
 
         let result_container: SyncResultContainer =
             Arc::new(SyncMutex::new(ResultContainer::new()));
@@ -94,7 +102,10 @@ impl AnvilMenu {
         menu_slots.push(SlotType::AnvilResult(AnvilResultSlot::new(
             simple_container.clone(),
             result_container.clone(),
-            cost.clone(),
+            repair_item_count.clone(),
+            level_cost.clone(),
+            pos,
+            world.clone(),
         )));
 
         add_standard_inventory_slots(&mut menu_slots, &inventory);
@@ -108,7 +119,8 @@ impl AnvilMenu {
             input_container: simple_container,
             result_container,
             block_pos: pos,
-            cost: cost.clone(),
+            repair_item_count: repair_item_count.clone(),
+            level_cost: level_cost.clone(),
             item_name: SyncMutex::new(None),
         }
     }
@@ -120,35 +132,25 @@ impl AnvilMenu {
     #[tracing::instrument(skip(self, player), level = "info", fields(player = %player.gameprofile.name))]
     #[expect(clippy::too_many_lines, reason = "not my choice its so long .-.")]
     pub fn create_result(&mut self, player: &Player) {
-        tracing::info!("AnvilMenu::create_result");
         let mut input_container = self.input_container.lock();
         let [first, second] = input_container
             .items_mut()
             .get_disjoint_mut([0, 1])
             .expect("failed to get");
 
-        log::warn!(
-            "first = {:?}; second = {:?}",
-            first.item.key,
-            second.item.key
-        );
-
         let mut additional_cost = 0_u32;
         let mut rename_cost = 0_i32;
-        self.behavior.set_data(0, 1);
+        self.behavior.set_data(0, 0);
+        self.level_cost.store(0, Ordering::Relaxed);
 
         if first.is_empty() || !Self::can_store_enchantments(first) {
             self.result_container.lock().set_item(0, ItemStack::empty());
             self.behavior.set_data(0, 0);
-            tracing::error!(
-                first_is_empty = %(first.is_empty()),
-                first_can_store_enchantments = %Self::can_store_enchantments(first),
-                "1 returned early",
-            );
+            self.level_cost.store(0, Ordering::Relaxed);
             return;
         }
 
-        self.cost.store(0, Ordering::Relaxed);
+        self.repair_item_count.store(0, Ordering::Relaxed);
 
         let mut result = first.clone();
         let mut enchantments = first.get_enchantments().cloned().unwrap_or_default();
@@ -157,11 +159,6 @@ impl AnvilMenu {
 
         if !second.is_empty() {
             let has_stored_enchantments = second.has(STORED_ENCHANTMENTS);
-            log::error!(
-                "result.is_damageable_item() = {}, first.is_valid_repair_item(second.item) = {}",
-                result.is_damageable_item(),
-                first.is_valid_repair_item(second.item)
-            );
 
             if result.is_damageable_item() && first.is_valid_repair_item(second.item) {
                 let mut repair_per_unit =
@@ -169,7 +166,6 @@ impl AnvilMenu {
                 if repair_per_unit <= 0 {
                     self.result_container.lock().set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
-                    tracing::error!("2 returned early {repair_per_unit}");
                     return;
                 }
 
@@ -182,17 +178,15 @@ impl AnvilMenu {
                     repair_per_unit = result.get_damage_value().min(result.get_max_damage() / 4);
                 }
 
-                self.cost.store(materials_used, Ordering::Relaxed);
+                self.repair_item_count
+                    .store(materials_used, Ordering::Relaxed);
             } else {
                 if !has_stored_enchantments
                     && (!result.is(second.item) || !result.is_damageable_item())
                 {
                     self.result_container.lock().set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
-                    tracing::error!(
-                        "3 returned early has_stored_enchantments = {has_stored_enchantments}; result.is_damageable_item() = {}",
-                        result.is_damageable_item()
-                    );
+                    self.level_cost.store(0, Ordering::Relaxed);
                     return;
                 }
 
@@ -271,10 +265,7 @@ impl AnvilMenu {
                 if any_incompatible && !any_compatible {
                     self.result_container.lock().set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
-                    tracing::error!(
-                        "4 returned early any_incompatible = {any_incompatible}; !any_compatible = {}",
-                        !any_compatible
-                    );
+                    self.level_cost.store(0, Ordering::Relaxed);
                     return;
                 }
             }
@@ -299,10 +290,8 @@ impl AnvilMenu {
         } else {
             (prior_repair_cost + i64::from(additional_cost)).clamp(0, i64::from(i32::MAX)) as i32
         };
-        tracing::info!(
-            "anvil cost: additional={additional_cost} prior={prior_repair_cost} total={total_cost} rename={rename_cost}"
-        );
         self.behavior.set_data(0, total_cost as i16);
+        self.level_cost.store(total_cost, Ordering::Relaxed);
 
         if additional_cost == 0 {
             result = ItemStack::empty();
@@ -311,6 +300,7 @@ impl AnvilMenu {
         let only_renaming = rename_cost == additional_cost as i32 && rename_cost > 0;
         if only_renaming && total_cost >= 40 {
             self.behavior.set_data(0, 39);
+            self.level_cost.store(39, Ordering::Relaxed);
         }
 
         if total_cost >= 40 && !player.has_infinite_materials() {
@@ -332,7 +322,6 @@ impl AnvilMenu {
         }
 
         self.result_container.lock().set_item(0, result.clone());
-        tracing::info!("Set result item to : {result:?}");
     }
 
     /// Sets the item name of the item
@@ -489,7 +478,7 @@ impl Menu for AnvilMenu {
 
         self.result_container.lock().set_item(0, ItemStack::empty());
     }
-    fn slots_changed(&mut self, slot_index: usize, player: &Player) {
+    fn slots_changed(&mut self, _slot_index: usize, player: &Player) {
         self.create_result(player);
     }
 }
@@ -531,11 +520,12 @@ impl MenuProvider for AnvilMenuProvider {
         TextComponent::translated(translations::CONTAINER_REPAIR.msg())
     }
 
-    fn create(&self, container_id: u8) -> Box<dyn MenuInstance> {
+    fn create(&self, container_id: u8, world: &Arc<World>) -> Box<dyn MenuInstance> {
         Box::new(AnvilMenu::new(
             self.inventory.clone(),
             container_id,
             self.pos,
+            world,
         ))
     }
 }

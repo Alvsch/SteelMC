@@ -6,14 +6,20 @@ use std::{
     },
 };
 
-use steel_registry::item_stack::ItemStack;
+use steel_registry::{
+    REGISTRY, TaggedRegistryExt, blocks::block_state_ext::BlockStateExt, item_stack::ItemStack,
+    level_events, vanilla_block_tags, vanilla_blocks,
+};
+use steel_utils::{BlockPos, types::UpdateFlags};
 
 use crate::{
+    behavior::blocks::AnvilBlock,
     inventory::{
         lock::{ContainerId, ContainerLockGuard, ContainerRef},
         slots::{Slot, SyncResultContainer, SyncSimpleContainer},
     },
     player::Player,
+    world::World,
 };
 
 /// A slot in a anvil input.
@@ -95,7 +101,10 @@ impl Slot for AnvilInputSlot {
 pub struct AnvilResultSlot {
     input_container: SyncSimpleContainer,
     result_container: SyncResultContainer,
-    cost: Arc<AtomicI32>,
+    repair_item_count: Arc<AtomicI32>,
+    level_cost: Arc<AtomicI32>,
+    block_pos: BlockPos,
+    world: Arc<World>,
 }
 
 impl AnvilResultSlot {
@@ -103,12 +112,18 @@ impl AnvilResultSlot {
     pub const fn new(
         input_container: SyncSimpleContainer,
         result_container: SyncResultContainer,
-        cost: Arc<AtomicI32>,
+        repair_item_count: Arc<AtomicI32>,
+        level_cost: Arc<AtomicI32>,
+        pos: BlockPos,
+        world: Arc<World>,
     ) -> Self {
         Self {
             input_container,
             result_container,
-            cost,
+            repair_item_count,
+            level_cost,
+            block_pos: pos,
+            world,
         }
     }
 
@@ -200,8 +215,8 @@ impl Slot for AnvilResultSlot {
     ) -> Option<ItemStack> {
         if !player.has_infinite_materials() {
             let mut experience = player.experience.lock();
-            experience.add_levels(-self.cost.load(Ordering::Relaxed));
-            // FIXME: doesnt seem to always we accurate
+            let cost = -self.level_cost.load(Ordering::Relaxed);
+            experience.add_levels(cost);
         }
 
         let input_id = ContainerId::from_arc(&self.input_container);
@@ -211,12 +226,40 @@ impl Slot for AnvilResultSlot {
 
         let second = input.get_item_mut(1);
         if !second.is_empty() {
-            let repair_cost = self.cost.load(Ordering::Relaxed);
+            let repair_cost = self.repair_item_count.load(Ordering::Relaxed);
             if repair_cost > 0 {
                 second.shrink(repair_cost);
             } else {
                 input.set_item(1, ItemStack::empty());
             }
+        }
+
+        self.level_cost.store(0, Ordering::Relaxed);
+
+        let state = self.world.get_block_state(self.block_pos);
+        if !player.has_infinite_materials()
+            && REGISTRY
+                .blocks
+                .is_in_tag(state.get_block(), &vanilla_block_tags::ANVIL_TAG)
+            && rand::random_bool(0.12)
+        {
+            if let Some(new_state) = AnvilBlock::damage(state) {
+                self.world
+                    .set_block(self.block_pos, new_state, UpdateFlags::UPDATE_ALL);
+                self.world
+                    .level_event(level_events::SOUND_ANVIL_BROKEN, self.block_pos, 0, None);
+            } else {
+                self.world.set_block(
+                    self.block_pos,
+                    vanilla_blocks::AIR.default_state(),
+                    UpdateFlags::UPDATE_CLIENTS,
+                );
+                self.world
+                    .level_event(level_events::SOUND_ANVIL_USED, self.block_pos, 0, None);
+            }
+        } else {
+            self.world
+                .level_event(level_events::SOUND_ANVIL_USED, self.block_pos, 0, None);
         }
 
         input.set_changed();
@@ -225,5 +268,11 @@ impl Slot for AnvilResultSlot {
 
     fn is_fake(&self) -> bool {
         true
+    }
+
+    fn may_pickup(&self, _guard: &ContainerLockGuard, player: &Player) -> bool {
+        let level_cost = self.level_cost.load(Ordering::Relaxed);
+        player.has_infinite_materials()
+            || player.experience.lock().level() >= level_cost && level_cost > 0
     }
 }

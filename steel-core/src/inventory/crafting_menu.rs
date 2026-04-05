@@ -31,6 +31,7 @@ use crate::inventory::{
     menu_provider::{MenuInstance, MenuProvider},
 };
 use crate::player::Player;
+use crate::world::World;
 
 /// Slot indices for the crafting menu.
 pub mod slots {
@@ -375,7 +376,7 @@ impl MenuProvider for CraftingMenuProvider {
         TextComponent::translated(translations::CONTAINER_CRAFTING.msg())
     }
 
-    fn create(&self, container_id: u8) -> Box<dyn MenuInstance> {
+    fn create(&self, container_id: u8, _world: &Arc<World>) -> Box<dyn MenuInstance> {
         Box::new(CraftingMenu::new(
             self.inventory.clone(),
             container_id,
