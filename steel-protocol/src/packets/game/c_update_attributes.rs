@@ -21,7 +21,6 @@ pub struct AttributeModifierData {
 /// - `AddValue` (0): `total += amount`
 /// - `AddMultipliedBase` (1): `total += base * amount`
 /// - `AddMultipliedTotal` (2): `total *= 1 + amount`
-#[expect(clippy::enum_variant_names, reason = "they are the operation names")]
 #[derive(WriteTo, Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 #[write(as = VarInt)]
