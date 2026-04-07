@@ -47,9 +47,7 @@ impl CakeBlock {
         if player.can_eat(false) {
             let mut food_data = player.food_data.lock();
             food_data.eat(2, 0.1);
-            let bites = state
-                .try_get_value(&BlockStateProperties::BITES)
-                .unwrap_or(0); // exception for candle cakes
+            let bites = state.get_value(&BlockStateProperties::BITES);
             let new_state = if bites < 6 {
                 state.set_value(&BlockStateProperties::BITES, bites + 1)
             } else {

@@ -72,7 +72,7 @@ impl BlockBehavior for CandleCakeBlock {
         {
             world.set_block(
                 pos,
-                state.set_value(&BlockStateProperties::LIT, true),
+                state.set_value(&BlockStateProperties::LIT, false),
                 UpdateFlags::UPDATE_ALL,
             );
             // TODO: particles!
