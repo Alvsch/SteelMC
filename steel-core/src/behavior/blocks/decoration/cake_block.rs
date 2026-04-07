@@ -4,7 +4,6 @@ use steel_macros::block_behavior;
 use steel_registry::{
     REGISTRY, TaggedRegistryExt,
     blocks::{BlockRef, block_state_ext::BlockStateExt, properties::BlockStateProperties},
-    item_stack::ItemStack,
     items::item::BlockHitResult,
     sound_events, vanilla_blocks, vanilla_item_tags,
 };
@@ -14,7 +13,9 @@ use steel_utils::{
 };
 
 use crate::{
-    behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, candle_cakes},
+    behavior::{
+        BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess, candle_cakes,
+    },
     player::Player,
     world::World,
 };
@@ -46,7 +47,9 @@ impl CakeBlock {
         if player.can_eat(false) {
             let mut food_data = player.food_data.lock();
             food_data.eat(2, 0.1);
-            let bites = state.get_value(&BlockStateProperties::BITES);
+            let bites = state
+                .try_get_value(&BlockStateProperties::BITES)
+                .unwrap_or(0); // exception for candle cakes
             let new_state = if bites < 6 {
                 state.set_value(&BlockStateProperties::BITES, bites + 1)
             } else {
@@ -105,17 +108,13 @@ impl BlockBehavior for CakeBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
+        inv: &mut InventoryAccess,
     ) -> InteractionResult {
         if Self::eat(world, pos, state, player).consumes_action() {
             return InteractionResult::Success;
         }
 
-        if player
-            .inventory
-            .lock()
-            .get_item_in_hand(InteractionHand::MainHand)
-            .is_empty()
-        {
+        if inv.item().is_empty() {
             return InteractionResult::Fail;
         }
         InteractionResult::Pass
@@ -123,25 +122,22 @@ impl BlockBehavior for CakeBlock {
 
     fn use_item_on(
         &self,
-        item_stack: &ItemStack,
         state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
         player: &Player,
         _hand: InteractionHand,
         _hit_result: &BlockHitResult,
+        inv: &mut InventoryAccess,
     ) -> InteractionResult {
+        let item_stack = inv.item();
         if REGISTRY
             .items
             .is_in_tag(item_stack.item(), &vanilla_item_tags::CANDLES_TAG)
             && state.get_value(&BlockStateProperties::BITES) == 0
         {
             if !player.has_infinite_materials() {
-                player
-                    .inventory
-                    .lock()
-                    .get_item_in_hand_mut(InteractionHand::MainHand)
-                    .shrink(1);
+                item_stack.shrink(1);
             }
             world.play_block_sound(
                 sound_events::BLOCK_CAKE_ADD_CANDLE,

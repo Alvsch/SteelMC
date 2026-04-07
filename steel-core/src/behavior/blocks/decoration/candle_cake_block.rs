@@ -13,7 +13,9 @@ use steel_utils::{
 };
 
 use crate::{
-    behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, blocks::CakeBlock},
+    behavior::{
+        BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess, blocks::CakeBlock,
+    },
     player::Player,
     world::World,
 };
@@ -51,14 +53,15 @@ impl BlockBehavior for CandleCakeBlock {
 
     fn use_item_on(
         &self,
-        item_stack: &ItemStack,
         state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
         player: &Player,
         _hand: InteractionHand,
         hit_result: &BlockHitResult,
+        inv: &mut InventoryAccess,
     ) -> InteractionResult {
+        let item_stack = inv.item();
         if item_stack.is(&vanilla_items::ITEMS.fire_charge)
             || item_stack.is(&vanilla_items::ITEMS.flint_and_steel)
         {
@@ -92,8 +95,9 @@ impl BlockBehavior for CandleCakeBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
+        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        let result = CakeBlock::eat(world, pos, state, player);
+        let result = CakeBlock::eat(world, pos, vanilla_blocks::CAKE.default_state(), player);
         if result.consumes_action() {
             world.drop_resources(state, pos);
         }

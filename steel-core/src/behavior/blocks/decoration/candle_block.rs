@@ -10,7 +10,6 @@ use steel_registry::{
         shapes::SupportType,
     },
     entity_data::Direction,
-    item_stack::ItemStack,
     items::item::BlockHitResult,
     vanilla_blocks, vanilla_item_tags,
 };
@@ -20,7 +19,7 @@ use steel_utils::{
 };
 
 use crate::{
-    behavior::{BlockBehavior, BlockPlaceContext, InteractionResult},
+    behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess},
     player,
     world::World,
 };
@@ -85,14 +84,15 @@ impl BlockBehavior for CandleBlock {
 
     fn use_item_on(
         &self,
-        item_stack: &ItemStack,
         state: steel_utils::BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
         _player: &player::Player,
         _hand: types::InteractionHand,
         _hit_result: &BlockHitResult,
+        inv: &mut InventoryAccess,
     ) -> InteractionResult {
+        let item_stack = inv.item();
         if item_stack.is_empty() {
             if !state.get_value(&LIT_PROPERTY) {
                 return InteractionResult::Pass;
