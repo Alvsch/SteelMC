@@ -1448,6 +1448,7 @@ pub trait Menu {
         }
     }
 
+    /// Called when slots are clicked inside of the menu
     #[expect(unused_variables, reason = "trait method")]
     fn slots_changed(
         &mut self,

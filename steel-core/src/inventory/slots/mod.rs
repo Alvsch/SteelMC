@@ -1,3 +1,5 @@
+//! All the different types of Slots
+
 mod anvil_slots;
 mod armor_slot;
 mod crafting_slots;

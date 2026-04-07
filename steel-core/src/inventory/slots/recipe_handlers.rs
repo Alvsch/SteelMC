@@ -11,6 +11,7 @@ use crate::{
     player::Player,
 };
 
+/// A trait for recipe handlers that update slots in containers according to recipes
 #[enum_dispatch]
 pub trait RecipeHandler: Send + Sync {
     /// Recalculate the result based on current inputs.
@@ -21,20 +22,24 @@ pub trait RecipeHandler: Send + Sync {
     -> Option<ItemStack>;
 }
 
+/// An enum for all of the Recipe Handlers that enables enum dispatch
 #[derive(Clone)]
 #[enum_dispatch(RecipeHandler)]
 pub enum RecipeHandlerType {
+    /// A crafting recipe handler
     Crafting(CraftingHandler),
     // Furnace(FurnaceHandler),
     // Loom(LoomHandler),
 }
 
+/// The result slot for recipes, is a fake slot that is non modifiable and cannot have items placed in them by players
 pub struct ProcessingResultSlot {
     container_ref: ContainerRef,
     handler: RecipeHandlerType,
 }
 
 impl ProcessingResultSlot {
+    /// Creates a new `ProcessingResultSlot` with the given handler
     #[must_use]
     pub const fn new(container_ref: ContainerRef, handler: RecipeHandlerType) -> Self {
         Self {
@@ -43,6 +48,7 @@ impl ProcessingResultSlot {
         }
     }
 
+    /// The container ref
     #[must_use]
     pub fn container_ref(&self) -> ContainerRef {
         self.container_ref.clone()

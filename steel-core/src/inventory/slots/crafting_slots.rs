@@ -13,6 +13,7 @@ use crate::{
     player::Player,
 };
 
+/// A Recipe Handler for Crafting Recipes
 #[derive(Clone)]
 pub struct CraftingHandler {
     crafting_container: SyncCraftingContainer,
@@ -21,6 +22,7 @@ pub struct CraftingHandler {
 }
 
 impl CraftingHandler {
+    /// Creates a new Crafting Recipe Handler
     pub const fn new(
         crafting_container: SyncCraftingContainer,
         result_container: SyncResultContainer,
@@ -33,16 +35,19 @@ impl CraftingHandler {
         }
     }
 
+    /// Whether the grid size of the crafting container is a 2x2
     #[must_use]
     pub const fn is_2x2(&self) -> bool {
         self.grid_size == 2
     }
 
+    /// The `ContainerId` of the crafting container
     #[must_use]
     pub fn crafting_id(&self) -> ContainerId {
         ContainerId::from_arc(&self.crafting_container)
     }
 
+    /// The `ContainerId` of the result container
     #[must_use]
     pub fn result_id(&self) -> ContainerId {
         ContainerId::from_arc(&self.result_container)

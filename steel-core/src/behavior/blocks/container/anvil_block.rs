@@ -28,6 +28,7 @@ impl AnvilBlock {
         Self { block }
     }
 
+    /// Returns the next damage level block state for anvil `BlockStates`
     #[must_use]
     pub fn damage(state: BlockStateId) -> Option<BlockStateId> {
         let block = state.get_block();
