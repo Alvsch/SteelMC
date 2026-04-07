@@ -43,7 +43,7 @@ impl AnvilInputSlot {
         }
     }
 
-    /// Returns a reference to the crafting container.
+    /// Returns a reference to the input container.
     #[must_use]
     pub fn input_container_ref(&self) -> ContainerRef {
         ContainerRef::SimpleContainer(Arc::clone(&self.input_container))
@@ -247,7 +247,7 @@ impl Slot for AnvilResultSlot {
                 self.world
                     .set_block(self.block_pos, new_state, UpdateFlags::UPDATE_ALL);
                 self.world
-                    .level_event(level_events::SOUND_ANVIL_BROKEN, self.block_pos, 0, None);
+                    .level_event(level_events::SOUND_ANVIL_USED, self.block_pos, 0, None);
             } else {
                 self.world.set_block(
                     self.block_pos,
@@ -255,7 +255,7 @@ impl Slot for AnvilResultSlot {
                     UpdateFlags::UPDATE_CLIENTS,
                 );
                 self.world
-                    .level_event(level_events::SOUND_ANVIL_USED, self.block_pos, 0, None);
+                    .level_event(level_events::SOUND_ANVIL_BROKEN, self.block_pos, 0, None);
             }
         } else {
             self.world

@@ -7,6 +7,7 @@
 use parking_lot::ArcMutexGuard;
 use parking_lot::RawMutex;
 use rustc_hash::FxHashMap;
+use std::borrow::Borrow;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use steel_utils::locks::SyncMutex;
@@ -195,9 +196,14 @@ impl ContainerLockGuard {
     /// a consistent lock order across all call sites, preventing deadlocks.
     /// Duplicate containers (same Arc) are automatically deduplicated.
     #[must_use]
-    pub fn lock_all(containers: &[&ContainerRef]) -> Self {
-        // Collect container IDs and references, then sort
-        let mut to_lock: Vec<_> = containers.iter().map(|c| (c.container_id(), *c)).collect();
+    pub fn lock_all<C>(containers: &[C]) -> Self
+    where
+        C: Borrow<ContainerRef>,
+    {
+        let mut to_lock: Vec<_> = containers
+            .iter()
+            .map(|c| (c.borrow().container_id(), c.borrow()))
+            .collect();
 
         // Sort by ID for deterministic lock order (prevents deadlocks)
         to_lock.sort_by_key(|(id, _)| *id);
@@ -223,6 +229,21 @@ impl ContainerLockGuard {
             guards,
             id_to_index,
         }
+    }
+
+    /// Get mutable access to N locked containers simultaneously
+    ///
+    /// Returns `None` if any ID is not locked or if any IDs are duplicates
+    pub fn get_disjoint_mut<const N: usize>(
+        &mut self,
+        ids: [ContainerId; N],
+    ) -> Option<[&mut dyn Container; N]> {
+        let mut indices = [0usize; N];
+        for (i, id) in ids.iter().enumerate() {
+            indices[i] = *self.id_to_index.get(id)?;
+        }
+        let entries = self.guards.get_disjoint_mut(indices).ok()?;
+        Some(entries.map(|(_, locked)| &mut **locked as &mut dyn Container))
     }
 
     /// Unlock all containers and relock with a new set.

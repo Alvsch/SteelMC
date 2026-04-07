@@ -33,15 +33,18 @@ impl CraftingHandler {
         }
     }
 
-    const fn is_2x2(&self) -> bool {
+    #[must_use]
+    pub const fn is_2x2(&self) -> bool {
         self.grid_size == 2
     }
 
-    fn crafting_id(&self) -> ContainerId {
+    #[must_use]
+    pub fn crafting_id(&self) -> ContainerId {
         ContainerId::from_arc(&self.crafting_container)
     }
 
-    fn result_id(&self) -> ContainerId {
+    #[must_use]
+    pub fn result_id(&self) -> ContainerId {
         ContainerId::from_arc(&self.result_container)
     }
 }

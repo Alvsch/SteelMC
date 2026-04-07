@@ -27,7 +27,7 @@ use crate::{
         MenuInstance, MenuProvider, SyncPlayerInv,
         container::Container,
         crafting::ResultContainer,
-        lock::ContainerRef,
+        lock::{ContainerId, ContainerRef},
         menu::{Menu, MenuBehavior},
         simple_menu::SimpleContainer,
         slots::{
@@ -110,8 +110,16 @@ impl AnvilMenu {
 
         add_standard_inventory_slots(&mut menu_slots, &inventory);
 
-        let mut behavior =
-            MenuBehavior::new(menu_slots, container_id, Some(vanilla_menu_types::ANVIL));
+        let mut behavior = MenuBehavior::new(
+            menu_slots,
+            container_id,
+            Some(vanilla_menu_types::ANVIL),
+            vec![
+                container_ref.clone(),
+                ContainerRef::ResultContainer(result_container.clone()),
+                ContainerRef::PlayerInventory(inventory.clone()),
+            ],
+        );
         behavior.add_data_slot(0);
 
         Self {
@@ -129,14 +137,19 @@ impl AnvilMenu {
     ///
     ///# Panics
     /// if the input container doesnt have the shape 1x2
-    #[tracing::instrument(skip(self, player), level = "info", fields(player = %player.gameprofile.name))]
+    #[tracing::instrument(skip(self, player, guard), level = "info", fields(player = %player.gameprofile.name))]
     #[expect(clippy::too_many_lines, reason = "not my choice its so long .-.")]
-    pub fn create_result(&mut self, player: &Player) {
-        let mut input_container = self.input_container.lock();
-        let [first, second] = input_container
-            .items_mut()
-            .get_disjoint_mut([0, 1])
-            .expect("failed to get");
+    pub fn create_result(&mut self, guard: &mut ContainerLockGuard, player: &Player) {
+        let Some([input_container, result_container]) = guard.get_disjoint_mut([
+            ContainerId::from_arc(&self.input_container),
+            ContainerId::from_arc(&self.result_container),
+        ]) else {
+            panic!("failed to lock input and/or result containers to create anvil result")
+        };
+
+        let [first, second] = input_container.items() else {
+            panic!("input_container in anvil menu does not fit expected shape")
+        };
 
         let mut additional_cost = 0_u32;
         let mut rename_cost = 0_i32;
@@ -144,7 +157,7 @@ impl AnvilMenu {
         self.level_cost.store(0, Ordering::Relaxed);
 
         if first.is_empty() || !Self::can_store_enchantments(first) {
-            self.result_container.lock().set_item(0, ItemStack::empty());
+            result_container.set_item(0, ItemStack::empty());
             self.behavior.set_data(0, 0);
             self.level_cost.store(0, Ordering::Relaxed);
             return;
@@ -164,7 +177,7 @@ impl AnvilMenu {
                 let mut repair_per_unit =
                     result.get_damage_value().min(result.get_max_damage() / 4);
                 if repair_per_unit <= 0 {
-                    self.result_container.lock().set_item(0, ItemStack::empty());
+                    result_container.set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
                     return;
                 }
@@ -184,7 +197,7 @@ impl AnvilMenu {
                 if !has_stored_enchantments
                     && (!result.is(second.item) || !result.is_damageable_item())
                 {
-                    self.result_container.lock().set_item(0, ItemStack::empty());
+                    result_container.set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
                     self.level_cost.store(0, Ordering::Relaxed);
                     return;
@@ -263,7 +276,7 @@ impl AnvilMenu {
                 }
 
                 if any_incompatible && !any_compatible {
-                    self.result_container.lock().set_item(0, ItemStack::empty());
+                    result_container.set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
                     self.level_cost.store(0, Ordering::Relaxed);
                     return;
@@ -321,7 +334,7 @@ impl AnvilMenu {
             result.set_enchantments(enchantments.iter(), false);
         }
 
-        self.result_container.lock().set_item(0, result.clone());
+        result_container.set_item(0, result.clone());
     }
 
     /// Sets the item name of the item
@@ -339,7 +352,11 @@ impl AnvilMenu {
             }
         }
 
-        self.create_result(player);
+        {
+            let mut guard = self.behavior.lock_all_containers();
+
+            self.create_result(&mut guard, player);
+        }
         self.behavior.broadcast_changes(&player.connection);
     }
 
@@ -458,6 +475,7 @@ impl Menu for AnvilMenu {
     }
 
     fn removed(&mut self, player: &Player) {
+        // TODO: this needs to be called before the server closes or the items inside will be deleted
         let carried = mem::take(&mut self.behavior.carried);
 
         if !carried.is_empty() {
@@ -478,8 +496,14 @@ impl Menu for AnvilMenu {
 
         self.result_container.lock().set_item(0, ItemStack::empty());
     }
-    fn slots_changed(&mut self, _slot_index: usize, player: &Player) {
-        self.create_result(player);
+
+    fn slots_changed(
+        &mut self,
+        guard: &mut ContainerLockGuard,
+        _slot_index: usize,
+        player: &Player,
+    ) {
+        self.create_result(guard, player);
     }
 }
 

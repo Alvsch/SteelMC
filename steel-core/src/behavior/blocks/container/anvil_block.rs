@@ -28,6 +28,7 @@ impl AnvilBlock {
         Self { block }
     }
 
+    #[must_use]
     pub fn damage(state: BlockStateId) -> Option<BlockStateId> {
         let block = state.get_block();
         if block == vanilla_blocks::ANVIL {

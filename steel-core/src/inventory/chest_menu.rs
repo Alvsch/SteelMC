@@ -122,6 +122,10 @@ impl ChestMenu {
                 menu_slots,
                 container_id,
                 Some(Self::menu_type_for_rows(rows)),
+                vec![
+                    container.clone(),
+                    ContainerRef::PlayerInventory(inventory.clone()),
+                ],
             ),
             container,
             rows,
@@ -362,7 +366,7 @@ impl MenuProvider for ChestMenuProvider {
         self.title.clone()
     }
 
-    fn create(&self, container_id: u8, world: &Arc<World>) -> Box<dyn MenuInstance> {
+    fn create(&self, container_id: u8, _world: &Arc<World>) -> Box<dyn MenuInstance> {
         Box::new(ChestMenu::new(
             self.inventory.clone(),
             container_id,

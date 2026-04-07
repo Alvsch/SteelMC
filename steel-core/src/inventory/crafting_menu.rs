@@ -20,7 +20,7 @@ use crate::inventory::slots::slot::{
     Slot, SlotType, SyncCraftingContainer, SyncResultContainer, add_standard_inventory_slots,
 };
 use crate::inventory::slots::{
-    CraftingHandler, ProcessingInputSlot, ProcessingResultSlot, RecipeHandlerType,
+    CraftingHandler, NormalSlot, ProcessingResultSlot, RecipeHandler, RecipeHandlerType,
 };
 use crate::inventory::{
     SyncPlayerInv,
@@ -64,6 +64,7 @@ pub struct CraftingMenu {
     result_container: SyncResultContainer,
     /// The position of the crafting table block.
     block_pos: BlockPos,
+    handler: CraftingHandler,
 }
 
 impl CraftingMenu {
@@ -90,18 +91,17 @@ impl CraftingMenu {
         ));
 
         // Slot 0: Crafting result
-        menu_slots.push(SlotType::ProcessingResultSlot(ProcessingResultSlot {
-            container_ref: ContainerRef::ResultContainer(result_container.clone()),
-            handler: handler.clone(),
-        }));
+        menu_slots.push(SlotType::ProcessingResultSlot(ProcessingResultSlot::new(
+            ContainerRef::ResultContainer(result_container.clone()),
+            handler.clone(),
+        )));
 
         // Slots 1-9: 3x3 Crafting grid
         for i in 0..9 {
-            menu_slots.push(SlotType::ProcessingInputSlot(ProcessingInputSlot {
-                container_ref: ContainerRef::CraftingContainer(crafting_container.clone()),
-                handler: handler.clone(),
-                index: i,
-            }));
+            menu_slots.push(SlotType::Normal(NormalSlot::new(
+                ContainerRef::CraftingContainer(crafting_container.clone()),
+                i,
+            )));
         }
 
         // Slots 10-45: Standard inventory (main inventory + hotbar)
@@ -112,10 +112,16 @@ impl CraftingMenu {
                 menu_slots,
                 container_id,
                 Some(vanilla_menu_types::CRAFTING),
+                vec![
+                    ContainerRef::CraftingContainer(crafting_container.clone()),
+                    ContainerRef::ResultContainer(result_container.clone()),
+                    ContainerRef::PlayerInventory(inventory.clone()),
+                ],
             ),
-            crafting_container,
-            result_container,
+            crafting_container: crafting_container.clone(),
+            result_container: result_container.clone(),
             block_pos,
+            handler: CraftingHandler::new(crafting_container, result_container, 3),
         }
     }
 
@@ -336,6 +342,15 @@ impl Menu for CraftingMenu {
 
         // Clear the result slot (it's virtual, just clear it)
         self.result_container.lock().set_item(0, ItemStack::empty());
+    }
+
+    fn slots_changed(
+        &mut self,
+        guard: &mut ContainerLockGuard,
+        _slot_index: usize,
+        _player: &Player,
+    ) {
+        self.handler.update_result(guard);
     }
 }
 

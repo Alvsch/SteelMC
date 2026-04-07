@@ -295,7 +295,6 @@ impl JavaConnection {
 
                 let span = info_span!("SRenameItem packet received", name = packet.name);
                 let _ = span.enter();
-                tracing::info!("SRenameItem packet received");
                 let Some(open_menu) = &mut *lock else {
                     log::error!("failed to get open_menu out of the lock? maybe its empty");
                     return Err(PacketError::Other("asdf".to_string()));

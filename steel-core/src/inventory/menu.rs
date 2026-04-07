@@ -312,12 +312,18 @@ pub struct MenuBehavior {
     data_slots: Vec<i16>,
     /// The client's perception of the data slot values.
     remote_data_slots: Vec<i16>,
+    container_refs: Vec<ContainerRef>,
 }
 
 impl MenuBehavior {
     /// Creates a new menu behavior with the given slots.
     #[must_use]
-    pub fn new(slots: Vec<SlotType>, container_id: u8, menu_type: Option<MenuTypeRef>) -> Self {
+    pub fn new(
+        slots: Vec<SlotType>,
+        container_id: u8,
+        menu_type: Option<MenuTypeRef>,
+        container_refs: Vec<ContainerRef>,
+    ) -> Self {
         let slot_count = slots.len();
         Self {
             slots,
@@ -334,30 +340,14 @@ impl MenuBehavior {
             quickcraft_slots: Vec::new(),
             data_slots: Vec::new(),
             remote_data_slots: Vec::new(),
+            container_refs,
         }
-    }
-
-    /// Collects all unique container references from the slots.
-    #[must_use]
-    pub fn collect_container_refs(&self) -> Vec<ContainerRef> {
-        let mut refs = Vec::new();
-        for slot in &self.slots {
-            for container_ref in slot.all_container_refs() {
-                let id = container_ref.container_id();
-                if !refs.iter().any(|r: &ContainerRef| r.container_id() == id) {
-                    refs.push(container_ref);
-                }
-            }
-        }
-        refs
     }
 
     /// Locks all containers referenced by slots in this menu.
     #[must_use]
     pub fn lock_all_containers(&self) -> ContainerLockGuard {
-        let refs = self.collect_container_refs();
-        let ref_refs: Vec<&ContainerRef> = refs.iter().collect();
-        ContainerLockGuard::lock_all(&ref_refs)
+        ContainerLockGuard::lock_all(&self.container_refs)
     }
 
     /// Adds a data slot to the menu with an initial value.
@@ -1245,7 +1235,8 @@ pub trait Menu {
             }
         }
         if slot_num >= 0 && (slot_num as usize) < self.behavior().slots.len() {
-            self.slots_changed(slot_num as usize, player);
+            let mut guard = self.behavior().lock_all_containers();
+            self.slots_changed(&mut guard, slot_num as usize, player);
         }
     }
 
@@ -1457,5 +1448,12 @@ pub trait Menu {
         }
     }
 
-    fn slots_changed(&mut self, _slot_index: usize, _player: &Player) {}
+    #[expect(unused_variables, reason = "trait method")]
+    fn slots_changed(
+        &mut self,
+        guard: &mut ContainerLockGuard,
+        slot_index: usize,
+        player: &Player,
+    ) {
+    }
 }

@@ -14,13 +14,12 @@ use steel_utils::locks::SyncMutex;
 
 use crate::inventory::SyncPlayerInv;
 use crate::inventory::crafting::{CraftingContainer, ResultContainer};
-use crate::inventory::lock::{ContainerId, ContainerLockGuard, ContainerRef};
+use crate::inventory::lock::{ContainerId, ContainerLockGuard};
 use crate::inventory::simple_menu::SimpleContainer;
+use crate::inventory::slots::anvil_slots::AnvilInputSlot;
 use crate::inventory::slots::armor_slot::ArmorSlot;
 use crate::inventory::slots::normal_slot::NormalSlot;
-use crate::inventory::slots::{
-    AnvilInputSlot, AnvilResultSlot, ProcessingInputSlot, ProcessingResultSlot,
-};
+use crate::inventory::slots::{AnvilResultSlot, ProcessingResultSlot};
 use crate::player::Player;
 
 /// A synchronized crafting container.
@@ -205,8 +204,6 @@ pub enum SlotType {
     Normal(NormalSlot),
     /// Armor slot that only accepts armor items.
     Armor(ArmorSlot),
-    /// Crafting grid slot for crafting input.
-    ProcessingInputSlot(ProcessingInputSlot),
     /// Crafting result slot (fake, doesn't persist items).
     ProcessingResultSlot(ProcessingResultSlot),
     /// Anvil result slot (fake, doesn't persist items).
@@ -216,22 +213,6 @@ pub enum SlotType {
 }
 
 impl SlotType {
-    /// Returns all container references for this slot.
-    /// For most slots this is just one container, but crafting slots
-    /// reference both the crafting grid and result containers.
-    #[must_use]
-    pub fn all_container_refs(&self) -> Vec<ContainerRef> {
-        match self {
-            SlotType::Normal(s) => vec![s.container_ref()],
-            SlotType::Armor(s) => vec![s.container_ref()],
-
-            SlotType::AnvilResult(s) => vec![s.input_container_ref(), s.result_container_ref()],
-            SlotType::AnvilInput(s) => vec![s.input_container_ref(), s.result_container_ref()],
-            SlotType::ProcessingInputSlot(s) => vec![s.container_ref()],
-            SlotType::ProcessingResultSlot(s) => vec![s.container_ref()],
-        }
-    }
-
     /// Returns the primary container ID and container slot index for this slot.
     /// Used for matching slots between menus when transferring state.
     ///

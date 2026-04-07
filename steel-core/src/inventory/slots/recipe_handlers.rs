@@ -29,64 +29,20 @@ pub enum RecipeHandlerType {
     // Loom(LoomHandler),
 }
 
-pub struct ProcessingInputSlot {
-    pub container_ref: ContainerRef,
-    pub index: usize,
-    pub handler: RecipeHandlerType,
-}
-
-impl ProcessingInputSlot {
-    pub fn container_ref(&self) -> ContainerRef {
-        self.container_ref.clone()
-    }
-}
-
-impl Slot for ProcessingInputSlot {
-    fn get_item<'a>(&self, guard: &'a ContainerLockGuard) -> &'a ItemStack {
-        guard
-            .get(self.container_ref.container_id())
-            .expect("container_ref should exist in guard")
-            .get_item(self.index)
-    }
-
-    fn set_item(&self, guard: &mut ContainerLockGuard, stack: ItemStack) {
-        guard
-            .get_mut(self.container_ref.container_id())
-            .expect("container_ref should exist in guard")
-            .set_item(self.index, stack);
-        self.handler.update_result(guard);
-    }
-
-    fn set_changed(&self, guard: &mut ContainerLockGuard) {
-        guard
-            .get_mut(self.container_ref.container_id())
-            .expect("container_ref should exist in guard")
-            .set_changed();
-        self.handler.update_result(guard);
-    }
-
-    fn get_item_mut<'a>(&self, guard: &'a mut ContainerLockGuard) -> &'a mut ItemStack {
-        guard
-            .get_mut(self.container_ref.container_id())
-            .expect("container_ref should exist in guard")
-            .get_item_mut(self.index)
-    }
-
-    fn get_max_stack_size(&self, _guard: &ContainerLockGuard) -> i32 {
-        64
-    }
-
-    fn get_container_slot(&self) -> usize {
-        self.index
-    }
-}
-
 pub struct ProcessingResultSlot {
-    pub container_ref: ContainerRef,
-    pub handler: RecipeHandlerType,
+    container_ref: ContainerRef,
+    handler: RecipeHandlerType,
 }
 
 impl ProcessingResultSlot {
+    #[must_use]
+    pub const fn new(container_ref: ContainerRef, handler: RecipeHandlerType) -> Self {
+        Self {
+            container_ref,
+            handler,
+        }
+    }
+
     #[must_use]
     pub fn container_ref(&self) -> ContainerRef {
         self.container_ref.clone()

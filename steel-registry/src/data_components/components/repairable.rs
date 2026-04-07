@@ -128,14 +128,7 @@ impl HashComponent for Repairable {
 mod tests {
     use steel_utils::{Identifier, hash::HashComponent};
 
-    use crate::{RegistryExt, data_components::Repairable, items::ItemRegistry, vanilla_items};
-
-    fn create_test_registry() -> ItemRegistry {
-        let mut registry = ItemRegistry::new();
-        vanilla_items::register_items(&mut registry);
-        registry.freeze();
-        registry
-    }
+    use crate::data_components::Repairable;
 
     #[test]
     fn test_repairable_item() {
