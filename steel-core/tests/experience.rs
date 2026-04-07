@@ -126,6 +126,53 @@ fn add_and_subtract_points() {
 }
 
 #[test]
+fn add_and_subtract_levels() {
+    for start_levels in [0, 1, 5, 10, 20, 30, 50] {
+        let mut xp = Experience::new(Experience::total_points_at_level(start_levels));
+        assert_eq!(xp.level(), start_levels, "initial level mismatch");
+
+        xp.add_levels(3);
+        assert_eq!(
+            xp.level(),
+            start_levels + 3,
+            "from level {start_levels}: add 3 -> {}, expected {}",
+            xp.level(),
+            start_levels + 3
+        );
+
+        xp.add_levels(-3);
+        assert_eq!(
+            xp.level(),
+            start_levels,
+            "from level {}: subtract 3 -> {}, expected {start_levels}",
+            start_levels + 3,
+            xp.level(),
+        );
+    }
+
+    // Subtracting more levels than we have should clamp to 0
+    for start_levels in [0, 1, 5, 10] {
+        let mut xp = Experience::new(Experience::total_points_at_level(start_levels));
+        xp.add_levels(-999);
+        assert_eq!(
+            xp.level(),
+            0,
+            "from level {start_levels}: add -999 -> {}, expected 0",
+            xp.level()
+        );
+    }
+
+    // Adding levels preserves no fractional progress
+    let mut xp = Experience::new(Experience::total_points_at_level(10));
+    xp.add_levels(5);
+    assert_eq!(xp.level(), 15);
+    assert!(
+        xp.progress() == 0.0,
+        "level progress should be 0 after add_levels",
+    );
+}
+
+#[test]
 fn add_levels_preserves_progress() {
     for base_level in [0, 5, 15, 29, 30, 50] {
         let base = Experience::total_points_at_level(base_level);

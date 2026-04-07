@@ -113,7 +113,7 @@ impl AnvilMenu {
         let mut behavior = MenuBehavior::new(
             menu_slots,
             container_id,
-            Some(vanilla_menu_types::ANVIL),
+            Some(&vanilla_menu_types::ANVIL),
             vec![
                 container_ref.clone(),
                 ContainerRef::ResultContainer(result_container.clone()),
@@ -509,7 +509,7 @@ impl Menu for AnvilMenu {
 
 impl MenuInstance for AnvilMenu {
     fn menu_type(&self) -> MenuTypeRef {
-        vanilla_menu_types::ANVIL
+        &vanilla_menu_types::ANVIL
     }
 
     fn container_id(&self) -> u8 {

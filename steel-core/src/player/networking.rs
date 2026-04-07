@@ -299,7 +299,7 @@ impl JavaConnection {
                     log::error!("failed to get open_menu out of the lock? maybe its empty");
                     return Err(PacketError::Other("asdf".to_string()));
                 };
-                if open_menu.menu_type() == vanilla_menu_types::ANVIL
+                if open_menu.menu_type() == &vanilla_menu_types::ANVIL
                     && open_menu.still_valid()
                     && let Some(anvil_menu) = open_menu.as_any_mut().downcast_mut::<AnvilMenu>()
                 {
@@ -307,7 +307,7 @@ impl JavaConnection {
                 } else {
                     log::error!(
                         "maybe downcast failed? anvil_menu_type = {}; still_valid = {}",
-                        open_menu.menu_type() == vanilla_menu_types::ANVIL,
+                        open_menu.menu_type() == &vanilla_menu_types::ANVIL,
                         open_menu.still_valid()
                     );
                 }

@@ -31,13 +31,13 @@ impl AnvilBlock {
     #[must_use]
     pub fn damage(state: BlockStateId) -> Option<BlockStateId> {
         let block = state.get_block();
-        if block == vanilla_blocks::ANVIL {
+        if block == &vanilla_blocks::ANVIL {
             Some(
                 vanilla_blocks::CHIPPED_ANVIL
                     .default_state()
                     .copy_value(&BlockStateProperties::FACING, &state),
             )
-        } else if block == vanilla_blocks::CHIPPED_ANVIL {
+        } else if block == &vanilla_blocks::CHIPPED_ANVIL {
             Some(
                 vanilla_blocks::DAMAGED_ANVIL
                     .default_state()

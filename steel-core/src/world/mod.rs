@@ -431,13 +431,13 @@ impl World {
     #[must_use]
     pub fn get_block_state(&self, pos: BlockPos) -> BlockStateId {
         if !self.is_in_valid_bounds(pos) {
-            return REGISTRY.blocks.get_base_state_id(vanilla_blocks::AIR);
+            return REGISTRY.blocks.get_base_state_id(&vanilla_blocks::AIR);
         }
 
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
             .with_full_chunk(chunk_pos, |chunk| chunk.get_block_state(pos))
-            .unwrap_or_else(|| REGISTRY.blocks.get_base_state_id(vanilla_blocks::AIR))
+            .unwrap_or_else(|| REGISTRY.blocks.get_base_state_id(&vanilla_blocks::AIR))
     }
 
     /// Sets a block at the given position.
@@ -559,7 +559,7 @@ impl World {
         let current_state = self.get_block_state(pos);
 
         if flags.contains(UpdateFlags::UPDATE_SKIP_SHAPE_UPDATE_ON_WIRE)
-            && current_state.get_block() == vanilla_blocks::REDSTONE_WIRE
+            && current_state.get_block() == &vanilla_blocks::REDSTONE_WIRE
         {
             return;
         }
@@ -689,7 +689,7 @@ impl World {
             self.tick_time();
         }
 
-        let random_tick_speed = self.get_game_rule(RANDOM_TICK_SPEED).as_int().unwrap_or(3) as u32;
+        let random_tick_speed = self.get_game_rule(&RANDOM_TICK_SPEED).as_int().unwrap_or(3) as u32;
 
         let chunk_map_timings =
             self.chunk_map
@@ -734,7 +734,7 @@ impl World {
             let mut level_data = self.level_data.write();
 
             if self
-                .get_game_rule_with_guard(ADVANCE_WEATHER, &level_data)
+                .get_game_rule_with_guard(&ADVANCE_WEATHER, &level_data)
                 .as_bool()
                 .expect("gamerule `ADVANCE_WEATHER` should always be a boolean.")
             {
@@ -982,7 +982,7 @@ impl World {
     /// then sends an update to all clients in this world every 20th tick.
     fn tick_time(&self) {
         let advance_time = self
-            .get_game_rule(ADVANCE_TIME)
+            .get_game_rule(&ADVANCE_TIME)
             .as_bool()
             .expect("gamerule advance_time should always be a bool.");
 
@@ -1700,7 +1700,7 @@ impl World {
         }
 
         let block = state.get_block();
-        let is_fire = block == vanilla_blocks::FIRE || block == vanilla_blocks::SOUL_FIRE;
+        let is_fire = block == &vanilla_blocks::FIRE || block == &vanilla_blocks::SOUL_FIRE;
         if !is_fire {
             self.destroy_block_effect(pos, u32::from(state.0), None);
         }
@@ -1985,7 +1985,7 @@ impl World {
         }
 
         // Respect doTileDrops gamerule
-        if !self.get_game_rule(BLOCK_DROPS).as_bool().unwrap_or(true) {
+        if !self.get_game_rule(&BLOCK_DROPS).as_bool().unwrap_or(true) {
             return None;
         }
 

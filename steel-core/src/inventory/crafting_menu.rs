@@ -111,7 +111,7 @@ impl CraftingMenu {
             behavior: MenuBehavior::new(
                 menu_slots,
                 container_id,
-                Some(vanilla_menu_types::CRAFTING),
+                Some(&vanilla_menu_types::CRAFTING),
                 vec![
                     ContainerRef::CraftingContainer(crafting_container.clone()),
                     ContainerRef::ResultContainer(result_container.clone()),
@@ -128,7 +128,7 @@ impl CraftingMenu {
     /// Returns the menu type for the crafting table.
     #[must_use]
     pub fn menu_type() -> MenuTypeRef {
-        vanilla_menu_types::CRAFTING
+        &vanilla_menu_types::CRAFTING
     }
 
     /// Returns a reference to the crafting container.
@@ -356,7 +356,7 @@ impl Menu for CraftingMenu {
 
 impl MenuInstance for CraftingMenu {
     fn menu_type(&self) -> MenuTypeRef {
-        vanilla_menu_types::CRAFTING
+        &vanilla_menu_types::CRAFTING
     }
 
     fn container_id(&self) -> u8 {
