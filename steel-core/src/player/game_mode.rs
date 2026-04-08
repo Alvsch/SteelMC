@@ -9,7 +9,8 @@ use steel_registry::REGISTRY;
 use steel_utils::types::{GameType, InteractionHand};
 
 use crate::behavior::{
-    BLOCK_BEHAVIORS, BlockHitResult, ITEM_BEHAVIORS, InteractionResult, UseOnContext,
+    BLOCK_BEHAVIORS, BlockHitResult, ITEM_BEHAVIORS, InteractionResult, InventoryAccess,
+    UseOnContext,
 };
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::player::Player;
@@ -62,11 +63,20 @@ pub fn use_item_on(
         };
         let behavior = block_behaviors.get_behavior(block);
 
-        // Brief lock for an immutable snapshot used during block interaction check
-        let item_snapshot = player.inventory.lock().get_item_in_hand(hand).clone();
+        let inv_ref = ContainerRef::PlayerInventory(player.inventory.clone());
+        let mut guard = ContainerLockGuard::lock_all(&[&inv_ref]);
+        let inv_id = inv_ref.container_id();
+        let mut inventory_access = InventoryAccess::new(&mut guard, hand, inv_id);
 
-        let block_result =
-            behavior.use_item_on(&item_snapshot, state, world, pos, player, hand, hit_result);
+        let block_result = behavior.use_item_on(
+            state,
+            world,
+            pos,
+            player,
+            hand,
+            hit_result,
+            &mut inventory_access,
+        );
 
         if block_result.consumes_action() {
             return block_result;
@@ -75,7 +85,14 @@ pub fn use_item_on(
         if matches!(block_result, InteractionResult::TryEmptyHandInteraction)
             && hand == InteractionHand::MainHand
         {
-            let empty_result = behavior.use_without_item(state, world, pos, player, hit_result);
+            let empty_result = behavior.use_without_item(
+                state,
+                world,
+                pos,
+                player,
+                hit_result,
+                &mut inventory_access,
+            );
 
             if empty_result.consumes_action() {
                 return empty_result;

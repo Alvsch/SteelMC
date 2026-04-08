@@ -16,8 +16,8 @@ pub use building::{
 };
 pub use container::{AnvilBlock, BarrelBlock, CraftingTableBlock};
 pub use decoration::{
-    CandleBlock, CeilingHangingSignBlock, StandingSignBlock, TorchBlock, WallHangingSignBlock,
-    WallSignBlock, WallTorchBlock,
+    CakeBlock, CandleBlock, CandleCakeBlock, CeilingHangingSignBlock, StandingSignBlock,
+    TorchBlock, WallHangingSignBlock, WallSignBlock, WallTorchBlock,
 };
 pub use farming::{CactusBlock, CactusFlowerBlock, CropBlock, FarmlandBlock};
 pub use fluid::LiquidBlock;

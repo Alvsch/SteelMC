@@ -32,7 +32,8 @@ use std::{
 use steel_crypto::key_store::KeyStore;
 use steel_protocol::packet_traits::EncodedPacket;
 use steel_protocol::packets::game::{
-    CEntityEvent, CLogin, CSystemChat, CTabList, CTickingState, CTickingStep, CommonPlayerSpawnInfo,
+    CEntityEvent, CGameEvent, CLogin, CSetHeldSlot, CSystemChat, CTabList, CTickingState,
+    CTickingStep, CommonPlayerSpawnInfo, GameEventType,
 };
 use steel_registry::dimension_type::DimensionTypeRef;
 use steel_registry::game_rules::GameRuleValue;
@@ -243,6 +244,40 @@ impl Server {
             },
             enforces_secure_chat: STEEL_CONFIG.enforce_secure_chat,
         });
+
+        // Send player abilities (flight, invulnerability, etc.)
+        player.send_abilities();
+
+        // Send current world difficulty to the client
+        player.send_difficulty();
+
+        player.send_packet(CSetHeldSlot {
+            slot: i32::from(player.inventory.lock().get_selected_slot()),
+        });
+
+        if world.can_have_weather() {
+            let (rain_level, thunder_level) = {
+                let weather = world.weather.lock();
+                (weather.rain_level, weather.thunder_level)
+            };
+
+            if world.is_raining() {
+                player.send_packet(CGameEvent {
+                    event: GameEventType::StartRaining,
+                    data: 0.0,
+                });
+            }
+
+            player.send_packet(CGameEvent {
+                event: GameEventType::RainLevelChange,
+                data: rain_level,
+            });
+
+            player.send_packet(CGameEvent {
+                event: GameEventType::ThunderLevelChange,
+                data: thunder_level,
+            });
+        }
 
         let commands = self.command_dispatcher.read().get_commands();
         player.send_packet(commands);

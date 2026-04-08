@@ -116,7 +116,19 @@ pub struct InventoryAccess<'a> {
     inv_id: ContainerId,
 }
 
-impl InventoryAccess<'_> {
+impl<'a> InventoryAccess<'a> {
+    /// Creates a new `InventoryAccess` instance.
+    pub const fn new(
+        inv_guard: &'a mut ContainerLockGuard,
+        hand: InteractionHand,
+        inv_id: ContainerId,
+    ) -> Self {
+        Self {
+            inv_guard,
+            hand,
+            inv_id,
+        }
+    }
     /// Returns a mutable reference to the item in the player's hand.
     ///
     /// Cannot be held simultaneously with `inventory()` or `guard()`.

@@ -39,7 +39,6 @@ use steel_registry::{block_entity_type::BlockEntityTypeRef, vanilla_dimension_ty
 use steel_registry::{
     blocks::BlockRef, vanilla_game_rules::ADVANCE_TIME, vanilla_game_rules::ADVANCE_WEATHER,
 };
-
 use steel_utils::locks::{SyncMutex, SyncRwLock};
 
 /// Controls how a block position is treated during a raytrace traversal.
@@ -1155,14 +1154,7 @@ impl World {
     }
 
     /// Broadcasts an unsigned player chat message to all players.
-    pub fn broadcast_unsigned_chat(
-        &self,
-        mut packet: CPlayerChat,
-        sender_name: &str,
-        message: &str,
-    ) {
-        log::info!("<{sender_name}> {message}");
-
+    pub fn broadcast_unsigned_chat(&self, mut packet: CPlayerChat) {
         self.players.iter_players(|_, recipient| {
             let messages_received = recipient.get_and_increment_messages_received();
             packet.global_index = messages_received;

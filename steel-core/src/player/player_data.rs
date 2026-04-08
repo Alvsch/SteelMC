@@ -25,7 +25,6 @@ pub const PLAYER_DATA_VERSION: i32 = 1;
 ///
 /// # TODO: Missing vanilla fields
 /// The following fields should be added once their systems are implemented:
-/// - Food data: `foodLevel`, `foodSaturationLevel`, `foodExhaustionLevel`, `foodTickTimer`
 /// - Experience: `XpSeed`
 /// - Active potion effects: `active_effects` (List)
 /// - Score: `Score` (Int)
@@ -81,6 +80,22 @@ pub struct PersistentPlayerData {
     /// Dimension identifier (e.g., "minecraft:overworld").
     /// NBT tag: `Dimension` (String)
     pub dimension: String,
+
+    /// Current food level (0–20, default 20).
+    /// NBT tag: `foodLevel` (Int)
+    pub food_level: i32,
+
+    /// Food saturation level (0.0–`food_level`, default 5.0).
+    /// NBT tag: `foodSaturationLevel` (Float)
+    pub food_saturation_level: f32,
+
+    /// Accumulated food exhaustion (0.0–40.0, default 0.0).
+    /// NBT tag: `foodExhaustionLevel` (Float)
+    pub food_exhaustion_level: f32,
+
+    /// Internal tick timer for regen/starvation (default 0).
+    /// NBT tag: `foodTickTimer` (Int)
+    pub food_tick_timer: i32,
 
     /// Data version for format migrations.
     /// NBT tag: `DataVersion` (Int)
@@ -147,6 +162,7 @@ impl PersistentPlayerData {
         let abilities = player.abilities.lock();
         let inventory = player.inventory.lock();
         let entity_data = player.entity_data.lock();
+        let food_data = player.food_data.lock();
 
         // Collect non-empty inventory slots
         let mut slots = Vec::new();
@@ -192,6 +208,10 @@ impl PersistentPlayerData {
             inventory: slots,
             selected_slot: i32::from(inventory.get_selected_slot()),
             dimension: player.get_world().dimension.key.to_string(),
+            food_level: food_data.food_level,
+            food_saturation_level: food_data.saturation_level,
+            food_exhaustion_level: food_data.exhaustion_level,
+            food_tick_timer: food_data.tick_timer,
             data_version: PLAYER_DATA_VERSION,
             experience_level,
             experience_progress,
@@ -236,6 +256,12 @@ impl PersistentPlayerData {
         compound.insert("SelectedItemSlot", self.selected_slot);
         compound.insert("Dimension", self.dimension.clone());
         compound.insert("DataVersion", self.data_version);
+
+        // Food data (vanilla-compatible keys)
+        compound.insert("foodLevel", self.food_level);
+        compound.insert("foodSaturationLevel", self.food_saturation_level);
+        compound.insert("foodExhaustionLevel", self.food_exhaustion_level);
+        compound.insert("foodTickTimer", self.food_tick_timer);
 
         // Abilities compound
         compound.insert("abilities", self.abilities.to_nbt());
@@ -315,6 +341,12 @@ impl PersistentPlayerData {
         );
         let data_version = nbt.int("DataVersion").unwrap_or(0);
 
+        // Food data (vanilla-compatible keys, with sane defaults)
+        let food_level = nbt.int("foodLevel").unwrap_or(20);
+        let food_saturation_level = nbt.float("foodSaturationLevel").unwrap_or(5.0);
+        let food_exhaustion_level = nbt.float("foodExhaustionLevel").unwrap_or(0.0);
+        let food_tick_timer = nbt.int("foodTickTimer").unwrap_or(0);
+
         // Abilities
         let abilities = nbt
             .compound("abilities")
@@ -352,6 +384,10 @@ impl PersistentPlayerData {
             inventory,
             selected_slot,
             dimension,
+            food_level,
+            food_saturation_level,
+            food_exhaustion_level,
+            food_tick_timer,
             data_version,
             experience_level,
             experience_progress,
@@ -488,6 +524,15 @@ impl PersistentPlayerData {
             // Restore selected slot
             let selected = self.selected_slot.clamp(0, 8) as u8;
             inventory.set_selected_slot(selected);
+        }
+
+        // Food data
+        {
+            let mut food = player.food_data.lock();
+            food.food_level = self.food_level;
+            food.saturation_level = self.food_saturation_level;
+            food.exhaustion_level = self.food_exhaustion_level;
+            food.tick_timer = self.food_tick_timer;
         }
 
         {
