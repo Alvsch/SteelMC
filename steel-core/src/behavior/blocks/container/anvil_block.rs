@@ -9,7 +9,7 @@ use steel_registry::{
 use steel_utils::BlockStateId;
 
 use crate::{
-    behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess},
+    behavior::{BlockBehavior, BlockPlaceContext, InteractionResult},
     inventory::anvil_menu::AnvilMenuProvider,
     player::Player,
     world::World,
@@ -65,7 +65,6 @@ impl BlockBehavior for AnvilBlock {
         pos: steel_utils::BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
-        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         player.open_menu(&AnvilMenuProvider::new(player.inventory.clone(), pos));
         InteractionResult::Success

@@ -172,7 +172,6 @@ pub trait BlockBehavior: Send + Sync {
         pos: BlockPos,
         player: &Player,
         hit_result: &BlockHitResult,
-        inv: &mut InventoryAccess,
     ) -> InteractionResult {
         InteractionResult::Pass
     }

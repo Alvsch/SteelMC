@@ -63,20 +63,22 @@ pub fn use_item_on(
         };
         let behavior = block_behaviors.get_behavior(block);
 
-        let inv_ref = ContainerRef::PlayerInventory(player.inventory.clone());
-        let mut guard = ContainerLockGuard::lock_all(&[&inv_ref]);
-        let inv_id = inv_ref.container_id();
-        let mut inventory_access = InventoryAccess::new(&mut guard, hand, inv_id);
+        let block_result = {
+            let inv_ref = ContainerRef::PlayerInventory(player.inventory.clone());
+            let mut guard = ContainerLockGuard::lock_all(&[&inv_ref]);
+            let inv_id = inv_ref.container_id();
+            let mut inventory_access = InventoryAccess::new(&mut guard, hand, inv_id);
 
-        let block_result = behavior.use_item_on(
-            state,
-            world,
-            pos,
-            player,
-            hand,
-            hit_result,
-            &mut inventory_access,
-        );
+            behavior.use_item_on(
+                state,
+                world,
+                pos,
+                player,
+                hand,
+                hit_result,
+                &mut inventory_access,
+            )
+        };
 
         if block_result.consumes_action() {
             return block_result;
@@ -85,14 +87,7 @@ pub fn use_item_on(
         if matches!(block_result, InteractionResult::TryEmptyHandInteraction)
             && hand == InteractionHand::MainHand
         {
-            let empty_result = behavior.use_without_item(
-                state,
-                world,
-                pos,
-                player,
-                hit_result,
-                &mut inventory_access,
-            );
+            let empty_result = behavior.use_without_item(state, world, pos, player, hit_result);
 
             if empty_result.consumes_action() {
                 return empty_result;

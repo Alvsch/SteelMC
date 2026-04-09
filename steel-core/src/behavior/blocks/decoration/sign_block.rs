@@ -16,7 +16,6 @@ use steel_registry::vanilla_blocks;
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId};
 
-use crate::behavior::InventoryAccess;
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
 use crate::block_entity::SharedBlockEntity;
@@ -349,7 +348,6 @@ impl BlockBehavior for StandingSignBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
-        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         try_open_sign_editor(state, world, pos, player)
     }
@@ -438,7 +436,6 @@ impl BlockBehavior for WallSignBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
-        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         try_open_sign_editor(state, world, pos, player)
     }
@@ -561,7 +558,6 @@ impl BlockBehavior for CeilingHangingSignBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
-        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         try_open_sign_editor(state, world, pos, player)
     }
@@ -668,7 +664,6 @@ impl BlockBehavior for WallHangingSignBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
-        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         try_open_sign_editor(state, world, pos, player)
     }

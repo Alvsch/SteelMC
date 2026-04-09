@@ -17,7 +17,6 @@ use steel_utils::math::Axis;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
-use crate::behavior::InventoryAccess;
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
 use crate::player::Player;
@@ -155,7 +154,6 @@ impl BlockBehavior for ButtonBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
-        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         let powered: bool = state.get_value(&BlockStateProperties::POWERED);
         if powered {

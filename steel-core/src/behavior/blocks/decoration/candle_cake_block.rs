@@ -95,7 +95,6 @@ impl BlockBehavior for CandleCakeBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
-        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         let result = CakeBlock::eat(world, pos, vanilla_blocks::CAKE.default_state(), player);
         if result.consumes_action() {
