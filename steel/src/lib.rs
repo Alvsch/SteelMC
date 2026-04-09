@@ -52,7 +52,7 @@ impl SteelServer {
         Self {
             tcp_listener: TcpListener::bind(SocketAddrV4::new(
                 Ipv4Addr::UNSPECIFIED,
-                STEEL_CONFIG.server_config.server_port,
+                STEEL_CONFIG.server.server_port,
             ))
             .await
             .expect("Failed to bind to server address"),

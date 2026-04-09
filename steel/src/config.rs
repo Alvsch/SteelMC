@@ -16,21 +16,20 @@ pub use steel_core::config::{ConfigLabel, ConfigLink, ServerConfig, ServerConfig
 const DEFAULT_FAVICON: &[u8] = include_bytes!("../../package-content/favicon.png");
 const ICON_PREFIX: &str = "data:image/png;base64,";
 
-const DEFAULT_CONFIG: &str = include_str!("../../package-content/steel_config.json5");
+const DEFAULT_CONFIG: &str = include_str!("../../package-content/config.toml");
 
 /// The server configuration.
 ///
-/// This is loaded from `config/steel_config.json5` or created if it doesn't exist.
+/// This is loaded from `config/config.toml` or created if it doesn't exist.
 pub static STEEL_CONFIG: LazyLock<ExtendedConfig> =
-    LazyLock::new(|| load_or_create(Path::new("config/steel_config.json5")));
+    LazyLock::new(|| load_or_create(Path::new("config/config.toml")));
 
-/// A extended configuration for non-server features
+/// Top-level configuration, grouping server settings and logging.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExtendedConfig {
-    /// The full server configuration
-    #[serde(flatten)]
-    pub server_config: ServerConfig,
-    /// Logging configuration
+    /// The full server configuration (`[server]` section)
+    pub server: ServerConfig,
+    /// Logging configuration (`[log]` section)
     pub log: Option<LogConfig>,
 }
 
@@ -69,26 +68,26 @@ fn load_or_create(path: &Path) -> ExtendedConfig {
     let mut config = if path.exists() {
         let config_str = fs::read_to_string(path).expect("Failed to read config file");
         let config: ExtendedConfig =
-            serde_json5::from_str(config_str.as_str()).expect("Failed to parse config");
-        validate(&config.server_config).expect("Failed to validate config");
+            toml::from_str(config_str.as_str()).expect("Failed to parse config");
+        validate(&config.server).expect("Failed to validate config");
         config
     } else {
         fs::create_dir_all(path.parent().expect("Failed to get config directory"))
             .expect("Failed to create config directory");
         fs::write(path, DEFAULT_CONFIG).expect("Failed to write config file");
         let config: ExtendedConfig =
-            serde_json5::from_str(DEFAULT_CONFIG).expect("Failed to parse config");
-        validate(&config.server_config).expect("Failed to validate config");
+            toml::from_str(DEFAULT_CONFIG).expect("Failed to parse config");
+        validate(&config.server).expect("Failed to validate config");
         config
     };
 
     // Set the MC version (not loaded from config file)
-    config.server_config.mc_version = MC_VERSION;
+    config.server.mc_version = MC_VERSION;
 
     // If icon file doesnt exist, write it
     #[cfg(feature = "stand-alone")]
-    if config.server_config.use_favicon && !Path::new(&config.server_config.favicon).exists() {
-        fs::write(Path::new(&config.server_config.favicon), DEFAULT_FAVICON)
+    if config.server.use_favicon && !Path::new(&config.server.favicon).exists() {
+        fs::write(Path::new(&config.server.favicon), DEFAULT_FAVICON)
             .expect("Failed to write favicon file");
     }
 
@@ -168,5 +167,5 @@ pub fn load_favicon(config: &ServerConfig) -> Option<String> {
 /// This must be called before any steel-core code accesses `STEEL_CONFIG`.
 pub fn init_steel_core_config() {
     // Force config to load, then initialize steel-core's reference
-    ServerConfigRef::init(&STEEL_CONFIG.server_config);
+    ServerConfigRef::init(&STEEL_CONFIG.server);
 }
