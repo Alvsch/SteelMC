@@ -16,7 +16,6 @@ use crate::inventory::SyncPlayerInv;
 use crate::inventory::crafting::{CraftingContainer, ResultContainer};
 use crate::inventory::lock::{ContainerId, ContainerLockGuard};
 use crate::inventory::simple_menu::SimpleContainer;
-use crate::inventory::slots::anvil_slots::AnvilInputSlot;
 use crate::inventory::slots::armor_slot::ArmorSlot;
 use crate::inventory::slots::normal_slot::NormalSlot;
 use crate::inventory::slots::{AnvilResultSlot, ProcessingResultSlot};
@@ -208,8 +207,6 @@ pub enum SlotType {
     ProcessingResultSlot(ProcessingResultSlot),
     /// Anvil result slot (fake, doesn't persist items).
     AnvilResult(AnvilResultSlot),
-    /// Anvil result slot (fake, doesn't persist items).
-    AnvilInput(AnvilInputSlot),
 }
 
 impl SlotType {

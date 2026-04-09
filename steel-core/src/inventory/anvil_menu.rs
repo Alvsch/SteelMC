@@ -171,7 +171,7 @@ impl AnvilMenu {
             + i64::from(*second.get(REPAIR_COST).unwrap_or(&0));
 
         if !second.is_empty() {
-            let has_stored_enchantments = second.has(STORED_ENCHANTMENTS);
+            let has_stored_enchantments = second.has(STORED_ENCHANTMENTS); // TODO: STORED_ENCHANTMENTS is not yet implemented
 
             if result.is_damageable_item() && first.is_valid_repair_item(second.item) {
                 let mut repair_per_unit =
@@ -316,7 +316,7 @@ impl AnvilMenu {
             self.level_cost.store(39, Ordering::Relaxed);
         }
 
-        if total_cost >= 40 && !player.has_infinite_materials() {
+        if total_cost >= 40 && !only_renaming && !player.has_infinite_materials() {
             result = ItemStack::empty();
         }
 
