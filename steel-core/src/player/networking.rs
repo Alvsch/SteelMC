@@ -437,6 +437,8 @@ impl JavaConnection {
         }
 
         let player = self.player.upgrade().expect("Player is not available");
+        crate::plugin_api_send(crate::PluginApi::PlayerLeaveEvent(player.clone()));
+
         let world = player.get_world();
         world.remove_player(player).await;
     }

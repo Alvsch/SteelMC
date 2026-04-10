@@ -733,7 +733,7 @@ impl BoundingBox {
 }
 
 /// The game type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(missing_docs, reason = "variant names are self-explanatory")]
 pub enum GameType {
     Survival = 0,

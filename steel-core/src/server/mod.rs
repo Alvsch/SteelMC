@@ -296,6 +296,8 @@ impl Server {
         let rotation = player.rotation.load();
         player.reset(world, ResetReason::InitialJoin);
         player.spawn(pos, rotation, ResetReason::InitialJoin);
+
+        crate::plugin_api_send(crate::PluginApi::PlayerJoinEvent(player));
     }
 
     /// Gets all the players on the server
