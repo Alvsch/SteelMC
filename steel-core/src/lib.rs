@@ -6,7 +6,9 @@
 // Auto-trait (`Send`/`Sync`) proofs through the World/chunk type graph exceed the default depth of 128.
 #![recursion_limit = "256"]
 
-use crate::chunk::chunk_map::ChunkMap;
+use std::sync::{Arc, OnceLock};
+
+use crate::{chunk::chunk_map::ChunkMap, player::Player};
 
 pub mod behavior;
 pub mod block_entity;
@@ -38,3 +40,31 @@ pub mod worldgen;
 pub const GIT_HASH: &str = env!("GIT_HASH");
 /// The short hash of the commit this build was made from.
 pub const GIT_HASH_SHORT: &str = env!("GIT_HASH_SHORT");
+
+static PLUGIN_API: OnceLock<flume::Sender<PluginApi>> = OnceLock::new();
+
+pub(crate) fn plugin_api_send(event: PluginApi) {
+    if let Some(plugin_api) = PLUGIN_API.get() {
+        plugin_api.send(event).expect("channel is disconnected");
+    }
+}
+
+/// Events emitted by the core server for plugins.
+#[expect(missing_docs, reason = "variant names are self-explanatory")]
+#[derive(Clone)]
+pub enum PluginApi {
+    PlayerJoinEvent(Arc<Player>),
+    PlayerLeaveEvent(Arc<Player>),
+}
+
+/// Initialize the plugin api and get a receiver to all plugin api events
+///
+/// # Panics
+/// Panics if the plugin api is already initialized
+pub fn init_api() -> flume::Receiver<PluginApi> {
+    let (tx, rx) = flume::bounded(16);
+    PLUGIN_API
+        .set(tx)
+        .expect("plugin api can only be initialized once");
+    rx
+}

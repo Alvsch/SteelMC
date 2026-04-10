@@ -305,6 +305,10 @@ impl Server {
         }
         let previous_name = self.record_known_player(&player.gameprofile);
         self.broadcast_player_join_message(&player, previous_name.as_deref());
+
+        // PLUGIN API: PlayerJoinEvent
+        crate::plugin_api_send(crate::PluginApi::PlayerJoinEvent(Arc::clone(&player)));
+
         if player.mark_joined_world() {
             player.send_inventory_to_remote();
         }
@@ -541,6 +545,10 @@ impl Server {
         }
 
         self.broadcast_player_leave_message(&player);
+
+        // PLUGIN API: PlayerLeaveEvent
+        // crate::plugin_api_send(crate::PluginApi::PlayerLeaveEvent(Arc::clone(&player)));
+
         let _ = self.remove_online_player_sync(&player);
         self.broadcast_to_online(CRemovePlayerInfo { uuids: vec![uuid] });
         self.pending_player_disconnects
@@ -593,6 +601,10 @@ impl Server {
 
         // Vanilla broadcasts before removing the player from its global player list.
         self.broadcast_player_leave_message(&player);
+
+        // PLUGIN API: PlayerLeaveEvent
+        crate::plugin_api_send(crate::PluginApi::PlayerLeaveEvent(Arc::clone(&player)));
+
         let player = self.remove_online_player_sync(&player);
 
         let Some(player) = player else {

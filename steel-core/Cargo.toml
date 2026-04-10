@@ -39,6 +39,7 @@ wincode.workspace = true
 thiserror.workspace = true
 
 # Concurrency
+flume.workspace = true
 arc-swap.workspace = true
 crossbeam.workspace = true
 parking_lot.workspace = true
