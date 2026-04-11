@@ -18,7 +18,8 @@ use crate::{
         DataComponentType,
         vanilla_components::{
             CUSTOM_NAME, DAMAGE, ENCHANTMENTS, EQUIPPABLE, Equippable, EquippableSlot, ITEM_NAME,
-            ItemEnchantments, MAX_DAMAGE, MAX_STACK_SIZE, REPAIRABLE, TOOL, Tool, UNBREAKABLE,
+            ItemEnchantments, MAX_DAMAGE, MAX_STACK_SIZE, REPAIRABLE, STORED_ENCHANTMENTS, TOOL,
+            Tool, UNBREAKABLE,
         },
     },
     items::ItemRef,
@@ -394,7 +395,13 @@ impl ItemStack {
 
     #[must_use]
     pub fn get_enchantments(&self) -> Option<&ItemEnchantments> {
-        self.get(ENCHANTMENTS)
+        if self.has(STORED_ENCHANTMENTS) {
+            self.get(STORED_ENCHANTMENTS)
+        } else if self.has(ENCHANTMENTS) {
+            self.get(ENCHANTMENTS)
+        } else {
+            None
+        }
     }
 
     /// Sets the damage/durability as a fraction (0.0 = broken, 1.0 = full).
@@ -539,6 +546,7 @@ impl ItemStack {
         let mut current = self
             .get(ENCHANTMENTS)
             .cloned()
+            .or(self.get(STORED_ENCHANTMENTS).cloned())
             .unwrap_or_else(ItemEnchantments::empty);
 
         for (key, level) in enchantments {
@@ -550,7 +558,11 @@ impl ItemStack {
             }
         }
 
-        self.set(ENCHANTMENTS, current);
+        if self.has(STORED_ENCHANTMENTS) {
+            self.set(STORED_ENCHANTMENTS, current);
+        } else {
+            self.set(ENCHANTMENTS, current);
+        }
     }
 
     /// Vanilla `ItemStack.enchant` → `Mutable.upgrade`: keeps the higher of existing vs new level.

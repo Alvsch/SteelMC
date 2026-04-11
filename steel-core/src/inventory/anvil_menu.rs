@@ -171,7 +171,7 @@ impl AnvilMenu {
             + i64::from(*second.get(REPAIR_COST).unwrap_or(&0));
 
         if !second.is_empty() {
-            let has_stored_enchantments = second.has(STORED_ENCHANTMENTS); // TODO: STORED_ENCHANTMENTS is not yet implemented
+            let has_stored_enchantments = second.has(STORED_ENCHANTMENTS);
 
             if result.is_damageable_item() && first.is_valid_repair_item(second.item) {
                 let mut repair_per_unit =
