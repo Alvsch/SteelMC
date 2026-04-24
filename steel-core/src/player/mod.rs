@@ -94,16 +94,17 @@ use text_components::{
 };
 use uuid::Uuid;
 
+use crate::config::RuntimeConfig;
+use crate::entity::RemovalReason;
+use crate::entity::attribute::AttributeMap;
+use crate::entity::attribute::AttributeModifier;
+use crate::entity::damage::DamageSource;
+use crate::player::experience::Experience;
+use crate::player::player_inventory::PlayerInventory;
+use crate::server::Server;
 use crate::{command::commands::gamemode::get_gamemode_translation, inventory::SyncPlayerInv};
-use crate::{config::STEEL_CONFIG, player::experience::Experience};
-use crate::{config::WorldGeneratorTypes, entity::damage::DamageSource};
-use crate::{entity::attribute::AttributeMap, player::player_inventory::PlayerInventory};
-use crate::{entity::attribute::AttributeModifier, server::Server};
 use crate::{
-    entity::{
-        DEATH_DURATION, Entity, EntityLevelCallback, LivingEntityBase, NullEntityCallback,
-        RemovalReason,
-    },
+    entity::{DEATH_DURATION, Entity, EntityLevelCallback, LivingEntityBase, NullEntityCallback},
     inventory::slots::slot::Slot,
 };
 use steel_registry::vanilla_damage_types;
@@ -234,6 +235,8 @@ pub struct Player {
 
     /// Reference to the server (for entity ID generation, etc.).
     pub(crate) server: Weak<Server>,
+    /// Runtime configuration shared with the server.
+    pub(crate) config: Arc<RuntimeConfig>,
 
     /// The entity ID assigned to this player.
     pub id: i32,
@@ -360,11 +363,13 @@ impl Player {
     }
 
     /// Creates a new player.
+    #[expect(clippy::too_many_arguments, reason = "Player::new is complex")]
     pub fn new(
         gameprofile: GameProfile,
         connection: Arc<PlayerConnection>,
         world: Arc<World>,
         server: Weak<Server>,
+        config: Arc<RuntimeConfig>,
         entity_id: i32,
         player: &Weak<Player>,
         client_information: ClientInformation,
@@ -388,6 +393,7 @@ impl Player {
 
             world: ArcSwap::new(world),
             server,
+            config,
             id: entity_id,
             client_loaded: AtomicBool::new(false),
             position: SyncMutex::new(pos),
@@ -788,7 +794,7 @@ impl Player {
             None
         };
 
-        if STEEL_CONFIG.enforce_secure_chat {
+        if self.config.enforce_secure_chat {
             match &verification_result {
                 Some(Ok(_)) => {}
                 Some(Err(err)) => {
@@ -860,18 +866,16 @@ impl Player {
                 LastSeen::default()
             };
 
-            if let Some(server) = self.server.upgrade() {
-                for world in server.worlds.values() {
-                    world.broadcast_chat(
-                        chat_packet.clone(),
-                        Arc::clone(&player),
-                        last_seen.clone(),
-                        Some(&sig_array),
-                    );
-                }
+            for world in self.server().worlds.values() {
+                world.broadcast_chat(
+                    chat_packet.clone(),
+                    Arc::clone(&player),
+                    last_seen.clone(),
+                    Some(&sig_array),
+                );
             }
-        } else if let Some(server) = self.server.upgrade() {
-            for world in server.worlds.values() {
+        } else {
+            for world in self.server().worlds.values() {
                 world.broadcast_unsigned_chat(chat_packet.clone());
             }
         }
@@ -1285,7 +1289,7 @@ impl Player {
                     self.gameprofile.name
                 );
                 // Phase 4: Kick if enforcement is enabled
-                if STEEL_CONFIG.enforce_secure_chat {
+                if self.config.enforce_secure_chat {
                     log::error!(
                         "Player {} kicked for invalid public key",
                         self.gameprofile.name
@@ -1315,7 +1319,7 @@ impl Player {
                     "Player {} sent invalid chat session: {err}",
                     self.gameprofile.name
                 );
-                if STEEL_CONFIG.enforce_secure_chat {
+                if self.config.enforce_secure_chat {
                     self.disconnect(format!("Chat session validation failed: {err}"));
                 }
             }
@@ -1431,10 +1435,7 @@ impl Player {
         }
 
         // Vanilla: difficulty is global across all dimensions
-        let Some(server) = self.server.upgrade() else {
-            return;
-        };
-        for w in server.worlds.values() {
+        for w in self.server().worlds.values() {
             let mut level_data = w.level_data.write();
             level_data.data_mut().difficulty = difficulty;
             let locked = level_data.data().difficulty_locked;
@@ -1935,7 +1936,7 @@ impl Player {
     #[must_use]
     pub fn view_distance(&self) -> u8 {
         let client_view_distance = self.client_information.lock().view_distance;
-        client_view_distance.min(STEEL_CONFIG.view_distance)
+        client_view_distance.min(self.world.load().view_distance)
     }
 
     /// Returns the player's current velocity.
@@ -3194,6 +3195,13 @@ impl Player {
         self.world.load_full()
     }
 
+    /// Returns the server this player belongs to.
+    pub(crate) fn server(&self) -> Arc<Server> {
+        self.server
+            .upgrade()
+            .expect("player must not outlive server")
+    }
+
     /// Sets the world the player is in.
     ///
     /// This is used when the correct world isn't known at construction time
@@ -3245,7 +3253,7 @@ impl Player {
 
         // --- Send CRespawn (not needed on initial join — CLogin already sent) ---
         if reason != ResetReason::InitialJoin {
-            let is_flat = matches!(STEEL_CONFIG.world_generator, WorldGeneratorTypes::Flat);
+            let is_flat = self.config.is_flat;
 
             // 0x01 = keep attributes, 0x02 = keep entity data
             let data_kept: i8 = match reason {

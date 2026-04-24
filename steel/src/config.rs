@@ -1,36 +1,87 @@
 //! Server configuration loading.
 //!
 //! This module handles loading the server configuration from disk.
-//! The `ServerConfig` struct is defined in `steel-core`, this module
-//! just handles the file I/O and initialization.
+//! The config is loaded once at startup, split into creation-time values
+//! (consumed by the server constructor) and a `RuntimeConfig` (stored on `Server`).
 
-use base64::{Engine, prelude::BASE64_STANDARD};
 use serde::Deserialize;
-use std::{fs, path::Path, sync::LazyLock};
-use steel_utils::MC_VERSION;
+use std::{fs, path::Path};
 
-// Re-export types from steel-core for convenience
-pub use steel_core::config::{ConfigLabel, ConfigLink, ServerConfig, ServerConfigRef, ServerLinks};
+use steel_core::config::{
+    CompressionInfo, RuntimeConfig, ServerLinks, WorldGeneratorTypes, WorldStorageConfig,
+};
 
 #[cfg(feature = "stand-alone")]
 const DEFAULT_FAVICON: &[u8] = include_bytes!("../../package-content/favicon.png");
-const ICON_PREFIX: &str = "data:image/png;base64,";
 
 const DEFAULT_CONFIG: &str = include_str!("../../package-content/config.toml");
 
-/// The server configuration.
-///
-/// This is loaded from `config/config.toml` or created if it doesn't exist.
-pub static STEEL_CONFIG: LazyLock<ExtendedConfig> =
-    LazyLock::new(|| load_or_create(Path::new("config/config.toml")));
-
-/// Top-level configuration, grouping server settings and logging.
+/// Top-level TOML deserialization target — used once at startup, not stored globally.
 #[derive(Debug, Clone, Deserialize)]
-pub struct ExtendedConfig {
+pub struct SteelConfig {
     /// The full server configuration (`[server]` section)
     pub server: ServerConfig,
     /// Logging configuration (`[log]` section)
     pub log: Option<LogConfig>,
+}
+
+/// The full server configuration as deserialized from TOML.
+///
+/// Contains both creation-time values (seed, world generator, storage)
+/// and runtime values that get moved into `RuntimeConfig`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServerConfig {
+    /// The port the server will listen on.
+    pub server_port: u16,
+    /// The seed for the world generator.
+    pub seed: String,
+    /// The maximum number of players that can be on the server at once.
+    pub max_players: u32,
+    /// The view distance of the server.
+    pub view_distance: u8,
+    /// The simulation distance of the server.
+    pub simulation_distance: u8,
+    /// Whether the server is in online mode.
+    pub online_mode: bool,
+    /// Whether the server should use encryption.
+    pub encryption: bool,
+    /// The message of the day.
+    pub motd: String,
+    /// Whether to use a favicon.
+    pub use_favicon: bool,
+    /// The path to the favicon.
+    pub favicon: String,
+    /// Whether to enforce secure chat.
+    pub enforce_secure_chat: bool,
+    /// Defines which generator should be used for the world.
+    pub world_generator: WorldGeneratorTypes,
+    /// Defines which storage format and storage option should be used for the world.
+    pub world_storage_config: WorldStorageConfig,
+    /// The compression settings for the server.
+    pub compression: Option<CompressionInfo>,
+    /// All settings and configurations for server links.
+    pub server_links: Option<ServerLinks>,
+}
+
+impl ServerConfig {
+    /// Extracts the `RuntimeConfig` from this full config.
+    #[must_use]
+    pub fn into_runtime_config(self) -> RuntimeConfig {
+        RuntimeConfig {
+            max_players: self.max_players,
+            view_distance: self.view_distance,
+            simulation_distance: self.simulation_distance,
+            online_mode: self.online_mode,
+            encryption: self.encryption,
+            motd: self.motd,
+            use_favicon: self.use_favicon,
+            favicon: self.favicon,
+            enforce_secure_chat: self.enforce_secure_chat,
+            is_flat: matches!(self.world_generator, WorldGeneratorTypes::Flat),
+            compression: self.compression,
+            server_links: self.server_links,
+        }
+    }
 }
 
 /// Logging configuration
@@ -61,13 +112,12 @@ pub enum LogTimeFormat {
 /// Loads the server configuration from the given path, or creates it if it doesn't exist.
 ///
 /// # Panics
-/// This function will panic if the config file does not exist and the directory cannot be created,
-/// or if the config file cannot be read or written.
+/// This function will panic if the config file cannot be read, written, or parsed.
 #[must_use]
-fn load_or_create(path: &Path) -> ExtendedConfig {
-    let mut config = if path.exists() {
+pub fn load_or_create(path: &Path) -> SteelConfig {
+    let config = if path.exists() {
         let config_str = fs::read_to_string(path).expect("Failed to read config file");
-        let config: ExtendedConfig =
+        let config: SteelConfig =
             toml::from_str(config_str.as_str()).expect("Failed to parse config");
         validate(&config.server).expect("Failed to validate config");
         config
@@ -75,14 +125,10 @@ fn load_or_create(path: &Path) -> ExtendedConfig {
         fs::create_dir_all(path.parent().expect("Failed to get config directory"))
             .expect("Failed to create config directory");
         fs::write(path, DEFAULT_CONFIG).expect("Failed to write config file");
-        let config: ExtendedConfig =
-            toml::from_str(DEFAULT_CONFIG).expect("Failed to parse config");
+        let config: SteelConfig = toml::from_str(DEFAULT_CONFIG).expect("Failed to parse config");
         validate(&config.server).expect("Failed to validate config");
         config
     };
-
-    // Set the MC version (not loaded from config file)
-    config.server.mc_version = MC_VERSION;
 
     // If icon file doesnt exist, write it
     #[cfg(feature = "stand-alone")]
@@ -122,50 +168,4 @@ fn validate(config: &ServerConfig) -> Result<(), &'static str> {
         }
     }
     Ok(())
-}
-
-/// Loads the favicon from the path specified in the config.
-/// If the favicon doesn't exist, it will use the default favicon.
-/// If `use_favicon` is false, this will return `None`.
-///
-/// The returned string is a base64 encoded png with the `data:image/png;base64,` prefix.
-#[must_use]
-pub fn load_favicon(config: &ServerConfig) -> Option<String> {
-    if config.use_favicon {
-        let path = Path::new(&config.favicon);
-        if path.exists() {
-            let icon = fs::read(path);
-
-            if let Ok(icon) = icon {
-                let cap = ICON_PREFIX.len() + icon.len().div_ceil(3) * 4;
-                let mut base64 = String::with_capacity(cap);
-
-                base64 += ICON_PREFIX;
-                BASE64_STANDARD.encode_string(icon, &mut base64);
-
-                return Some(base64);
-            }
-            #[cfg(feature = "stand-alone")]
-            {
-                let cap = ICON_PREFIX.len() + DEFAULT_FAVICON.len().div_ceil(3) * 4;
-                let mut base64 = String::with_capacity(cap);
-
-                base64 += ICON_PREFIX;
-                BASE64_STANDARD.encode_string(DEFAULT_FAVICON, &mut base64);
-
-                return Some(base64);
-            }
-            #[cfg(not(feature = "stand-alone"))]
-            return None;
-        }
-    }
-    None
-}
-
-/// Initializes the steel-core config reference.
-///
-/// This must be called before any steel-core code accesses `STEEL_CONFIG`.
-pub fn init_steel_core_config() {
-    // Force config to load, then initialize steel-core's reference
-    ServerConfigRef::init(&STEEL_CONFIG.server);
 }

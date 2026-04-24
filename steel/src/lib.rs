@@ -19,8 +19,6 @@ pub mod logger;
 /// Spawn chunk generation with optional terminal progress display.
 pub mod spawn_progress;
 
-pub use config::STEEL_CONFIG;
-
 /// Static access to the server
 pub static SERVER: OnceLock<Arc<Server>> = OnceLock::new();
 
@@ -41,21 +39,33 @@ impl SteelServer {
     ///
     /// # Panics
     /// This function will panic if the TCP listener fails to bind to the server address.
-    pub async fn new(chunk_runtime: Arc<Runtime>, cancel_token: CancellationToken) -> Self {
+    pub async fn new(
+        chunk_runtime: Arc<Runtime>,
+        cancel_token: CancellationToken,
+        steel_config: config::SteelConfig,
+    ) -> Self {
         log::info!("Starting Steel Server");
 
-        // Initialize steel-core's config reference before any steel-core code runs
-        config::init_steel_core_config();
+        let server_port = steel_config.server.server_port;
+        let seed = steel_config.server.seed.clone();
+        let world_generator = steel_config.server.world_generator.clone();
+        let world_storage_config = steel_config.server.world_storage_config.clone();
+        let runtime_config = steel_config.server.into_runtime_config();
 
-        let server = Server::new(chunk_runtime, cancel_token.clone()).await;
+        let server = Server::new(
+            chunk_runtime,
+            cancel_token.clone(),
+            runtime_config,
+            &seed,
+            &world_generator,
+            &world_storage_config,
+        )
+        .await;
 
         Self {
-            tcp_listener: TcpListener::bind(SocketAddrV4::new(
-                Ipv4Addr::UNSPECIFIED,
-                STEEL_CONFIG.server.server_port,
-            ))
-            .await
-            .expect("Failed to bind to server address"),
+            tcp_listener: TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, server_port))
+                .await
+                .expect("Failed to bind to server address"),
             cancel_token,
             client_id: 0,
             server: Arc::new(server),

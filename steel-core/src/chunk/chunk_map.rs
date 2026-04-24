@@ -38,7 +38,6 @@ use crate::chunk::{
     world_gen_context::WorldGenContext,
 };
 use crate::chunk_saver::ChunkStorage;
-use crate::config::STEEL_CONFIG;
 use crate::player::Player;
 use crate::player::connection::NetworkConnection;
 use crate::world::World;
@@ -220,7 +219,7 @@ impl ChunkMap {
 
                     let Ok(encoded) = EncodedPacket::from_bare(
                         update_packet,
-                        STEEL_CONFIG.compression,
+                        world.compression,
                         ConnectionProtocol::Play,
                     ) else {
                         log::warn!("Failed to encode block update packet");
@@ -260,7 +259,7 @@ impl ChunkMap {
 
                     let Ok(encoded) = EncodedPacket::from_bare(
                         packet,
-                        STEEL_CONFIG.compression,
+                        world.compression,
                         ConnectionProtocol::Play,
                     ) else {
                         log::warn!("Failed to encode section block update packet");
@@ -423,7 +422,7 @@ impl ChunkMap {
             self.chunks.iter_sync(|_, holder| {
                 total_chunks += 1;
                 let level = holder.ticket_level.load(Ordering::Relaxed);
-                if is_ticked(level) {
+                if is_ticked(level, world.view_distance, world.simulation_distance) {
                     tickable_chunks.push(holder.clone());
                 }
                 true

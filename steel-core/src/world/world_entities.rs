@@ -28,9 +28,8 @@ impl World {
         let start = Instant::now();
 
         // Save player data before removal
-        if let Some(server) = player.server.upgrade()
-            && let Err(e) = server.player_data_storage.save(&player).await
-        {
+        let server = player.server();
+        if let Err(e) = server.player_data_storage.save(&player).await {
             log::error!("Failed to save player data for {uuid}: {e}");
         }
 

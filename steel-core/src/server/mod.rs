@@ -11,7 +11,7 @@ use crate::chunk::flat_chunk_generator::FlatChunkGenerator;
 use crate::chunk::vanilla_generator::VanillaGenerator;
 use crate::chunk::world_gen_context::ChunkGeneratorType;
 use crate::command::CommandDispatcher;
-use crate::config::{STEEL_CONFIG, WorldGeneratorTypes, WorldStorageConfig};
+use crate::config::{RuntimeConfig, WorldGeneratorTypes, WorldStorageConfig};
 use crate::entity::{SharedEntity, init_entities};
 
 use crate::player::Player;
@@ -58,6 +58,8 @@ const CHUNK_SCHEDULING_TPS: u64 = 20;
 
 /// The main server struct.
 pub struct Server {
+    /// Runtime configuration (view distance, compression, etc.).
+    pub config: Arc<RuntimeConfig>,
     /// The cancellation token for graceful shutdown.
     pub cancel_token: CancellationToken,
     /// The key store for the server.
@@ -82,7 +84,15 @@ impl Server {
     /// # Panics
     ///
     /// Panics if the global registry has already been initialized.
-    pub async fn new(chunk_runtime: Arc<Runtime>, cancel_token: CancellationToken) -> Self {
+    pub async fn new(
+        chunk_runtime: Arc<Runtime>,
+        cancel_token: CancellationToken,
+        config: RuntimeConfig,
+        seed_str: &str,
+        world_generator: &WorldGeneratorTypes,
+        world_storage_config: &WorldStorageConfig,
+    ) -> Self {
+        let config = Arc::new(config);
         let start = Instant::now();
         let mut registry = Registry::new_vanilla();
         registry.freeze();
@@ -98,14 +108,14 @@ impl Server {
         init_entities();
         log::info!("Behavior registries initialized");
 
-        let registry_cache = RegistryCache::new();
+        let registry_cache = RegistryCache::new(config.compression);
 
-        let seed: i64 = if STEEL_CONFIG.seed.is_empty() {
+        let seed: i64 = if seed_str.is_empty() {
             rand::random()
         } else {
-            STEEL_CONFIG.seed.parse().unwrap_or_else(|_| {
+            seed_str.parse().unwrap_or_else(|_| {
                 let mut hash: i64 = 0;
-                for byte in STEEL_CONFIG.seed.bytes() {
+                for byte in seed_str.bytes() {
                     hash = hash.wrapping_mul(31).wrapping_add(i64::from(byte));
                 }
                 hash
@@ -127,7 +137,13 @@ impl Server {
             chunk_runtime.clone(),
             &OVERWORLD,
             seed,
-            Self::make_world_config(&OVERWORLD, seed),
+            Self::make_world_config(
+                &OVERWORLD,
+                seed,
+                world_generator,
+                world_storage_config,
+                &config,
+            ),
             generation_pool.clone(),
         )
         .await
@@ -137,7 +153,13 @@ impl Server {
             chunk_runtime.clone(),
             &THE_NETHER,
             seed,
-            Self::make_world_config(&THE_NETHER, seed),
+            Self::make_world_config(
+                &THE_NETHER,
+                seed,
+                world_generator,
+                world_storage_config,
+                &config,
+            ),
             generation_pool.clone(),
         )
         .await
@@ -147,7 +169,13 @@ impl Server {
             chunk_runtime.clone(),
             &THE_END,
             seed,
-            Self::make_world_config(&THE_END, seed),
+            Self::make_world_config(
+                &THE_END,
+                seed,
+                world_generator,
+                world_storage_config,
+                &config,
+            ),
             generation_pool,
         )
         .await
@@ -162,6 +190,7 @@ impl Server {
         worlds.insert(THE_END.key.clone(), end);
 
         Server {
+            config,
             cancel_token,
             key_store: KeyStore::create(),
             worlds,
@@ -219,9 +248,9 @@ impl Server {
             player_id: player.id,
             hardcore: false,
             levels: REGISTRY.dimension_types.get_ids(),
-            max_players: STEEL_CONFIG.max_players as i32,
+            max_players: self.config.max_players as i32,
             chunk_radius: player.view_distance().into(),
-            simulation_distance: STEEL_CONFIG.simulation_distance.into(),
+            simulation_distance: self.config.simulation_distance.into(),
             reduced_debug_info,
             show_death_screen: !immediate_respawn,
             do_limited_crafting,
@@ -236,13 +265,13 @@ impl Server {
                 game_type: player.game_mode.load(),
                 previous_game_type: Some(player.prev_game_mode.load()),
                 is_debug: false,
-                is_flat: matches!(STEEL_CONFIG.world_generator, WorldGeneratorTypes::Flat),
+                is_flat: self.config.is_flat,
                 last_death_location: None,
                 portal_cooldown: 0,
                 // TODO: read from dimension's noise_settings (varies per dimension, e.g. nether=32, end=0)
                 sea_level: 63,
             },
-            enforces_secure_chat: STEEL_CONFIG.enforce_secure_chat,
+            enforces_secure_chat: self.config.enforce_secure_chat,
         });
 
         // Send player abilities (flight, invulnerability, etc.)
@@ -746,8 +775,12 @@ impl Server {
         player.send_packet(step_packet);
     }
     /// Selects the appropriate chunk generator for the given dimension type.
-    fn make_generator_for_dimension(dimension: DimensionTypeRef, seed: i64) -> ChunkGeneratorType {
-        match STEEL_CONFIG.world_generator {
+    fn make_generator_for_dimension(
+        dimension: DimensionTypeRef,
+        seed: i64,
+        world_generator: &WorldGeneratorTypes,
+    ) -> ChunkGeneratorType {
+        match world_generator {
             WorldGeneratorTypes::Empty => ChunkGeneratorType::Empty(EmptyChunkGenerator::new()),
             WorldGeneratorTypes::Vanilla => {
                 let seed_u64 = seed as u64;
@@ -802,15 +835,28 @@ impl Server {
         }
     }
 
-    fn make_world_config(dimension: DimensionTypeRef, seed: i64) -> WorldConfig {
+    fn make_world_config(
+        dimension: DimensionTypeRef,
+        seed: i64,
+        world_generator: &WorldGeneratorTypes,
+        world_storage_config: &WorldStorageConfig,
+        config: &RuntimeConfig,
+    ) -> WorldConfig {
         WorldConfig {
-            storage: match &STEEL_CONFIG.world_storage_config {
+            storage: match world_storage_config {
                 WorldStorageConfig::Disk { path } => WorldStorageConfig::Disk {
                     path: format!("{}/{}", path, dimension.key.path),
                 },
                 WorldStorageConfig::RamOnly => WorldStorageConfig::RamOnly,
             },
-            generator: Arc::new(Self::make_generator_for_dimension(dimension, seed)),
+            generator: Arc::new(Self::make_generator_for_dimension(
+                dimension,
+                seed,
+                world_generator,
+            )),
+            view_distance: config.view_distance,
+            simulation_distance: config.simulation_distance,
+            compression: config.compression,
         }
     }
     /// Queues a dimension change to be processed after the current tick.

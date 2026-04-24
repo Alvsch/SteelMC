@@ -19,7 +19,7 @@ use steel_protocol::packets::game::{
 };
 use steel_protocol::utils::ConnectionProtocol;
 use steel_protocol::{
-    packet_traits::{ClientPacket, EncodedPacket},
+    packet_traits::{ClientPacket, CompressionInfo, EncodedPacket},
     packets::game::CSetTime,
 };
 
@@ -64,7 +64,6 @@ use crate::{
     behavior::{BLOCK_BEHAVIORS, FLUID_BEHAVIORS},
     block_entity::SharedBlockEntity,
     chunk_saver::{ChunkStorage, RamOnlyStorage, RegionManager},
-    config::STEEL_CONFIG,
     entity::{EntityCache, EntityTracker, RemovalReason, SharedEntity, entities::ItemEntity},
     fluid::fluid_state_to_block,
     level_data::LevelDataManager,
@@ -115,6 +114,12 @@ pub struct WorldConfig {
     pub storage: WorldStorageConfig,
     /// World generator.
     pub generator: Arc<ChunkGeneratorType>,
+    /// Server view distance (maximum chunk radius).
+    pub view_distance: u8,
+    /// Server simulation distance.
+    pub simulation_distance: u8,
+    /// Compression settings for encoding broadcast packets.
+    pub compression: Option<CompressionInfo>,
 }
 
 /// A struct that represents a world.
@@ -129,6 +134,12 @@ pub struct World {
     pub dimension: DimensionTypeRef,
     /// Level data manager for persistent world state.
     pub level_data: SyncRwLock<LevelDataManager>,
+    /// Server view distance (maximum chunk radius).
+    pub view_distance: u8,
+    /// Server simulation distance.
+    pub simulation_distance: u8,
+    /// Compression settings for encoding broadcast packets.
+    pub compression: Option<CompressionInfo>,
     /// Whether the tick rate is running normally (not frozen/paused).
     /// When false, movement validation checks are skipped.
     tick_runs_normally: AtomicBool,
@@ -166,6 +177,9 @@ impl World {
         config: WorldConfig,
         generation_pool: Arc<rayon::ThreadPool>,
     ) -> io::Result<Arc<Self>> {
+        let view_distance = config.view_distance;
+        let simulation_distance = config.simulation_distance;
+        let compression = config.compression;
         // Create storage backend based on config
         let storage: Arc<ChunkStorage> = match &config.storage {
             WorldStorageConfig::Disk { path } => {
@@ -214,6 +228,9 @@ impl World {
             player_area_map: PlayerAreaMap::new(),
             dimension,
             level_data: SyncRwLock::new(level_data),
+            view_distance,
+            simulation_distance,
+            compression,
             tick_runs_normally: AtomicBool::new(true),
             entity_cache: EntityCache::new(),
             entity_tracker: EntityTracker::new(),
@@ -1101,7 +1118,7 @@ impl World {
     /// Broadcasts a packet to all players in the world.
     pub fn broadcast_to_all<P: ClientPacket>(&self, packet: P) {
         let Ok(encoded) =
-            EncodedPacket::from_bare(packet, STEEL_CONFIG.compression, ConnectionProtocol::Play)
+            EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
         else {
             return;
         };
@@ -1111,7 +1128,7 @@ impl World {
     /// Broadcasts a packet to all players in the world except one (identified by entity ID).
     pub fn broadcast_to_all_except<P: ClientPacket>(&self, packet: P, exclude: i32) {
         let Ok(encoded) =
-            EncodedPacket::from_bare(packet, STEEL_CONFIG.compression, ConnectionProtocol::Play)
+            EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
         else {
             return;
         };
@@ -1125,7 +1142,7 @@ impl World {
         self.players.iter_players(|_, player| {
             let Ok(encoded) = EncodedPacket::from_bare(
                 packet(player),
-                STEEL_CONFIG.compression,
+                self.compression,
                 ConnectionProtocol::Play,
             ) else {
                 return false;
@@ -1175,7 +1192,7 @@ impl World {
         exclude: Option<i32>,
     ) {
         let Ok(encoded) =
-            EncodedPacket::from_bare(packet, STEEL_CONFIG.compression, ConnectionProtocol::Play)
+            EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
         else {
             return;
         };
@@ -1600,7 +1617,7 @@ impl World {
         );
         let packet = CLevelEvent::new(event_type, pos, data, false);
         let Ok(encoded) =
-            EncodedPacket::from_bare(packet, STEEL_CONFIG.compression, ConnectionProtocol::Play)
+            EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
         else {
             log::warn!("Failed to encode level event packet");
             return;
@@ -1759,7 +1776,7 @@ impl World {
         );
         let packet = CBlockEvent::new(pos, action_id, action_param, block_id);
         let Ok(encoded) =
-            EncodedPacket::from_bare(packet, STEEL_CONFIG.compression, ConnectionProtocol::Play)
+            EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
         else {
             log::warn!("Failed to encode block event packet");
             return;
@@ -1830,7 +1847,7 @@ impl World {
             seed,
         );
         let Ok(encoded) =
-            EncodedPacket::from_bare(packet, STEEL_CONFIG.compression, ConnectionProtocol::Play)
+            EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
         else {
             log::warn!("Failed to encode sound packet");
             return;

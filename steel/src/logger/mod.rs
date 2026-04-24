@@ -1,5 +1,4 @@
-use crate::STEEL_CONFIG;
-use crate::config::LogTimeFormat;
+use crate::config::{LogConfig, LogTimeFormat};
 use chrono::Utc;
 use crossterm::{
     style::{Color::DarkGrey, ResetColor, SetForegroundColor},
@@ -52,6 +51,7 @@ pub struct CommandLogger {
     cancel_token: CancellationToken,
     stopped: CancellationToken,
     start_time: Instant,
+    log_config: Option<LogConfig>,
 }
 
 impl CommandLogger {
@@ -59,6 +59,7 @@ impl CommandLogger {
     pub async fn init(
         history_path: &'static str,
         cancel_token: CancellationToken,
+        log_config: Option<LogConfig>,
     ) -> Option<Arc<Self>> {
         let (sender, receiver) = mpsc::unbounded_channel();
         let log_cancel_token = CancellationToken::new();
@@ -71,6 +72,7 @@ impl CommandLogger {
             cancel_token: log_cancel_token.clone(),
             stopped: CancellationToken::new(),
             start_time: Instant::now(),
+            log_config,
         });
         task::spawn(log.clone().log_loop(receiver));
         task::spawn(log.clone().input_main());
@@ -110,8 +112,8 @@ impl CommandLogger {
         }
 
         let time_str = self.format_time();
-        let module_path_str = Self::format_module_path(&data);
-        let extra_str = Self::format_extra(&data);
+        let module_path_str = self.format_module_path(&data);
+        let extra_str = self.format_extra(&data);
 
         if let Err(err) = writeln!(
             input.out,
@@ -132,7 +134,7 @@ impl CommandLogger {
     }
 
     fn format_time(&self) -> String {
-        match STEEL_CONFIG.log.as_ref().map(|l| &l.time) {
+        match self.log_config.as_ref().map(|l| &l.time) {
             Some(LogTimeFormat::Date) => {
                 let time: chrono::DateTime<Utc> = time::SystemTime::now().into();
                 format!("{} ", time.format("%T:%3f"))
@@ -145,8 +147,8 @@ impl CommandLogger {
         }
     }
 
-    fn format_module_path(data: &LogData) -> String {
-        if STEEL_CONFIG.log.as_ref().is_some_and(|l| l.module_path) {
+    fn format_module_path(&self, data: &LogData) -> String {
+        if self.log_config.as_ref().is_some_and(|l| l.module_path) {
             format!(
                 " {}{}{} ",
                 SetForegroundColor(DarkGrey),
@@ -158,8 +160,8 @@ impl CommandLogger {
         }
     }
 
-    fn format_extra(data: &LogData) -> String {
-        if STEEL_CONFIG.log.as_ref().is_some_and(|l| l.extra) {
+    fn format_extra(&self, data: &LogData) -> String {
+        if self.log_config.as_ref().is_some_and(|l| l.extra) {
             format!(
                 "{}{}{}",
                 SetForegroundColor(DarkGrey),
@@ -240,8 +242,14 @@ pub struct LoggerLayer(pub Arc<CommandLogger>);
 
 impl LoggerLayer {
     /// Creates a new logger
-    pub async fn new(history_path: &'static str, cancel_token: CancellationToken) -> Option<Self> {
-        Some(Self(CommandLogger::init(history_path, cancel_token).await?))
+    pub async fn new(
+        history_path: &'static str,
+        cancel_token: CancellationToken,
+        log_config: Option<LogConfig>,
+    ) -> Option<Self> {
+        Some(Self(
+            CommandLogger::init(history_path, cancel_token, log_config).await?,
+        ))
     }
 }
 
