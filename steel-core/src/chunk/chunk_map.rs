@@ -31,17 +31,14 @@ use crate::chunk::chunk_ticket_manager::{
     ChunkTicketManager, LevelChange, MAX_VIEW_DISTANCE, is_full,
 };
 use crate::chunk::player_chunk_view::PlayerChunkView;
-use crate::chunk::world_gen_context::ChunkGeneratorType;
 use crate::chunk::{chunk_access::ChunkAccess, chunk_ticket_manager::is_ticked};
-use crate::chunk::{
-    chunk_access::ChunkStatus, chunk_generation_task::ChunkGenerationTask,
-    world_gen_context::WorldGenContext,
-};
+use crate::chunk::{chunk_access::ChunkStatus, chunk_generation_task::ChunkGenerationTask};
 use crate::chunk_saver::ChunkStorage;
 use crate::player::Player;
 use crate::player::connection::NetworkConnection;
 use crate::world::World;
 use crate::world::tick_scheduler::{BlockTick, FluidTick};
+use crate::worldgen::{ChunkGeneratorType, WorldGenContext};
 
 /// Timing information for the game tick portion of chunk map operations.
 #[derive(Debug, Default)]

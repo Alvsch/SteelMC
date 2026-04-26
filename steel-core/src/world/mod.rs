@@ -78,8 +78,8 @@ pub mod tick_scheduler;
 mod weather;
 mod world_entities;
 
-use crate::chunk::world_gen_context::ChunkGeneratorType;
 pub use crate::config::WorldStorageConfig;
+use crate::worldgen::ChunkGeneratorType;
 pub use player_area_map::PlayerAreaMap;
 pub use player_map::PlayerMap;
 pub use tick_scheduler::ScheduledTick;

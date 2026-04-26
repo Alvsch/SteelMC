@@ -2793,6 +2793,7 @@ dependencies = [
  "steel-protocol",
  "steel-registry",
  "steel-utils",
+ "steel-worldgen",
  "syn",
  "text_components",
  "thiserror 2.0.18",
@@ -2923,6 +2924,19 @@ dependencies = [
  "tracing",
  "uuid",
  "wincode",
+]
+
+[[package]]
+name = "steel-worldgen"
+version = "0.4.1+mc26.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
+ "steel-registry",
+ "steel-utils",
 ]
 
 [[package]]

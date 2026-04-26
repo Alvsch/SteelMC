@@ -6,10 +6,6 @@ pub mod tick_rate_manager;
 
 use crate::behavior::init_behaviors;
 use crate::block_entity::init_block_entities;
-use crate::chunk::empty_chunk_generator::EmptyChunkGenerator;
-use crate::chunk::flat_chunk_generator::FlatChunkGenerator;
-use crate::chunk::vanilla_generator::VanillaGenerator;
-use crate::chunk::world_gen_context::ChunkGeneratorType;
 use crate::command::CommandDispatcher;
 use crate::config::{RuntimeConfig, WorldGeneratorTypes, WorldStorageConfig};
 use crate::entity::{SharedEntity, init_entities};
@@ -21,7 +17,9 @@ use crate::player::player_data_storage::PlayerDataStorage;
 use crate::portal::DimensionChangeRequest;
 use crate::server::registry_cache::RegistryCache;
 use crate::world::{World, WorldConfig, WorldGameTickTimings};
-use crate::worldgen::BiomeSourceKind;
+use crate::worldgen::{
+    BiomeSourceKind, ChunkGeneratorType, EmptyChunkGenerator, FlatChunkGenerator, VanillaGenerator,
+};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use small_map::FxSmallMap;
 use std::{
