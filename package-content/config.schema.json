@@ -15,11 +15,6 @@
           "maximum": 65000,
           "default": 25565
         },
-        "seed": {
-          "type": "string",
-          "description": "World seed for generating the world, empty string means random seed",
-          "default": ""
-        },
         "max_players": {
           "type": "integer",
           "description": "Maximum number of players allowed on the server",
@@ -70,41 +65,6 @@
           "type": "boolean",
           "description": "Whether to enforce secure chat",
           "default": false
-        },
-        "world_generator": {
-          "type": "string",
-          "enum": ["flat", "empty", "vanilla"],
-          "description": "World generation settings",
-          "default": "flat"
-        },
-        "world_storage_config": {
-          "description": "Defines which storage format and storage option should be used for the world",
-          "oneOf": [
-            {
-              "type": "object",
-              "description": "Standard disk persistence using region files",
-              "properties": {
-                "disk": {
-                  "type": "object",
-                  "properties": {
-                    "path": {
-                      "type": "string",
-                      "description": "Path to the worlds directory (e.g., \"world\")"
-                    }
-                  },
-                  "required": ["path"],
-                  "additionalProperties": false
-                }
-              },
-              "required": ["disk"],
-              "additionalProperties": false
-            },
-            {
-              "type": "string",
-              "enum": ["ram_only"],
-              "description": "RAM-only storage with empty chunks created on demand. No data is persisted."
-            }
-          ]
         },
         "compression": {
           "type": "object",
@@ -218,7 +178,6 @@
       },
       "required": [
         "server_port",
-        "seed",
         "max_players",
         "view_distance",
         "simulation_distance",

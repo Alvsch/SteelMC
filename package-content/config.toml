@@ -3,8 +3,6 @@
 [server]
 # Server port
 server_port = 25565
-# World seed for generating the world, empty string means random seed
-seed = ""
 # Maximum number of players allowed on the server
 max_players = 20
 # Maximum view distance in chunks
@@ -23,12 +21,6 @@ use_favicon = true
 favicon = "config/favicon.png"
 # Whether to enforce secure chat
 enforce_secure_chat = false
-# World generation settings: "flat", "empty", or "vanilla"
-world_generator = "flat"
-
-# World storage settings
-[server.world_storage_config.disk]
-path = "world"
 
 # Compression settings
 [server.compression]
