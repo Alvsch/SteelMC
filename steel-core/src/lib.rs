@@ -28,12 +28,10 @@ pub mod worldgen;
 
 static PLUGIN_API: OnceLock<Sender<PluginApi>> = OnceLock::new();
 
-pub(crate) fn plugin_api_send(plugin_api: PluginApi) {
-    PLUGIN_API
-        .get()
-        .expect("plugin api is not initialized")
-        .send(plugin_api)
-        .expect("channel is disconnected");
+pub(crate) fn plugin_api_send(event: PluginApi) {
+    if let Some(plugin_api) = PLUGIN_API.get() {
+        plugin_api.send(event).expect("channel is disconnected");
+    }
 }
 
 /// Events emitted by the core server for plugins.
