@@ -307,6 +307,8 @@ impl Server {
         let pos = *player.position.lock();
         let rotation = player.rotation.load();
         player.spawn(pos, rotation, ResetReason::InitialJoin);
+
+        crate::plugin_api_send(crate::PluginApi::PlayerJoinEvent(player));
     }
 
     async fn load_join_domain(&self, player: &Player) -> Result<String, ()> {
