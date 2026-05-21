@@ -36,6 +36,7 @@ pub(crate) fn plugin_api_send(event: PluginApi) {
 
 /// Events emitted by the core server for plugins.
 #[expect(missing_docs, reason = "variant names are self-explanatory")]
+#[derive(Clone)]
 pub enum PluginApi {
     PlayerJoinEvent(Arc<Player>),
     PlayerLeaveEvent(Arc<Player>),
