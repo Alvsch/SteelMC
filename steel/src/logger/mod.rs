@@ -2,10 +2,8 @@ use crate::config::{LogConfig, LogTimeFormat};
 use chrono::Utc;
 use crossterm::{
     style::{Color::DarkGrey, ResetColor, SetForegroundColor},
-    terminal::{self, Clear, ClearType},
+    terminal::{self, Clear, ClearType, disable_raw_mode},
 };
-#[cfg(feature = "spawn_chunk_display")]
-use std::io::Result;
 use std::{
     io::Write,
     sync::Arc,
@@ -13,7 +11,7 @@ use std::{
 };
 use steel_utils::locks::AsyncRwLock;
 use steel_utils::logger::{Level, LogData, STEEL_LOGGER, SteelLogger};
-use tokio::{sync::mpsc, task};
+use tokio::{sync::mpsc, task, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::Subscriber;
 use tracing_subscriber::Layer;
@@ -23,8 +21,6 @@ mod history;
 mod input;
 mod output;
 mod selection;
-#[cfg(feature = "spawn_chunk_display")]
-mod spawn_progress;
 mod state;
 mod suggestions;
 
@@ -34,9 +30,6 @@ fn terminal_width() -> usize {
 }
 
 pub(crate) use state::LogState;
-
-#[cfg(feature = "spawn_chunk_display")]
-pub(crate) use spawn_progress::Grid;
 
 pub(crate) enum Move {
     None,
@@ -83,15 +76,17 @@ impl CommandLogger {
     /// Stops the logger and waits for cleanup to complete
     pub async fn stop(&self) {
         self.cancel_token.cancel();
-        self.stopped.cancelled().await;
+        if timeout(time::Duration::from_secs(1), self.stopped.cancelled())
+            .await
+            .is_err()
+        {
+            let _ = disable_raw_mode();
+            self.stopped.cancel();
+        }
     }
 
     async fn log_loop(self: Arc<Self>, mut receiver: mpsc::UnboundedReceiver<(Level, LogData)>) {
         loop {
-            #[cfg(feature = "spawn_chunk_display")]
-            if self.input.read().await.spawn_display.rendered {
-                continue;
-            }
             tokio::select! {
                 biased;
                 Some((lvl, data)) = receiver.recv() => {
@@ -171,63 +166,6 @@ impl CommandLogger {
         } else {
             String::new()
         }
-    }
-}
-
-#[cfg(feature = "spawn_chunk_display")]
-impl CommandLogger {
-    /// Initializes the display of the spawn chunks
-    pub async fn activate_spawn_display(&self) -> Result<()> {
-        use crate::spawn_progress::DISPLAY_RADIUS;
-        use crossterm::terminal::Clear;
-        use std::time::Duration;
-        use tokio::time::sleep;
-
-        // Extra time to let the logs appear correctly
-        sleep(Duration::from_millis(1)).await;
-        let mut input = self.input.write().await;
-        input.spawn_display.rendered = true;
-        let pos = input.out.get_current_pos();
-        input.out.cursor_to(pos, (0, 0))?;
-        write!(input.out, "\r{}", Clear(ClearType::FromCursorDown))?;
-        for _ in 0..=DISPLAY_RADIUS {
-            writeln!(input.out)?;
-        }
-        input.out.cursor_to((0, 0), pos)?;
-        input.out.flush()?;
-        input.rewrite_current_input()?;
-        Ok(())
-    }
-
-    /// Ends the spawn display cleaning the screen
-    pub async fn deactivate_spawn_display(&self) {
-        use crate::spawn_progress::DISPLAY_RADIUS;
-        use crossterm::cursor::MoveUp;
-
-        let mut input = self.input.write().await;
-        write!(
-            input.out,
-            "{}\n{}",
-            MoveUp(DISPLAY_RADIUS as u16 + 2),
-            Clear(ClearType::FromCursorDown)
-        )
-        .ok();
-        input.rewrite_current_input().ok();
-        input.spawn_display.rendered = false;
-    }
-
-    /// Updates the spawn grid, and displays it if required
-    pub async fn update_spawn_grid(&self, grid: &Grid, should_render: bool) -> Result<()> {
-        let mut state = self.input.write().await;
-        state.spawn_display.set_grid(grid);
-        if !should_render {
-            return Ok(());
-        }
-        {
-            let state = &mut state as &mut LogState;
-            state.spawn_display.rewrite(&mut state.out)?;
-        }
-        state.rewrite_current_input()
     }
 }
 

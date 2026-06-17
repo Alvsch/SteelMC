@@ -21,8 +21,6 @@ pub struct BlockClass {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-// --- Code generation ---
-
 pub fn build(blocks: &[BlockClass]) -> String {
     let discovered = scan_object_behaviors("blocks", "block_behavior");
 
@@ -105,6 +103,7 @@ pub fn build(blocks: &[BlockClass]) -> String {
 
     let registry_import_tokens: Vec<_> = registry_modules_used
         .iter()
+        .filter(|module| module.as_str() != "vanilla_blocks")
         .map(|module| {
             let module_ident = Ident::new(module, Span::call_site());
             quote! { , #module_ident }

@@ -5,10 +5,7 @@
 
 use crate::noise::ImprovedNoise;
 use crate::random::{PositionalRandom, Random, RandomSource, RandomSplitter, name_hash::NameHash};
-
-/// Round-off constant for coordinate wrapping to prevent precision loss.
-/// This is 2^25 = 33554432.
-const ROUND_OFF: f64 = 33_554_432.0;
+use steel_math::wrap;
 
 /// Octave-based Perlin noise generator.
 ///
@@ -179,7 +176,25 @@ impl PerlinNoise {
     #[inline]
     #[must_use]
     pub fn get_value(&self, x: f64, y: f64, z: f64) -> f64 {
-        self.get_value_with_y_params(x, y, z, 0.0, 0.0, false)
+        let mut value = 0.0;
+        let mut input_factor = self.lowest_freq_input_factor;
+        let mut value_factor = self.lowest_freq_value_factor;
+
+        for (i, noise_opt) in self.noise_levels.iter().enumerate() {
+            if let Some(noise) = noise_opt {
+                let noise_val = noise.noise(
+                    wrap(x * input_factor),
+                    wrap(y * input_factor),
+                    wrap(z * input_factor),
+                );
+                value += self.amplitudes[i] * noise_val * value_factor;
+            }
+
+            input_factor *= 2.0;
+            value_factor /= 2.0;
+        }
+
+        value
     }
 
     /// Sample the noise with Y scaling parameters.
@@ -257,18 +272,6 @@ impl PerlinNoise {
     }
 }
 
-/// Wrap a coordinate to prevent precision loss at large values.
-///
-/// This wraps the coordinate to the range `[-ROUND_OFF/2, ROUND_OFF/2]` to
-/// maintain numerical precision for coordinates far from the origin.
-///
-/// Public because `BlendedNoise` calls this directly on per-octave coordinates.
-#[inline]
-#[must_use]
-pub fn wrap(x: f64) -> f64 {
-    x - (x / ROUND_OFF + 0.5).floor() * ROUND_OFF
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +289,27 @@ mod tests {
         let v1 = noise1.get_value(100.0, 64.0, 100.0);
         let v2 = noise2.get_value(100.0, 64.0, 100.0);
         assert!((v1 - v2).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_get_value_matches_zero_y_params_path() {
+        let mut rng = Xoroshiro::from_seed(12345);
+        let splitter = rng.next_positional();
+
+        let noise = PerlinNoise::create(&splitter, -4, &[1.0, 0.0, 1.0, 1.0]);
+
+        for (x, y, z) in [
+            (0.0, 0.0, 0.0),
+            (100.0, 64.0, -100.0),
+            (-4096.25, -32.5, 1024.75),
+        ] {
+            assert!(
+                (noise.get_value(x, y, z)
+                    - noise.get_value_with_y_params(x, y, z, 0.0, 0.0, false))
+                .abs()
+                    < 1e-15
+            );
+        }
     }
 
     #[test]
@@ -323,17 +347,5 @@ mod tests {
             (v1 - v2).abs() > 0.001,
             "Two PerlinNoise from sequential random should differ: v1={v1}, v2={v2}",
         );
-    }
-
-    #[test]
-    fn test_wrap() {
-        // Small values should be unchanged
-        assert!((wrap(100.0) - 100.0).abs() < 1e-10);
-        assert!((wrap(-100.0) - (-100.0)).abs() < 1e-10);
-
-        // Very large values should be wrapped
-        let large = 100_000_000.0;
-        let wrapped = wrap(large);
-        assert!(wrapped.abs() < ROUND_OFF);
     }
 }

@@ -2,10 +2,12 @@ use std::{env, fs, path::Path, process::Command};
 
 mod attributes;
 mod banner_patterns;
+mod biome_tags;
 mod biomes;
 mod block_entity_types;
 mod block_tags;
 mod blocks;
+mod carvers;
 mod cat_variants;
 mod chat_types;
 mod chicken_variants;
@@ -16,6 +18,7 @@ mod dialogs;
 mod dimension_types;
 mod entities;
 mod entity_data;
+mod features;
 mod fluid_tags;
 mod fluids;
 
@@ -23,6 +26,7 @@ mod cat_sound_variants;
 mod chicken_sound_variants;
 mod cow_sound_variants;
 mod frog_variants;
+mod game_events;
 mod game_rules;
 mod instruments;
 mod item_tags;
@@ -31,18 +35,26 @@ mod jukebox_songs;
 mod level_events;
 mod loot_tables;
 mod menu_types;
+mod mob_effects;
 mod packets;
 mod painting_variants;
+mod particle_types;
 mod pig_sound_variants;
 mod pig_variants;
 mod poi_types;
 mod recipes;
 mod sound_events;
 mod sound_types;
+mod structure_processors;
+mod structure_sets;
+mod structure_tags;
+mod template_pools;
 mod timeline_tags;
 mod timelines;
 mod trim_materials;
 mod trim_patterns;
+mod villager_professions;
+mod villager_types;
 mod wolf_sound_variants;
 mod wolf_variants;
 mod world_clocks;
@@ -71,6 +83,7 @@ const ITEM_TAGS: &str = "item_tags";
 const PACKETS: &str = "packets";
 const BANNER_PATTERNS: &str = "banner_patterns";
 const BIOMES: &str = "biomes";
+const BIOME_TAGS: &str = "biome_tags";
 const CHAT_TYPES: &str = "chat_types";
 const TRIM_PATTERNS: &str = "trim_patterns";
 const TRIM_MATERIALS: &str = "trim_materials";
@@ -86,6 +99,9 @@ const CAT_VARIANTS: &str = "cat_variants";
 const COW_VARIANTS: &str = "cow_variants";
 const CHICKEN_VARIANTS: &str = "chicken_variants";
 const PAINTING_VARIANTS: &str = "painting_variants";
+const PARTICLE_TYPES: &str = "particle_types";
+const VILLAGER_TYPES: &str = "villager_types";
+const VILLAGER_PROFESSIONS: &str = "villager_professions";
 const DIMENSIONS: &str = "dimension_types";
 const DAMAGE_TYPES: &str = "damage_types";
 const DAMAGE_TYPE_TAGS: &str = "damage_type_tags";
@@ -99,6 +115,7 @@ const INSTRUMENTS: &str = "instruments";
 const DIALOGS: &str = "dialogs";
 const DIALOG_TAGS: &str = "dialog_tags";
 const MENU_TYPES: &str = "menu_types";
+const MOB_EFFECTS: &str = "mob_effects";
 const TIMELINES: &str = "timelines";
 const TIMELINE_TAGS: &str = "timeline_tags";
 const ZOMBIE_NAUTILUS_VARIANTS: &str = "zombie_nautilus_variants";
@@ -114,10 +131,19 @@ const ENCHANTMENTS: &str = "enchantments";
 const LOOT_TABLES: &str = "loot_tables";
 const BLOCK_ENTITY_TYPES: &str = "block_entity_types";
 const GAME_RULES: &str = "game_rules";
+const GAME_EVENTS: &str = "game_events";
 const LEVEL_EVENTS: &str = "level_events";
 const SOUND_EVENTS: &str = "sound_events";
 const SOUND_TYPES: &str = "sound_types";
+const STRUCTURE_SETS: &str = "structure_sets";
+const STRUCTURE_TAGS: &str = "structure_tags";
+const STRUCTURES: &str = "structures";
+const STRUCTURE_PROCESSORS: &str = "structure_processors";
+const TEMPLATE_POOLS: &str = "template_pools";
 const WORLD_CLOCKS: &str = "world_clocks";
+const CARVERS: &str = "configured_carvers";
+const CONFIGURED_FEATURES: &str = "configured_features";
+const PLACED_FEATURES: &str = "placed_features";
 
 pub fn main() {
     // Rerun build script when any file in the build/ directory changes
@@ -125,6 +151,7 @@ pub fn main() {
 
     // Use CARGO_MANIFEST_DIR to get the absolute path to the crate directory
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+
     let out_dir = Path::new(&manifest_dir).join("src/generated");
 
     // Create the generated directory if it doesn't exist
@@ -141,6 +168,7 @@ pub fn main() {
         (packets::build(), PACKETS),
         (banner_patterns::build(), BANNER_PATTERNS),
         (biomes::build(), BIOMES),
+        (biome_tags::build(), BIOME_TAGS),
         (chat_types::build(), CHAT_TYPES),
         (trim_patterns::build(), TRIM_PATTERNS),
         (trim_materials::build(), TRIM_MATERIALS),
@@ -156,6 +184,9 @@ pub fn main() {
         (cow_variants::build(), COW_VARIANTS),
         (chicken_variants::build(), CHICKEN_VARIANTS),
         (painting_variants::build(), PAINTING_VARIANTS),
+        (particle_types::build(), PARTICLE_TYPES),
+        (villager_types::build(), VILLAGER_TYPES),
+        (villager_professions::build(), VILLAGER_PROFESSIONS),
         (dimension_types::build(), DIMENSIONS),
         (damage_types::build(), DAMAGE_TYPES),
         (damage_type_tags::build(), DAMAGE_TYPE_TAGS),
@@ -164,6 +195,7 @@ pub fn main() {
         (dialogs::build(), DIALOGS),
         (dialog_tags::build(), DIALOG_TAGS),
         (menu_types::build(), MENU_TYPES),
+        (mob_effects::build(), MOB_EFFECTS),
         (timelines::build(), TIMELINES),
         (timeline_tags::build(), TIMELINE_TAGS),
         (zombie_nautilus_variants::build(), ZOMBIE_NAUTILUS_VARIANTS),
@@ -175,11 +207,17 @@ pub fn main() {
         (loot_tables::build(), LOOT_TABLES),
         (block_entity_types::build(), BLOCK_ENTITY_TYPES),
         (game_rules::build(), GAME_RULES),
+        (game_events::build(), GAME_EVENTS),
         (level_events::build(), LEVEL_EVENTS),
         (sound_events::build(), SOUND_EVENTS),
         (sound_types::build(), SOUND_TYPES),
         (world_clocks::build(), WORLD_CLOCKS),
         (poi_types::build(), POI_TYPES),
+        (structure_sets::build_structures(), STRUCTURES),
+        (structure_processors::build(), STRUCTURE_PROCESSORS),
+        (structure_tags::build(), STRUCTURE_TAGS),
+        (structure_sets::build(), STRUCTURE_SETS),
+        (template_pools::build(), TEMPLATE_POOLS),
         (banner_pattern_tags::build(), BANNER_PATTERN_TAGS),
         (entity_type_tags::build(), ENTITY_TYPE_TAGS),
         (instrument_tags::build(), INSTRUMENT_TAGS),
@@ -187,6 +225,9 @@ pub fn main() {
         (poi_type_tags::build(), POI_TYPE_TAGS),
         (enchantment_tags::build(), ENCHANTMENT_TAGS),
         (enchantments::build(), ENCHANTMENTS),
+        (carvers::build(), CARVERS),
+        (features::build_configured(), CONFIGURED_FEATURES),
+        (features::build_placed(), PLACED_FEATURES),
     ];
 
     // Track which files we're generating this run

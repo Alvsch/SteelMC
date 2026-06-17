@@ -31,8 +31,6 @@ use super::vanilla_components::{
     TOOLTIP_DISPLAY,
 };
 
-// ==================== DataComponentType ====================
-
 /// A typed handle for a data component.
 ///
 /// This provides compile-time type safety when getting/setting components.
@@ -70,8 +68,6 @@ impl<T> DataComponentType<T> {
         }
     }
 }
-
-// ==================== ComponentEntry ====================
 
 /// Reader function for deserializing a component from network format.
 pub type NetworkReader = fn(&mut Cursor<&[u8]>) -> Result<ComponentData>;
@@ -136,8 +132,6 @@ impl ComponentEntry {
 }
 
 pub type ComponentEntryRef = &'static ComponentEntry;
-
-// ==================== DataComponentRegistry ====================
 
 /// Registry of all data component types.
 ///
@@ -356,8 +350,6 @@ crate::impl_registry!(
     data_components
 );
 
-// ==================== DataComponentMap ====================
-
 /// Storage for component values.
 ///
 /// Maps component keys to their values. Used on items to store their data components.
@@ -486,8 +478,6 @@ impl DataComponentMap {
         self.map.remove(key)
     }
 }
-
-// ==================== DataComponentPatch ====================
 
 /// Entry in a component patch.
 #[derive(Debug, Clone)]
@@ -620,9 +610,31 @@ impl DataComponentPatch {
             }
         })
     }
-}
 
-// ==================== Network Serialization ====================
+    /// Converts this component patch to NBT without consuming it.
+    #[must_use]
+    pub fn to_nbt_tag_ref(&self) -> OwnedNbtTag {
+        use crate::{REGISTRY, RegistryExt};
+
+        let mut compound = NbtCompound::new();
+
+        for (key, entry) in &self.entries {
+            match entry {
+                ComponentPatchEntry::Set(data) => {
+                    if let Some(entry) = REGISTRY.data_components.by_key(key) {
+                        let nbt = (entry.nbt_writer)(data);
+                        compound.insert(key.to_string(), nbt);
+                    }
+                }
+                ComponentPatchEntry::Removed => {
+                    compound.insert(format!("!{key}"), NbtCompound::new());
+                }
+            }
+        }
+
+        OwnedNbtTag::Compound(compound)
+    }
+}
 
 impl WriteTo for DataComponentPatch {
     fn write(&self, writer: &mut impl Write) -> Result<()> {
@@ -814,29 +826,9 @@ impl DataComponentPatch {
     }
 }
 
-// ==================== NBT Serialization ====================
-
 impl ToNbtTag for DataComponentPatch {
     fn to_nbt_tag(self) -> OwnedNbtTag {
-        use crate::{REGISTRY, RegistryExt};
-
-        let mut compound = NbtCompound::new();
-
-        for (key, entry) in self.entries {
-            match entry {
-                ComponentPatchEntry::Set(data) => {
-                    if let Some(entry) = REGISTRY.data_components.by_key(&key) {
-                        let nbt = (entry.nbt_writer)(&data);
-                        compound.insert(key.to_string(), nbt);
-                    }
-                }
-                ComponentPatchEntry::Removed => {
-                    compound.insert(format!("!{key}"), NbtCompound::new());
-                }
-            }
-        }
-
-        OwnedNbtTag::Compound(compound)
+        self.to_nbt_tag_ref()
     }
 }
 
@@ -871,8 +863,6 @@ impl FromNbtTag for DataComponentPatch {
         Some(patch)
     }
 }
-
-// ==================== Helper Functions ====================
 
 /// Attempts to extract a typed component from `ComponentData`.
 #[must_use]

@@ -191,6 +191,12 @@ impl ItemStack {
         self.is_damageable_item() && self.get_damage_value() >= self.get_max_damage()
     }
 
+    /// Returns vanilla `ItemStack.nextDamageWillBreak()`.
+    #[must_use]
+    pub fn next_damage_will_break(&self) -> bool {
+        self.is_damageable_item() && self.get_damage_value() >= self.get_max_damage() - 1
+    }
+
     /// Damages the item and breaks it if durability reaches zero.
     ///
     /// Returns `true` if the item broke and should be removed/replaced.
@@ -872,8 +878,6 @@ impl ItemStack {
     }
 }
 
-// ==================== NBT Serialization ====================
-
 use simdnbt::{
     FromNbtTag, ToNbtTag,
     borrow::{NbtCompound as NbtCompoundView, NbtTag as BorrowedNbtTag},
@@ -892,6 +896,14 @@ impl ToNbtTag for ItemStack {
     /// }
     /// ```
     fn to_nbt_tag(self) -> simdnbt::owned::NbtTag {
+        self.to_nbt_tag_ref()
+    }
+}
+
+impl ItemStack {
+    /// Converts this item stack to an NBT tag for persistent storage without consuming it.
+    #[must_use]
+    pub fn to_nbt_tag_ref(&self) -> simdnbt::owned::NbtTag {
         if self.is_empty() {
             // Empty stacks are represented as an empty compound
             return simdnbt::owned::NbtTag::Compound(NbtCompound::new());
@@ -907,7 +919,7 @@ impl ToNbtTag for ItemStack {
 
         // components: The component patch (only if non-empty)
         if !self.patch.is_empty() {
-            compound.insert("components", self.patch.to_nbt_tag());
+            compound.insert("components", self.patch.to_nbt_tag_ref());
         }
 
         simdnbt::owned::NbtTag::Compound(compound)

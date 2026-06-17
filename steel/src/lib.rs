@@ -3,12 +3,14 @@
 //! The main library for the Steel Minecraft server.
 
 use std::{
+    error::Error,
+    fmt, io,
     net::{Ipv4Addr, SocketAddrV4},
     sync::{Arc, OnceLock},
 };
 
 use steel_core::server::Server;
-use steel_login::JavaTcpClient;
+use steel_login::{JavaTcpClient, ServerConnectionSession};
 use tokio::{net::TcpListener, runtime::Runtime, select};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -16,8 +18,6 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 pub mod config;
 /// A module for logging utilities.
 pub mod logger;
-/// Spawn chunk generation with optional terminal progress display.
-pub mod spawn_progress;
 
 /// Static access to the server
 pub static SERVER: OnceLock<Arc<Server>> = OnceLock::new();
@@ -32,44 +32,74 @@ pub struct SteelServer {
     pub client_id: u64,
     /// The shared server state.
     pub server: Arc<Server>,
+    /// Session id UUID state
+    pub connection_session: Arc<ServerConnectionSession>,
 }
+
+/// Startup error for expected operational failures.
+#[derive(Debug)]
+pub enum SteelServerError {
+    /// Core server startup failed.
+    Core(String),
+    /// TCP listener could not bind.
+    Bind {
+        /// Server port that failed to bind.
+        port: u16,
+        /// Underlying IO error.
+        source: io::Error,
+    },
+}
+
+impl fmt::Display for SteelServerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Core(error) => f.write_str(error),
+            Self::Bind { port, source } => {
+                write!(f, "failed to bind to server port {port}: {source}")
+            }
+        }
+    }
+}
+
+impl Error for SteelServerError {}
 
 impl SteelServer {
     /// Creates a new Steel server.
     ///
-    /// # Panics
-    /// This function will panic if the TCP listener fails to bind to the server address.
     pub async fn new(
         chunk_runtime: Arc<Runtime>,
         cancel_token: CancellationToken,
         steel_config: config::SteelConfig,
-    ) -> Self {
+    ) -> Result<Self, SteelServerError> {
         log::info!("Starting Steel Server");
 
         let server_port = steel_config.server.server_port;
-        let seed = steel_config.server.seed.clone();
-        let world_generator = steel_config.server.world_generator.clone();
-        let world_storage_config = steel_config.server.world_storage_config.clone();
+        let worlds_config = steel_config.worlds;
         let runtime_config = steel_config.server.into_runtime_config();
 
         let server = Server::new(
             chunk_runtime,
             cancel_token.clone(),
             runtime_config,
-            &seed,
-            &world_generator,
-            &world_storage_config,
+            worlds_config,
         )
-        .await;
+        .await
+        .map_err(SteelServerError::Core)?;
 
-        Self {
-            tcp_listener: TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, server_port))
-                .await
-                .expect("Failed to bind to server address"),
+        let tcp_listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, server_port))
+            .await
+            .map_err(|source| SteelServerError::Bind {
+                port: server_port,
+                source,
+            })?;
+
+        Ok(Self {
+            tcp_listener,
             cancel_token,
             client_id: 0,
             server: Arc::new(server),
-        }
+            connection_session: Arc::new(ServerConnectionSession::default()),
+        })
     }
 
     /// Starts the server and begins accepting connections.
@@ -94,7 +124,15 @@ impl SteelServer {
                     if let Err(e) = connection.set_nodelay(true) {
                         log::warn!("Failed to set TCP_NODELAY: {e}");
                     }
-                    let (java_client, sender_recv, net_reader) = JavaTcpClient::new(connection, address, self.client_id, self.cancel_token.child_token(), self.server.clone(), task_tracker.clone());
+                    let (java_client, sender_recv, net_reader) = JavaTcpClient::new(
+                        connection,
+                        address,
+                        self.client_id,
+                        self.cancel_token.child_token(),
+                        self.server.clone(),
+                        self.connection_session.clone(),
+                        task_tracker.clone(),
+                    );
                     self.client_id = self.client_id.wrapping_add(1);
                     log::info!("Accepted connection from Java Edition: {address} (id {})", self.client_id);
 

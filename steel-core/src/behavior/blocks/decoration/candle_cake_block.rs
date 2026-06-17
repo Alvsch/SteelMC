@@ -16,8 +16,9 @@ use crate::{
     behavior::{
         BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess, blocks::CakeBlock,
     },
+    entity::Entity,
     player::Player,
-    world::World,
+    world::{LevelReader, ScheduledTickAccess, World},
 };
 
 /// Behavior for Candle Cakes
@@ -61,13 +62,17 @@ impl BlockBehavior for CandleCakeBlock {
         hit_result: &BlockHitResult,
         inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        let item_stack = inv.item();
-        if item_stack.is(&vanilla_items::ITEMS.fire_charge)
-            || item_stack.is(&vanilla_items::ITEMS.flint_and_steel)
-        {
+        let (is_fire_charge, is_flint_and_steel, is_empty) = inv.with_item(|item_stack| {
+            (
+                item_stack.is(&vanilla_items::ITEMS.fire_charge),
+                item_stack.is(&vanilla_items::ITEMS.flint_and_steel),
+                item_stack.is_empty(),
+            )
+        });
+        if is_fire_charge || is_flint_and_steel {
             return InteractionResult::Pass; // lighting of candles and candle cakes is handled by the flint and steel/fire charge implementation
         } else if (hit_result.location.y - f64::from(hit_result.block_pos.y())) > 0.5
-            && item_stack.is_empty()
+            && is_empty
             && state.get_value(&BlockStateProperties::LIT)
         {
             world.set_block(
@@ -77,11 +82,11 @@ impl BlockBehavior for CandleCakeBlock {
             );
             // TODO: particles!
             world.play_block_sound(
-                sound_events::BLOCK_CANDLE_EXTINGUISH,
+                &sound_events::BLOCK_CANDLE_EXTINGUISH,
                 pos,
                 1.0,
                 1.0,
-                Some(player.id),
+                Some(player.id()),
             );
             return InteractionResult::Success;
         }
@@ -95,6 +100,7 @@ impl BlockBehavior for CandleCakeBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
+        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         let result = CakeBlock::eat(world, pos, vanilla_blocks::CAKE.default_state(), player);
         if result.consumes_action() {
@@ -103,14 +109,14 @@ impl BlockBehavior for CandleCakeBlock {
         result
     }
 
-    fn can_survive(&self, _state: BlockStateId, world: &Arc<World>, pos: BlockPos) -> bool {
+    fn can_survive(&self, _state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> bool {
         world.get_block_state(pos.below()).is_solid()
     }
 
     fn update_shape(
         &self,
         state: BlockStateId,
-        world: &Arc<World>,
+        world: &dyn ScheduledTickAccess,
         pos: BlockPos,
         direction: steel_utils::Direction,
         _neighbor_pos: BlockPos,

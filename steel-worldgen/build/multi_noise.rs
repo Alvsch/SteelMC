@@ -59,11 +59,13 @@ pub(crate) fn build() -> TokenStream {
         let upper_name = short_name.to_uppercase();
 
         let static_ident = Ident::new(&format!("{upper_name}_BIOME_PARAMETERS"), Span::call_site());
+        let points_ident = Ident::new(&format!("{upper_name}_BIOME_POINTS"), Span::call_site());
+        let lookup_fn = Ident::new(&format!("lookup_{short_name}_biome"), Span::call_site());
         let get_fn = Ident::new(&format!("get_{short_name}_biome"), Span::call_site());
         let get_cached_fn =
             Ident::new(&format!("get_{short_name}_biome_cached"), Span::call_site());
 
-        let entry_tokens = generate_biome_entries(entries);
+        let (points_tokens, arms_tokens) = generate_biome_entries(entries);
         let doc_static = format!(
             "{} biome parameter list for multi-noise biome selection.",
             capitalize(short_name)
@@ -73,12 +75,29 @@ pub(crate) fn build() -> TokenStream {
             "Get the biome with lastResult caching for the {short_name} (matches vanilla's ThreadLocal warm-start)."
         );
 
+        // Emit climate points as a `static` of `const`-constructed values so they live
+        // in `.rodata` instead of being built inside the LazyLock closure. This keeps
+        // LLVM from having to optimize a single multi-megabyte function full of
+        // inlined `Parameter::new` / `ParameterPoint::new` calls.
         stream.extend(quote! {
+            static #points_ident: &[ParameterPoint] = &[
+                #points_tokens
+            ];
+
+            fn #lookup_fn(i: usize) -> BiomeRef {
+                match i {
+                    #arms_tokens
+                    _ => unreachable!(),
+                }
+            }
+
             #[doc = #doc_static]
             pub static #static_ident: LazyLock<ParameterList<BiomeRef>> = LazyLock::new(|| {
-                let entries = vec![
-                    #entry_tokens
-                ];
+                let entries: Vec<(ParameterPoint, BiomeRef)> = #points_ident
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (*p, #lookup_fn(i)))
+                    .collect();
                 ParameterList::new(entries)
             });
 
@@ -122,45 +141,51 @@ fn capitalize(s: &str) -> String {
     }
 }
 
-fn generate_biome_entries(entries: &[BiomeEntry]) -> TokenStream {
-    let entry_tokens: Vec<TokenStream> = entries
-        .iter()
-        .map(|entry| {
-            let p = &entry.parameters;
-            let temp_min = quantize(p.temperature[0]);
-            let temp_max = quantize(p.temperature[1]);
-            let hum_min = quantize(p.humidity[0]);
-            let hum_max = quantize(p.humidity[1]);
-            let cont_min = quantize(p.continentalness[0]);
-            let cont_max = quantize(p.continentalness[1]);
-            let ero_min = quantize(p.erosion[0]);
-            let ero_max = quantize(p.erosion[1]);
-            let depth_min = quantize(p.depth[0]);
-            let depth_max = quantize(p.depth[1]);
-            let weird_min = quantize(p.weirdness[0]);
-            let weird_max = quantize(p.weirdness[1]);
-            let offset = quantize(p.offset);
+/// Build (points-static body, lookup-function match arms).
+///
+/// Splitting these lets the climate ranges live as compile-time `const`-evaluated
+/// data while the biome reference resolution (which deref's `LazyLock<Biome>` and
+/// can't be const) stays in a small runtime function.
+fn generate_biome_entries(entries: &[BiomeEntry]) -> (TokenStream, TokenStream) {
+    let mut points = Vec::with_capacity(entries.len());
+    let mut arms = Vec::with_capacity(entries.len());
 
-            let biome = biome_ident(&entry.biome);
+    for (i, entry) in entries.iter().enumerate() {
+        let p = &entry.parameters;
+        let temp_min = quantize(p.temperature[0]);
+        let temp_max = quantize(p.temperature[1]);
+        let hum_min = quantize(p.humidity[0]);
+        let hum_max = quantize(p.humidity[1]);
+        let cont_min = quantize(p.continentalness[0]);
+        let cont_max = quantize(p.continentalness[1]);
+        let ero_min = quantize(p.erosion[0]);
+        let ero_max = quantize(p.erosion[1]);
+        let depth_min = quantize(p.depth[0]);
+        let depth_max = quantize(p.depth[1]);
+        let weird_min = quantize(p.weirdness[0]);
+        let weird_max = quantize(p.weirdness[1]);
+        let offset = quantize(p.offset);
 
-            quote! {
-                (
-                    ParameterPoint::new(
-                        Parameter::new(#temp_min, #temp_max),
-                        Parameter::new(#hum_min, #hum_max),
-                        Parameter::new(#cont_min, #cont_max),
-                        Parameter::new(#ero_min, #ero_max),
-                        Parameter::new(#depth_min, #depth_max),
-                        Parameter::new(#weird_min, #weird_max),
-                        #offset,
-                    ),
-                    &*vanilla_biomes::#biome,
-                ),
-            }
-        })
-        .collect();
+        let biome = biome_ident(&entry.biome);
 
-    quote! {
-        #(#entry_tokens)*
+        points.push(quote! {
+            ParameterPoint::new(
+                Parameter::new(#temp_min, #temp_max),
+                Parameter::new(#hum_min, #hum_max),
+                Parameter::new(#cont_min, #cont_max),
+                Parameter::new(#ero_min, #ero_max),
+                Parameter::new(#depth_min, #depth_max),
+                Parameter::new(#weird_min, #weird_max),
+                #offset,
+            ),
+        });
+
+        arms.push(quote! {
+            #i => &*vanilla_biomes::#biome,
+        });
     }
+
+    let points_tokens = quote! { #(#points)* };
+    let arms_tokens = quote! { #(#arms)* };
+    (points_tokens, arms_tokens)
 }

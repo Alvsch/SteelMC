@@ -3,20 +3,26 @@
 /steel-registry/src/generated
 /steel-utils/src/generated
 /steel-core/src/behavior/generated
+/steel-worldgen/src/generated
+/steel-utils/build_assets/builtin_datapacks
+/steel-utils/build_assets/.asset-extract.lock
+/steel-utils/build_assets/en_us.json
 
 # Config
 /config
 /.tmp
 /world
+/saves
 /players
 
 # Misc
-AGENTS.md
+CLAUDE.md
 .env
 /minecraft-src
 
 # Package
 profile.json.gz
+profile.json.syms.json
 *.gz
 *.class
 

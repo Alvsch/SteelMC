@@ -8,16 +8,23 @@ use steel_registry::{
     data_components::vanilla_components::BLOCKS_ATTACKS,
     level_events::{PARTICLES_SCRAPE, PARTICLES_WAX_OFF},
     sound_events::{ITEM_AXE_SCRAPE, ITEM_AXE_STRIP, ITEM_AXE_WAX_OFF},
+    vanilla_game_events,
 };
 use steel_utils::{
-    math::Axis,
+    axis::Axis,
     types::{InteractionHand, UpdateFlags},
 };
 
-use crate::behavior::{
-    InteractionResult, ItemBehavior, UseOnContext, strippables::get_strippable_variant,
-    waxables::get_normal_from_waxed_variant, weathering::previous_copper_stage,
+use crate::{
+    behavior::{
+        InteractionResult, ItemBehavior, UseOnContext, strippables::get_strippable_variant,
+        waxables::get_normal_from_waxed_variant, weathering::previous_copper_stage,
+    },
+    entity::Entity,
+    world::game_event_context::GameEventContext,
 };
+
+use super::copper_chest_events::emit_connected_chest_block_change;
 
 const AXIS_PROPERTY: EnumProperty<Axis> = BlockStateProperties::AXIS;
 
@@ -30,9 +37,7 @@ impl ItemBehavior for AxeItem {
         let has_block_item_intent = context.hand == InteractionHand::MainHand
             && context
                 .inv
-                .inventory()
-                .get_offhand_item()
-                .has(BLOCKS_ATTACKS)
+                .with_inventory(|inv| inv.get_offhand_item().has(BLOCKS_ATTACKS))
             && !context.player.is_secondary_use_active();
 
         if has_block_item_intent {
@@ -51,19 +56,19 @@ impl ItemBehavior for AxeItem {
                     .default_state()
                     .set_value(&AXIS_PROPERTY, old_axis);
 
-                (new_block_state, ITEM_AXE_STRIP, None)
+                (new_block_state, &ITEM_AXE_STRIP, None)
             } else if let Some(scraped_block) = previous_copper_stage(old_block) {
                 let new_block_state = REGISTRY
                     .blocks
                     .copy_matching_properties(old_block_state, scraped_block);
 
-                (new_block_state, ITEM_AXE_SCRAPE, Some(PARTICLES_SCRAPE))
+                (new_block_state, &ITEM_AXE_SCRAPE, Some(PARTICLES_SCRAPE))
             } else if let Some(unwaxed_block) = get_normal_from_waxed_variant(old_block) {
                 let new_block_state = REGISTRY
                     .blocks
                     .copy_matching_properties(old_block_state, unwaxed_block);
 
-                (new_block_state, ITEM_AXE_WAX_OFF, Some(PARTICLES_WAX_OFF))
+                (new_block_state, &ITEM_AXE_WAX_OFF, Some(PARTICLES_WAX_OFF))
             } else {
                 return InteractionResult::Pass;
             };
@@ -74,18 +79,31 @@ impl ItemBehavior for AxeItem {
 
         context
             .world
-            .play_block_sound(sound_event, pos, 1.0, 1.0, Some(context.player.id));
+            .play_block_sound(sound_event, pos, 1.0, 1.0, Some(context.player.id()));
 
         if let Some(event) = level_event {
             context
                 .world
-                .level_event(event, pos, 0, Some(context.player.id));
+                .level_event(event, pos, 0, Some(context.player.id()));
+            emit_connected_chest_block_change(
+                context.world,
+                pos,
+                old_block_state,
+                context.player,
+                Some(event),
+            );
         }
 
-        // TODO: Fire GameEvent::BLOCK_CHANGE for sculk sensors
+        context.world.game_event(
+            &vanilla_game_events::BLOCK_CHANGE,
+            pos,
+            &GameEventContext::new(Some(context.player), Some(new_block_state)),
+        );
 
         let has_infinite_materials = context.player.has_infinite_materials();
-        context.inv.item().hurt_and_break(1, has_infinite_materials);
+        context
+            .inv
+            .with_item(|item| item.hurt_and_break(1, has_infinite_materials));
 
         InteractionResult::Success
     }

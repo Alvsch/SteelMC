@@ -10,11 +10,16 @@ build = "build/build.rs"
 # Internal crates
 steel-registry.workspace = true
 steel-utils.workspace = true
+steel-math.workspace = true
 
 # Data structures
 rustc-hash.workspace = true
+sha2.workspace = true
+tracing.workspace = true
 
 [build-dependencies]
+steel-utils.workspace = true
+
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
@@ -26,5 +31,11 @@ quote.workspace = true
 # Data structures
 rustc-hash.workspace = true
 
+[dev-dependencies]
+steel-registry = { workspace = true, features = ["test-utils"] }
+
 [lints]
 workspace = true
+
+[features]
+fmt = []

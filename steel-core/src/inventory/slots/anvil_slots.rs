@@ -8,7 +8,7 @@ use std::{
 
 use steel_registry::{
     REGISTRY, TaggedRegistryExt, blocks::block_state_ext::BlockStateExt, item_stack::ItemStack,
-    level_events, vanilla_block_tags, vanilla_blocks,
+    level_events, vanilla_block_tags::BlockTag, vanilla_blocks,
 };
 use steel_utils::{BlockPos, types::UpdateFlags};
 
@@ -165,7 +165,7 @@ impl Slot for AnvilResultSlot {
         if !player.has_infinite_materials()
             && REGISTRY
                 .blocks
-                .is_in_tag(state.get_block(), &vanilla_block_tags::ANVIL_TAG)
+                .is_in_tag(state.get_block(), &BlockTag::ANVIL)
             && rand::random_bool(0.12)
         {
             if let Some(new_state) = AnvilBlock::damage(state) {

@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use steel_macros::block_behavior;
 use steel_registry::{
-    REGISTRY, TaggedRegistryExt,
     blocks::{BlockRef, block_state_ext::BlockStateExt, properties::BlockStateProperties},
     items::item::BlockHitResult,
-    sound_events, vanilla_blocks, vanilla_item_tags,
+    sound_events, vanilla_blocks,
+    vanilla_item_tags::ItemTag,
 };
 use steel_utils::{
     BlockPos, BlockStateId, Direction,
@@ -16,8 +16,9 @@ use crate::{
     behavior::{
         BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess, candle_cakes,
     },
+    entity::Entity,
     player::Player,
-    world::World,
+    world::{LevelReader, ScheduledTickAccess, World},
 };
 
 /// Behavior for Cakes
@@ -79,14 +80,14 @@ impl BlockBehavior for CakeBlock {
         }
     }
 
-    fn can_survive(&self, _state: BlockStateId, world: &Arc<World>, pos: BlockPos) -> bool {
+    fn can_survive(&self, _state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> bool {
         world.get_block_state(pos.below()).is_solid()
     }
 
     fn update_shape(
         &self,
         state: BlockStateId,
-        world: &Arc<World>,
+        world: &dyn ScheduledTickAccess,
         pos: BlockPos,
         direction: Direction,
         _neighbor_pos: BlockPos,
@@ -106,10 +107,12 @@ impl BlockBehavior for CakeBlock {
         pos: BlockPos,
         player: &Player,
         _hit_result: &BlockHitResult,
+        _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         if Self::eat(world, pos, state, player).consumes_action() {
             return InteractionResult::Success;
         }
+
         InteractionResult::Pass
     }
 
@@ -123,31 +126,29 @@ impl BlockBehavior for CakeBlock {
         _hit_result: &BlockHitResult,
         inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        let item_stack = inv.item();
-        if REGISTRY
-            .items
-            .is_in_tag(item_stack.item(), &vanilla_item_tags::CANDLES_TAG)
-            && state.get_value(&BlockStateProperties::BITES) == 0
-        {
-            if !player.has_infinite_materials() {
-                item_stack.shrink(1);
-            }
+        if state.get_value(&BlockStateProperties::BITES) == 0 {
+            let candle_cake = inv.with_item(|item_stack| {
+                let item = item_stack.item();
+                if !item.has_tag(&ItemTag::CANDLES) {
+                    return None;
+                }
+                let candle_cake = candle_cakes::candle_to_candle_cake(item)?;
+                if !player.has_infinite_materials() {
+                    item_stack.shrink(1);
+                }
+                Some(candle_cake)
+            });
+            let Some(candle_cake) = candle_cake else {
+                return InteractionResult::TryEmptyHandInteraction;
+            };
             world.play_block_sound(
-                sound_events::BLOCK_CAKE_ADD_CANDLE,
+                &sound_events::BLOCK_CAKE_ADD_CANDLE,
                 pos,
                 1.0,
                 1.0,
-                Some(player.id),
+                Some(player.id()),
             );
-            world.set_block(
-                pos,
-                candle_cakes::candle_to_candle_cake(item_stack.item())
-                    .expect(
-                        "Candle Item is in CANDLES_TAG but isnt in the candle_to_candle_cake map",
-                    )
-                    .default_state(),
-                UpdateFlags::UPDATE_ALL,
-            );
+            world.set_block(pos, candle_cake.default_state(), UpdateFlags::UPDATE_ALL);
             return InteractionResult::Success;
         }
         InteractionResult::TryEmptyHandInteraction

@@ -5,24 +5,43 @@
 //! (consumed by the server constructor) and a `RuntimeConfig` (stored on `Server`).
 
 use serde::Deserialize;
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
-use steel_core::config::{
-    CompressionInfo, RuntimeConfig, ServerLinks, WorldGeneratorTypes, WorldStorageConfig,
-};
+use steel_core::config::{CompressionInfo, RuntimeConfig, ServerLinks, WorldsConfig};
 
 #[cfg(feature = "stand-alone")]
 const DEFAULT_FAVICON: &[u8] = include_bytes!("../../package-content/favicon.png");
 
 const DEFAULT_CONFIG: &str = include_str!("../../package-content/config.toml");
+const DEFAULT_WORLDS: &str = include_str!("../../package-content/worlds.toml");
 
 /// Top-level TOML deserialization target — used once at startup, not stored globally.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SteelConfig {
     /// The full server configuration (`[server]` section)
     pub server: ServerConfig,
     /// Logging configuration (`[log]` section)
     pub log: Option<LogConfig>,
+    /// World and domain configuration from `worlds.toml`.
+    #[serde(skip, default = "empty_worlds_config")]
+    pub worlds: WorldsConfig,
+}
+
+const fn empty_worlds_config() -> WorldsConfig {
+    WorldsConfig {
+        save_path: String::new(),
+        seed: None,
+        default_gamemode: None,
+        difficulty: None,
+        storage: None,
+        player_storage: None,
+        domains: BTreeMap::new(),
+    }
+}
+
+const fn default_spam_threshold_seconds() -> i32 {
+    10
 }
 
 /// The full server configuration as deserialized from TOML.
@@ -30,11 +49,10 @@ pub struct SteelConfig {
 /// Contains both creation-time values (seed, world generator, storage)
 /// and runtime values that get moved into `RuntimeConfig`.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// The port the server will listen on.
     pub server_port: u16,
-    /// The seed for the world generator.
-    pub seed: String,
     /// The maximum number of players that can be on the server at once.
     pub max_players: u32,
     /// The view distance of the server.
@@ -45,6 +63,9 @@ pub struct ServerConfig {
     pub online_mode: bool,
     /// Whether the server should use encryption.
     pub encryption: bool,
+    /// Whether vanilla floating/flying movement checks permit unauthorized flight.
+    #[serde(default)]
+    pub allow_flight: bool,
     /// The message of the day.
     pub motd: String,
     /// Whether to use a favicon.
@@ -53,10 +74,12 @@ pub struct ServerConfig {
     pub favicon: String,
     /// Whether to enforce secure chat.
     pub enforce_secure_chat: bool,
-    /// Defines which generator should be used for the world.
-    pub world_generator: WorldGeneratorTypes,
-    /// Defines which storage format and storage option should be used for the world.
-    pub world_storage_config: WorldStorageConfig,
+    /// Vanilla chat spam threshold window in seconds
+    #[serde(default = "default_spam_threshold_seconds")]
+    pub chat_spam_threshold_seconds: i32,
+    /// Vanilla command spam threshold window in seconds
+    #[serde(default = "default_spam_threshold_seconds")]
+    pub command_spam_threshold_seconds: i32,
     /// The compression settings for the server.
     pub compression: Option<CompressionInfo>,
     /// All settings and configurations for server links.
@@ -73,11 +96,13 @@ impl ServerConfig {
             simulation_distance: self.simulation_distance,
             online_mode: self.online_mode,
             encryption: self.encryption,
+            allow_flight: self.allow_flight,
             motd: self.motd,
             use_favicon: self.use_favicon,
             favicon: self.favicon,
             enforce_secure_chat: self.enforce_secure_chat,
-            is_flat: matches!(self.world_generator, WorldGeneratorTypes::Flat),
+            chat_spam_threshold_seconds: self.chat_spam_threshold_seconds,
+            command_spam_threshold_seconds: self.command_spam_threshold_seconds,
             compression: self.compression,
             server_links: self.server_links,
         }
@@ -86,6 +111,7 @@ impl ServerConfig {
 
 /// Logging configuration
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LogConfig {
     /// Time display format: "none", "date" (HH:MM:SS:mmm), or "uptime" (seconds since start)
     #[serde(default)]
@@ -111,33 +137,64 @@ pub enum LogTimeFormat {
 
 /// Loads the server configuration from the given path, or creates it if it doesn't exist.
 ///
-/// # Panics
-/// This function will panic if the config file cannot be read, written, or parsed.
-#[must_use]
-pub fn load_or_create(path: &Path) -> SteelConfig {
-    let config = if path.exists() {
-        let config_str = fs::read_to_string(path).expect("Failed to read config file");
-        let config: SteelConfig =
-            toml::from_str(config_str.as_str()).expect("Failed to parse config");
-        validate(&config.server).expect("Failed to validate config");
+pub fn load_or_create(path: &Path) -> Result<SteelConfig, String> {
+    let mut config = if path.exists() {
+        let config_str = fs::read_to_string(path)
+            .map_err(|e| format!("failed to read config file {}: {e}", path.display()))?;
+        let config: SteelConfig = toml::from_str(config_str.as_str())
+            .map_err(|e| format!("failed to parse config: {e}"))?;
+        validate(&config.server).map_err(|e| format!("failed to validate config: {e}"))?;
         config
     } else {
-        fs::create_dir_all(path.parent().expect("Failed to get config directory"))
-            .expect("Failed to create config directory");
-        fs::write(path, DEFAULT_CONFIG).expect("Failed to write config file");
-        let config: SteelConfig = toml::from_str(DEFAULT_CONFIG).expect("Failed to parse config");
-        validate(&config.server).expect("Failed to validate config");
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("failed to get config directory for {}", path.display()))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create config directory {}: {e}",
+                parent.display()
+            )
+        })?;
+        fs::write(path, DEFAULT_CONFIG)
+            .map_err(|e| format!("failed to write config file {}: {e}", path.display()))?;
+        let config: SteelConfig = toml::from_str(DEFAULT_CONFIG)
+            .map_err(|e| format!("failed to parse default config: {e}"))?;
+        validate(&config.server).map_err(|e| format!("failed to validate default config: {e}"))?;
         config
     };
+
+    let worlds_path = path
+        .parent()
+        .ok_or_else(|| format!("failed to get config directory for {}", path.display()))?
+        .join("worlds.toml");
+    config.worlds = load_or_create_worlds(&worlds_path)?;
 
     // If icon file doesnt exist, write it
     #[cfg(feature = "stand-alone")]
     if config.server.use_favicon && !Path::new(&config.server.favicon).exists() {
-        fs::write(Path::new(&config.server.favicon), DEFAULT_FAVICON)
-            .expect("Failed to write favicon file");
+        fs::write(Path::new(&config.server.favicon), DEFAULT_FAVICON).map_err(|e| {
+            format!(
+                "failed to write favicon file {}: {e}",
+                config.server.favicon
+            )
+        })?;
     }
 
-    config
+    Ok(config)
+}
+
+fn load_or_create_worlds(path: &Path) -> Result<WorldsConfig, String> {
+    if path.exists() {
+        let worlds_str = fs::read_to_string(path)
+            .map_err(|e| format!("failed to read worlds config file {}: {e}", path.display()))?;
+        toml::from_str(worlds_str.as_str())
+            .map_err(|e| format!("failed to parse worlds config {}: {e}", path.display()))
+    } else {
+        fs::write(path, DEFAULT_WORLDS)
+            .map_err(|e| format!("failed to write worlds config file {}: {e}", path.display()))?;
+        toml::from_str(DEFAULT_WORLDS)
+            .map_err(|e| format!("failed to parse default worlds config: {e}"))
+    }
 }
 
 /// Validates the server configuration.
@@ -168,4 +225,65 @@ fn validate(config: &ServerConfig) -> Result<(), &'static str> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packaged_configs_parse() {
+        let config: SteelConfig = toml::from_str(DEFAULT_CONFIG).expect("default config parses");
+        assert!(!config.server.allow_flight);
+        assert_eq!(config.server.chat_spam_threshold_seconds, 10);
+        assert_eq!(config.server.command_spam_threshold_seconds, 10);
+        validate(&config.server).expect("default config validates");
+        let worlds: WorldsConfig = toml::from_str(DEFAULT_WORLDS).expect("default worlds parses");
+        assert!(!worlds.domains.is_empty());
+    }
+
+    #[test]
+    fn server_config_defaults_allow_flight_to_false() {
+        let input = r#"
+            [server]
+            server_port = 25565
+            max_players = 20
+            view_distance = 10
+            simulation_distance = 10
+            online_mode = true
+            encryption = true
+            motd = "A Steel Server"
+            use_favicon = false
+            favicon = "config/favicon.png"
+            enforce_secure_chat = false
+            chat_spam_threshold_seconds = 10
+            command_spam_threshold_seconds = 10
+        "#;
+
+        let config: SteelConfig = toml::from_str(input).expect("config should parse");
+
+        assert!(!config.server.allow_flight);
+    }
+
+    #[test]
+    fn server_config_defaults_spam_thresholds_for_older_configs() {
+        let input = r#"
+            [server]
+            server_port = 25565
+            max_players = 20
+            view_distance = 10
+            simulation_distance = 10
+            online_mode = true
+            encryption = true
+            motd = "A Steel Server"
+            use_favicon = false
+            favicon = "config/favicon.png"
+            enforce_secure_chat = false
+        "#;
+
+        let config: SteelConfig = toml::from_str(input).expect("config should parse");
+
+        assert_eq!(config.server.chat_spam_threshold_seconds, 10);
+        assert_eq!(config.server.command_spam_threshold_seconds, 10);
+    }
 }

@@ -8,8 +8,9 @@ use steel_registry::item_stack::ItemStack;
 use steel_utils::BlockPos;
 use steel_utils::types::InteractionHand;
 
+use crate::entity::Entity;
 use crate::fluid::FluidStateExt;
-use crate::inventory::lock::{ContainerId, ContainerLockGuard};
+use crate::inventory::lock::{ContainerLockGuard, ContainerRef, SyncPlayerInv};
 use crate::player::Player;
 use crate::player::player_inventory::PlayerInventory;
 use crate::world::World;
@@ -57,6 +58,8 @@ pub struct BlockPlaceContext<'a> {
     pub rotation: f32,
     /// The player's pitch (vertical look angle).
     pub pitch: f32,
+    /// Whether the player is using the secondary action, normally sneaking.
+    pub is_secondary_use_active: bool,
     /// The world where the block is being placed.
     pub world: &'a Arc<World>,
 }
@@ -71,6 +74,18 @@ impl BlockPlaceContext<'_> {
     #[must_use]
     pub fn get_nearest_looking_direction(&self) -> Direction {
         self.get_nearest_looking_directions()[0]
+    }
+
+    /// Returns the vertical direction the player is looking toward.
+    ///
+    /// Based on Java's `BlockPlaceContext.getNearestLookingVerticalDirection()`.
+    #[must_use]
+    pub const fn get_nearest_looking_vertical_direction(&self) -> Direction {
+        if self.pitch < 0.0 {
+            Direction::Up
+        } else {
+            Direction::Down
+        }
     }
 
     /// Returns all 6 directions ordered by how closely the player is looking at them.
@@ -105,58 +120,42 @@ impl BlockPlaceContext<'_> {
     }
 }
 
-/// Mutable access to the player's inventory through a lock guard.
+/// Access to the player's inventory.
 ///
-/// Extracted from the context structs so that the borrow checker can track
-/// inventory mutation separately from immutable context fields like `player`
-/// and `world`.
-pub struct InventoryAccess<'a> {
-    inv_guard: &'a mut ContainerLockGuard,
+/// This handle does not hold the inventory lock by itself. Use the closure
+/// methods to keep lock scopes short and avoid carrying an inventory guard
+/// through block behavior, world mutation, or menu opening.
+pub struct InventoryAccess {
+    inventory: SyncPlayerInv,
     hand: InteractionHand,
-    inv_id: ContainerId,
 }
 
-impl<'a> InventoryAccess<'a> {
+impl InventoryAccess {
     /// Creates a new `InventoryAccess` instance.
-    pub const fn new(
-        inv_guard: &'a mut ContainerLockGuard,
-        hand: InteractionHand,
-        inv_id: ContainerId,
-    ) -> Self {
-        Self {
-            inv_guard,
-            hand,
-            inv_id,
-        }
+    pub const fn new(inventory: SyncPlayerInv, hand: InteractionHand) -> Self {
+        Self { inventory, hand }
     }
-    /// Returns a mutable reference to the item in the player's hand.
+
+    /// Runs `f` with mutable access to the item in the player's hand.
+    pub fn with_item<R>(&self, f: impl FnOnce(&mut ItemStack) -> R) -> R {
+        let mut inventory = self.inventory.lock();
+        f(inventory.get_item_in_hand_mut(self.hand))
+    }
+
+    /// Runs `f` with mutable access to the player's inventory.
+    pub fn with_inventory<R>(&self, f: impl FnOnce(&mut PlayerInventory) -> R) -> R {
+        let mut inventory = self.inventory.lock();
+        f(&mut inventory)
+    }
+
+    /// Runs `f` with a container guard containing the player's inventory.
     ///
-    /// Cannot be held simultaneously with `inventory()` or `guard()`.
-    #[expect(
-        clippy::missing_panics_doc,
-        reason = "panic is unreachable when context is correctly constructed"
-    )]
-    pub fn item(&mut self) -> &mut ItemStack {
-        self.inv_guard
-            .get_player_inventory_mut(self.inv_id)
-            .expect("player inventory must be locked")
-            .get_item_in_hand_mut(self.hand)
-    }
-
-    /// Returns a mutable reference to the player's inventory.
-    #[expect(
-        clippy::missing_panics_doc,
-        reason = "panic is unreachable when context is correctly constructed"
-    )]
-    pub fn inventory(&mut self) -> &mut PlayerInventory {
-        self.inv_guard
-            .get_player_inventory_mut(self.inv_id)
-            .expect("player inventory must be locked")
-    }
-
-    /// Returns a mutable reference to the container lock guard.
-    pub const fn guard(&mut self) -> &mut ContainerLockGuard {
-        self.inv_guard
+    /// Prefer [`Self::with_item`] or [`Self::with_inventory`] unless an operation
+    /// must interoperate with APIs that require `ContainerLockGuard`.
+    pub fn with_guard<R>(&self, f: impl FnOnce(&mut ContainerLockGuard) -> R) -> R {
+        let inv_ref = ContainerRef::PlayerInventory(self.inventory.clone());
+        let mut guard = ContainerLockGuard::lock_all(&[&inv_ref]);
+        f(&mut guard)
     }
 }
 
@@ -175,7 +174,7 @@ pub struct UseOnContext<'a> {
     /// The world where the interaction is happening.
     pub world: &'a Arc<World>,
     /// Mutable inventory access.
-    pub inv: InventoryAccess<'a>,
+    pub inv: InventoryAccess,
 }
 
 impl<'a> UseOnContext<'a> {
@@ -186,19 +185,14 @@ impl<'a> UseOnContext<'a> {
         hand: InteractionHand,
         hit_result: BlockHitResult,
         world: &'a Arc<World>,
-        inv_guard: &'a mut ContainerLockGuard,
-        inv_id: ContainerId,
+        inventory: SyncPlayerInv,
     ) -> Self {
         Self {
             player,
             hand,
             hit_result,
             world,
-            inv: InventoryAccess {
-                inv_guard,
-                hand,
-                inv_id,
-            },
+            inv: InventoryAccess::new(inventory, hand),
         }
     }
 
@@ -229,7 +223,7 @@ impl<'a> UseOnContext<'a> {
             return None;
         }
 
-        let (yaw, pitch) = self.player.rotation.load();
+        let (yaw, pitch) = self.player.rotation();
 
         Some(BlockPlaceContext {
             clicked_pos,
@@ -241,6 +235,7 @@ impl<'a> UseOnContext<'a> {
             horizontal_direction: Direction::from_yaw(yaw),
             rotation: yaw,
             pitch,
+            is_secondary_use_active: self.player.is_secondary_use_active(),
             world: self.world,
         })
     }
@@ -258,7 +253,7 @@ pub struct UseItemContext<'a> {
     /// The world where the interaction is happening.
     pub world: &'a Arc<World>,
     /// Mutable inventory access.
-    pub inv: InventoryAccess<'a>,
+    pub inv: InventoryAccess,
 }
 
 impl<'a> UseItemContext<'a> {
@@ -268,18 +263,13 @@ impl<'a> UseItemContext<'a> {
         player: &'a Player,
         hand: InteractionHand,
         world: &'a Arc<World>,
-        inv_guard: &'a mut ContainerLockGuard,
-        inv_id: ContainerId,
+        inventory: SyncPlayerInv,
     ) -> Self {
         Self {
             player,
             hand,
             world,
-            inv: InventoryAccess {
-                inv_guard,
-                hand,
-                inv_id,
-            },
+            inv: InventoryAccess::new(inventory, hand),
         }
     }
 }

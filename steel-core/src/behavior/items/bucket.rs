@@ -59,26 +59,38 @@ impl ItemBehavior for BucketItem {
 /// inventory if the player doesn't already have one.
 fn consume_bucket(context: &mut UseItemContext, result_item: ItemRef) {
     let player = context.player;
-    if player.has_infinite_materials() {
-        // Creative: give the result item only if the player doesn't already have one.
+    context.inv.with_guard(|guard| {
         let inv_id = ContainerId::from_arc(&player.inventory);
-        let already_has = context.inv.guard().get(inv_id).is_some_and(|inv| {
-            (0..inv.get_container_size()).any(|i| inv.get_item(i).item == result_item)
-        });
-        if !already_has {
-            let result_stack = ItemStack::new(result_item);
-            player.add_item_or_drop_with_guard(context.inv.guard(), result_stack);
-        }
-        return;
-    }
 
-    let result_stack = ItemStack::new(result_item);
-    if context.inv.item().count() > 1 {
-        context.inv.item().shrink(1);
-        player.add_item_or_drop_with_guard(context.inv.guard(), result_stack);
-    } else {
-        context.inv.item().set_item(&result_item.key);
-    }
+        if player.has_infinite_materials() {
+            // Creative: give the result item only if the player doesn't already have one.
+            let already_has = guard.get(inv_id).is_some_and(|inv| {
+                (0..inv.get_container_size()).any(|i| inv.get_item(i).item == result_item)
+            });
+            if !already_has {
+                player.add_item_or_drop_with_guard(guard, ItemStack::new(result_item));
+            }
+            return;
+        }
+
+        let should_add_result = {
+            let Some(inv) = guard.get_player_inventory_mut(inv_id) else {
+                return;
+            };
+            let hand_item = inv.get_item_in_hand_mut(context.hand);
+            if hand_item.count() > 1 {
+                hand_item.shrink(1);
+                true
+            } else {
+                hand_item.set_item(&result_item.key);
+                false
+            }
+        };
+
+        if should_add_result {
+            player.add_item_or_drop_with_guard(guard, ItemStack::new(result_item));
+        }
+    });
 }
 
 fn use_empty_bucket(context: &mut UseItemContext) -> InteractionResult {
@@ -143,7 +155,7 @@ fn use_empty_bucket(context: &mut UseItemContext) -> InteractionResult {
 
         context
             .world
-            .play_block_sound(sound_events::ITEM_BUCKET_FILL, hit_pos, 1.0, 1.0, None);
+            .play_block_sound(&sound_events::ITEM_BUCKET_FILL, hit_pos, 1.0, 1.0, None);
 
         consume_bucket(context, &vanilla_items::ITEMS.water_bucket);
 
@@ -221,10 +233,10 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
             return None;
         }
 
-        // Vanilla parity: in dimensions where water evaporates (e.g. the Nether),
+        // Vanilla parity: in worlds where water evaporates (e.g. the Nether),
         // water buckets fizz out without placing any fluid.
         // TODO: Per-position environment attributes (vanilla uses EnvironmentAttributes.WATER_EVAPORATES per-pos)
-        if is_water_bucket && context.world.dimension.water_evaporates {
+        if is_water_bucket && context.world.dimension_type.water_evaporates {
             context
                 .world
                 .level_event(level_events::PARTICLES_WATER_EVAPORATING, pos, 0, None);
@@ -238,7 +250,7 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
             behavior.place_liquid(context.world, pos, state, source_water);
             context
                 .world
-                .play_block_sound(sound_events::ITEM_BUCKET_EMPTY, pos, 1.0, 1.0, None);
+                .play_block_sound(&sound_events::ITEM_BUCKET_EMPTY, pos, 1.0, 1.0, None);
             consume_bucket(context, &vanilla_items::ITEMS.bucket);
             return Some(InteractionResult::Success);
         }
@@ -281,14 +293,14 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
                     .world
                     .schedule_fluid_tick_default(pos, fluid_ref, tick_delay);
 
-                let sound_id = if is_water_bucket {
-                    sound_events::ITEM_BUCKET_EMPTY
+                let sound_event = if is_water_bucket {
+                    &sound_events::ITEM_BUCKET_EMPTY
                 } else {
-                    sound_events::ITEM_BUCKET_EMPTY_LAVA
+                    &sound_events::ITEM_BUCKET_EMPTY_LAVA
                 };
                 context
                     .world
-                    .play_block_sound(sound_id, pos, 1.0, 1.0, None);
+                    .play_block_sound(sound_event, pos, 1.0, 1.0, None);
 
                 consume_bucket(context, &vanilla_items::ITEMS.bucket);
                 return Some(InteractionResult::Success);

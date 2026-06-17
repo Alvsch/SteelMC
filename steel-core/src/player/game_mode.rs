@@ -3,20 +3,19 @@
 //! This module implements the logic from Java's `ServerPlayerGameMode`, particularly
 //! the `useItemOn` method that handles block placement and block interactions.
 
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::Arc;
 
 use steel_protocol::packets::game::{
     AnimateAction, CAnimate, CBlockChangedAck, CBlockUpdate, CChangeDifficulty, CGameEvent,
-    COpenSignEditor, CPlayerInfoUpdate, CSetHeldSlot, GameEventType, PlayerAction,
-    SPickItemFromBlock, SPlayerAction, SSignUpdate, SUseItem, SUseItemOn,
+    COpenSignEditor, CPlayerInfoUpdate, CSetCamera, CSetHeldSlot, GameEventType, PlayerAction,
+    SPickItemFromBlock, SPlayerAction, SSignUpdate, SSpectatorAction, SUseItem, SUseItemOn,
 };
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::Direction;
 use steel_registry::{REGISTRY, vanilla_attributes};
-use steel_utils::BlockPos;
-use steel_utils::Identifier;
 use steel_utils::translations;
 use steel_utils::types::{Difficulty, GameType, InteractionHand};
+use steel_utils::{BlockPos, Identifier, WorldAabb};
 use text_components::TextComponent;
 
 use crate::behavior::{
@@ -26,9 +25,8 @@ use crate::behavior::{
 use crate::block_entity::BlockEntity;
 use crate::block_entity::entities::SignBlockEntity;
 use crate::command::commands::gamemode::get_gamemode_translation;
-use crate::entity::Entity;
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
-use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
+use crate::entity::{Entity, LivingEntity};
 use crate::inventory::menu::Menu;
 use crate::player::Player;
 use crate::player::block_breaking::BlockBreakAction;
@@ -60,7 +58,7 @@ pub fn use_item_on(
 
     // Spectator mode: can only open menus
     // TODO: Implement menu providers for blocks like chests
-    if player.game_mode.load() == GameType::Spectator {
+    if player.game_mode() == GameType::Spectator {
         return InteractionResult::Pass;
     }
 
@@ -85,22 +83,17 @@ pub fn use_item_on(
         };
         let behavior = block_behaviors.get_behavior(block);
 
-        let block_result = {
-            let inv_ref = ContainerRef::PlayerInventory(player.inventory.clone());
-            let mut guard = ContainerLockGuard::lock_all(&[&inv_ref]);
-            let inv_id = inv_ref.container_id();
-            let mut inventory_access = InventoryAccess::new(&mut guard, hand, inv_id);
+        let mut inventory_access = InventoryAccess::new(player.inventory.clone(), hand);
 
-            behavior.use_item_on(
-                state,
-                world,
-                pos,
-                player,
-                hand,
-                hit_result,
-                &mut inventory_access,
-            )
-        };
+        let block_result = behavior.use_item_on(
+            state,
+            world,
+            pos,
+            player,
+            hand,
+            hit_result,
+            &mut inventory_access,
+        );
 
         if block_result.consumes_action() {
             return block_result;
@@ -109,7 +102,14 @@ pub fn use_item_on(
         if matches!(block_result, InteractionResult::TryEmptyHandInteraction)
             && hand == InteractionHand::MainHand
         {
-            let empty_result = behavior.use_without_item(state, world, pos, player, hit_result);
+            let empty_result = behavior.use_without_item(
+                state,
+                world,
+                pos,
+                player,
+                hit_result,
+                &mut inventory_access,
+            );
 
             if empty_result.consumes_action() {
                 return empty_result;
@@ -117,34 +117,31 @@ pub fn use_item_on(
         }
     }
 
-    // Item use (block placement, etc.) — acquire inventory lock via ContainerLockGuard
-    let inv_ref = ContainerRef::PlayerInventory(player.inventory.clone());
-    let mut guard = ContainerLockGuard::lock_all(&[&inv_ref]);
-
-    let inv_id = inv_ref.container_id();
-
-    let is_empty = {
-        let Some(inv) = guard.get_player_inventory_mut(inv_id) else {
-            return InteractionResult::Pass;
-        };
-        inv.get_item_in_hand(hand).is_empty()
-    };
+    let inventory_access = InventoryAccess::new(player.inventory.clone(), hand);
+    let (is_empty, original_count, item_ref) =
+        inventory_access.with_item(|item| (item.is_empty(), item.count, item.item));
 
     if !is_empty {
         // TODO: Check item cooldowns
         // if player.getCooldowns().isOnCooldown(item_stack.item) { return Pass }
 
-        let mut context =
-            UseOnContext::new(player, hand, hit_result.clone(), world, &mut guard, inv_id);
-
-        let original_count = context.inv.item().count;
-        let item_ref = context.inv.item().item;
+        let mut context = UseOnContext::new(
+            player,
+            hand,
+            hit_result.clone(),
+            world,
+            player.inventory.clone(),
+        );
         let item_behavior = item_behaviors.get_behavior(item_ref);
         let result = item_behavior.use_on(&mut context);
 
         // Restore count for creative mode (infinite materials)
-        if player.has_infinite_materials() && context.inv.item().count < original_count {
-            context.inv.item().count = original_count;
+        if player.has_infinite_materials() {
+            context.inv.with_item(|item| {
+                if item.count < original_count {
+                    item.count = original_count;
+                }
+            });
         }
 
         return result;
@@ -158,40 +155,34 @@ pub fn use_item_on(
 /// This implements logic similar to `ServerPlayerGameMode.useItem()`.
 pub fn use_item(player: &Player, world: &Arc<World>, hand: InteractionHand) -> InteractionResult {
     // Spectator mode: can only open menus
-    if player.game_mode.load() == GameType::Spectator {
+    if player.game_mode() == GameType::Spectator {
         return InteractionResult::Pass;
     }
 
     // TODO: Check item cooldowns
     // if player.getCooldowns().isOnCooldown(item_stack) { return InteractionResult::Pass }
 
-    let inv_ref = ContainerRef::PlayerInventory(player.inventory.clone());
-    let mut guard = ContainerLockGuard::lock_all(&[&inv_ref]);
-    let inv_id = inv_ref.container_id();
-
-    let is_empty = {
-        let Some(inv) = guard.get_player_inventory_mut(inv_id) else {
-            return InteractionResult::Pass;
-        };
-        inv.get_item_in_hand(hand).is_empty()
-    };
+    let inventory_access = InventoryAccess::new(player.inventory.clone(), hand);
+    let (is_empty, original_count, item_ref) =
+        inventory_access.with_item(|item| (item.is_empty(), item.count, item.item));
 
     if !is_empty {
         let mut context =
-            crate::behavior::UseItemContext::new(player, hand, world, &mut guard, inv_id);
-
-        let original_count = context.inv.item().count;
+            crate::behavior::UseItemContext::new(player, hand, world, player.inventory.clone());
 
         // Get behavior registries
         let item_behaviors = &*ITEM_BEHAVIORS;
-        let item_ref = context.inv.item().item;
         let item_behavior = item_behaviors.get_behavior(item_ref);
 
         let result = item_behavior.use_item(&mut context);
 
         // Restore count for creative mode (infinite materials)
-        if player.has_infinite_materials() && context.inv.item().count < original_count {
-            context.inv.item().count = original_count;
+        if player.has_infinite_materials() {
+            context.inv.with_item(|item| {
+                if item.count < original_count {
+                    item.count = original_count;
+                }
+            });
         }
 
         return result;
@@ -205,13 +196,9 @@ impl Player {
     ///
     /// Returns `true` if the game mode was changed, `false` if the player was already in the requested game mode.
     pub fn set_game_mode(&self, gamemode: GameType) -> bool {
-        let current_gamemode = self.game_mode.load();
-        if current_gamemode == gamemode {
+        if !self.change_game_mode_state(gamemode) {
             return false;
         }
-
-        self.prev_game_mode.store(self.game_mode.load());
-        self.game_mode.store(gamemode);
 
         // Update abilities based on new game mode (mirrors vanilla GameType.updatePlayerAbilities)
         self.abilities.lock().update_for_game_mode(gamemode);
@@ -262,8 +249,8 @@ impl Player {
             }
         }
 
-        // Vanilla: difficulty is global across all dimensions
-        for w in self.server().worlds.values() {
+        let domain = self.get_world().domain().to_owned();
+        for w in self.server().worlds.worlds_in_domain(&domain) {
             let mut level_data = w.level_data.write();
             level_data.data_mut().difficulty = difficulty;
             let locked = level_data.data().difficulty_locked;
@@ -278,8 +265,8 @@ impl Player {
     /// Vanilla: `ServerPlayer.updatePlayerAttributes()` — applies creative-mode
     /// range modifiers every tick.
     pub(super) fn update_player_attributes(&self) {
-        let is_creative = self.game_mode.load() == GameType::Creative;
-        let mut attrs = self.attributes.lock();
+        let is_creative = self.game_mode() == GameType::Creative;
+        let mut attrs = self.attributes().lock();
 
         if is_creative {
             attrs.set_modifier(
@@ -315,7 +302,7 @@ impl Player {
     /// Returns true if player has infinite materials (Creative mode).
     #[must_use]
     pub fn has_infinite_materials(&self) -> bool {
-        self.game_mode.load() == GameType::Creative
+        self.game_mode() == GameType::Creative
     }
 
     /// Acknowledges block changes up to the given sequence number.
@@ -323,16 +310,12 @@ impl Player {
     /// The ack is batched and sent once per tick (in `tick_ack_block_changes`),
     /// matching vanilla behavior.
     pub fn ack_block_changes_up_to(&self, sequence: i32) {
-        let current = self.ack_block_changes_up_to.load(Ordering::Relaxed);
-        if sequence > current {
-            self.ack_block_changes_up_to
-                .store(sequence, Ordering::Relaxed);
-        }
+        self.tick_state.lock().ack_block_changes_up_to(sequence);
     }
 
     /// Sends pending block change ack if any. Called once per tick.
     pub(super) fn tick_ack_block_changes(&self) {
-        let sequence = self.ack_block_changes_up_to.swap(-1, Ordering::Relaxed);
+        let sequence = self.tick_state.lock().take_ack_block_changes_up_to();
         if sequence > -1 {
             self.send_packet(CBlockChangedAck { sequence });
         }
@@ -344,7 +327,17 @@ impl Player {
     /// matching vanilla's `Player.isWithinBlockInteractionRange(pos, 1.0)`.
     #[must_use]
     pub fn is_within_block_interaction_range(&self, pos: BlockPos) -> bool {
-        let player_pos = *self.position.lock();
+        self.is_within_block_interaction_range_with_buffer(pos, 1.0)
+    }
+
+    /// Returns true if player is within block interaction range plus a vanilla buffer.
+    #[must_use]
+    pub fn is_within_block_interaction_range_with_buffer(
+        &self,
+        pos: BlockPos,
+        buffer: f64,
+    ) -> bool {
+        let player_pos = self.position();
         let eye_y = player_pos.y + self.get_eye_height();
 
         let min_x = f64::from(pos.x());
@@ -360,18 +353,70 @@ impl Player {
         let dist_sq = dx * dx + dy * dy + dz * dz;
 
         let base_range = self
-            .attributes
+            .attributes()
             .lock()
             .get_value(vanilla_attributes::BLOCK_INTERACTION_RANGE)
             .unwrap_or(4.5);
-        let max_range = base_range + 1.0;
+        let max_range = base_range + buffer;
         dist_sq < max_range * max_range
+    }
+
+    /// Returns true if the player's eye position is within entity interaction range.
+    #[must_use]
+    pub fn is_within_entity_interaction_range(&self, aabb: WorldAabb, buffer: f64) -> bool {
+        let player_pos = self.position();
+        let eye_y = player_pos.y + self.get_eye_height();
+
+        let dx = f64::max(
+            f64::max(aabb.min_x() - player_pos.x, player_pos.x - aabb.max_x()),
+            0.0,
+        );
+        let dy = f64::max(f64::max(aabb.min_y() - eye_y, eye_y - aabb.max_y()), 0.0);
+        let dz = f64::max(
+            f64::max(aabb.min_z() - player_pos.z, player_pos.z - aabb.max_z()),
+            0.0,
+        );
+        let dist_sq = dx * dx + dy * dy + dz * dz;
+
+        let base_range = self
+            .attributes()
+            .lock()
+            .get_value(vanilla_attributes::ENTITY_INTERACTION_RANGE)
+            .unwrap_or(3.0);
+        let max_range = base_range + buffer;
+        dist_sq < max_range * max_range
+    }
+
+    /// Handles spectator camera selection.
+    pub fn handle_spectator_action(&self, packet: SSpectatorAction) {
+        if !self.has_client_loaded() || self.game_mode() != GameType::Spectator {
+            return;
+        }
+
+        let Some(entity_id) = packet.spectate_entity_id else {
+            return;
+        };
+
+        let world = self.get_world();
+        let Some(target) = world.entity_manager().get_by_id(entity_id) else {
+            return;
+        };
+
+        // TODO: Store the camera entity and apply world-border/cross-world
+        // setCamera semantics once those foundations exist.
+        if self.is_within_entity_interaction_range(target.bounding_box(), 3.0)
+            && target.is_pickable()
+        {
+            self.send_packet(CSetCamera {
+                camera_id: target.id(),
+            });
+        }
     }
 
     /// Returns true if player is sneaking (secondary use active).
     #[must_use]
     pub fn is_secondary_use_active(&self) -> bool {
-        self.entity_state.lock().crouching
+        self.is_crouching()
     }
 
     /// Sends block update packets for a position and its neighbor.
@@ -399,10 +444,10 @@ impl Player {
             InteractionHand::MainHand => AnimateAction::SwingMainHand,
             InteractionHand::OffHand => AnimateAction::SwingOffHand,
         };
-        let packet = CAnimate::new(self.id, action);
+        let packet = CAnimate::new(self.id(), action);
 
         let chunk = *self.last_chunk_pos.lock();
-        let exclude = if update_self { None } else { Some(self.id) };
+        let exclude = if update_self { None } else { Some(self.id()) };
         self.get_world().broadcast_to_nearby(chunk, packet, exclude);
     }
 
@@ -410,7 +455,7 @@ impl Player {
     ///
     /// Implements the logic from Java's `ServerGamePacketListenerImpl.handleUseItemOn()`.
     pub fn handle_use_item_on(&self, packet: SUseItemOn) {
-        if !self.client_loaded.load(Ordering::Relaxed) {
+        if !self.has_client_loaded() {
             return;
         }
 

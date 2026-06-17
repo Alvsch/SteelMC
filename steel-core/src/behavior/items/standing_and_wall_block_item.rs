@@ -10,14 +10,16 @@
 //! when direction matches `attachmentDirection` and wall block otherwise.
 
 use steel_macros::item_behavior;
-use steel_registry::REGISTRY;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::Direction;
+use steel_registry::{REGISTRY, vanilla_game_events};
 use steel_utils::types::UpdateFlags;
 
 use crate::behavior::context::{BlockPlaceContext, InteractionResult, UseOnContext};
 use crate::behavior::{BLOCK_BEHAVIORS, ItemBehavior};
+use crate::entity::Entity;
+use crate::world::game_event_context::GameEventContext;
 
 /// Behavior for items that place either a standing or wall variant of a block.
 ///
@@ -109,7 +111,7 @@ impl StandingAndWallBlockItem {
 
             // Vanilla's canPlace checks canSurvive (already done in get_state_for_placement)
             // Then checks isUnobstructed
-            let collision_shape = state.get_collision_shape();
+            let collision_shape = state.get_collision_shape_at(place_context.relative_pos);
             if place_context
                 .world
                 .is_unobstructed(collision_shape, place_context.relative_pos)
@@ -154,6 +156,7 @@ impl ItemBehavior for StandingAndWallBlockItem {
         {
             return InteractionResult::Fail;
         }
+        let placed_state = context.world.get_block_state(place_pos);
 
         let block = self.get_block_for_state(new_state);
         let sound_type = &block.config.sound_type;
@@ -162,10 +165,15 @@ impl ItemBehavior for StandingAndWallBlockItem {
             place_pos,
             sound_type.volume,
             sound_type.pitch,
-            Some(context.player.id),
+            Some(context.player.id()),
+        );
+        context.world.game_event(
+            &vanilla_game_events::BLOCK_PLACE,
+            place_pos,
+            &GameEventContext::new(Some(context.player), Some(placed_state)),
         );
 
-        context.inv.item().shrink(1);
+        context.inv.with_item(|item| item.shrink(1));
 
         InteractionResult::Success
     }

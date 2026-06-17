@@ -72,7 +72,7 @@ impl RecipeHandler for CraftingHandler {
     fn on_result_taken(
         &self,
         guard: &mut ContainerLockGuard,
-        _player: &Player,
+        player: &Player,
     ) -> Option<ItemStack> {
         let mut remainder_overflow: Vec<ItemStack> = Vec::new();
 
@@ -83,11 +83,19 @@ impl RecipeHandler for CraftingHandler {
             recipe_manager::get_remaining_items(crafting, self.is_2x2())
         };
 
-        let crafting = guard
-            .get_crafting_container_mut(self.crafting_id())
-            .expect("crafting container not locked");
+        let Some((remainders, positioned)) = remainders_and_positioned else {
+            guard
+                .get_result_container_mut(self.result_id())
+                .expect("result container not locked")
+                .set_item(0, ItemStack::empty());
+            return None;
+        };
 
-        if let Some((remainders, positioned)) = remainders_and_positioned {
+        {
+            let crafting = guard
+                .get_crafting_container_mut(self.crafting_id())
+                .expect("crafting container not locked");
+
             let input = &positioned.input;
 
             for y in 0..input.height {
@@ -123,14 +131,36 @@ impl RecipeHandler for CraftingHandler {
                     }
                 }
             }
+
+            crafting.set_changed();
         }
 
-        crafting.set_changed();
         self.update_result(guard);
 
-        if remainder_overflow.is_empty() {
-            return None;
+        for remainder in remainder_overflow {
+            player.add_item_or_drop_with_guard(guard, remainder);
         }
-        Some(remainder_overflow.remove(0))
+
+        None
+    }
+
+    fn is_result_valid(&self, guard: &ContainerLockGuard) -> bool {
+        let Some(result) = guard.get(self.result_id()) else {
+            return false;
+        };
+        let result_item = result.get_item(0);
+        if result_item.is_empty() {
+            return false;
+        }
+
+        let Some(crafting) = guard.get_crafting_container(self.crafting_id()) else {
+            return false;
+        };
+
+        let Some(recipe) = recipe_manager::find_recipe(crafting, self.is_2x2()) else {
+            return false;
+        };
+
+        ItemStack::matches(result_item, &recipe.assemble())
     }
 }

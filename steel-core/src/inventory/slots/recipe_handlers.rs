@@ -20,6 +20,10 @@ pub trait RecipeHandler: Send + Sync {
     /// Consume inputs when the result is taken. Return overflow remainders.
     fn on_result_taken(&self, guard: &mut ContainerLockGuard, player: &Player)
     -> Option<ItemStack>;
+
+    /// Returns whether the stored result item still matches what the current
+    /// inputs would produce. Used to reject stale pickups on result slots.
+    fn is_result_valid(&self, guard: &ContainerLockGuard) -> bool;
 }
 
 /// An enum for all of the Recipe Handlers that enables enum dispatch
@@ -58,6 +62,9 @@ impl ProcessingResultSlot {
 impl Slot for ProcessingResultSlot {
     fn may_place(&self, _stack: &ItemStack) -> bool {
         false
+    }
+    fn may_pickup(&self, guard: &ContainerLockGuard, _player: &Player) -> bool {
+        self.handler.is_result_valid(guard)
     }
     fn allow_modification(&self, _guard: &ContainerLockGuard, _player: &Player) -> bool {
         false

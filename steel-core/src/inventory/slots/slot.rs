@@ -146,6 +146,10 @@ pub trait Slot {
             return None;
         }
 
+        if self.get_item(guard).is_empty() {
+            self.set_by_player(guard, ItemStack::empty(), &result);
+        }
+
         Some(result)
     }
 
@@ -153,10 +157,11 @@ pub trait Slot {
     /// Returns any remainder items that couldn't be placed back (e.g., crafting remainders).
     fn on_take(
         &self,
-        _guard: &mut ContainerLockGuard,
+        guard: &mut ContainerLockGuard,
         _stack: &ItemStack,
         _player: &Player,
     ) -> Option<ItemStack> {
+        self.set_changed(guard);
         None
     }
 
@@ -225,8 +230,6 @@ impl SlotType {
     }
 }
 
-// ==================== Slot Builder Helpers ====================
-//
 // These functions mirror vanilla Java's AbstractContainerMenu methods for
 // adding standard inventory slots. They create SlotType vectors that can
 // be appended to a menu's slot list.
