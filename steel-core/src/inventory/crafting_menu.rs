@@ -21,9 +21,7 @@ use text_components::TextComponent;
 use crate::inventory::slots::slot::{
     Slot, SlotType, SyncCraftingContainer, SyncResultContainer, add_standard_inventory_slots,
 };
-use crate::inventory::slots::{
-    CraftingHandler, NormalSlot, ProcessingResultSlot, RecipeHandler, RecipeHandlerType,
-};
+use crate::inventory::slots::{CraftingHandler, NormalSlot, ResultHandler, ResultSlot};
 use crate::inventory::{
     SyncPlayerInv,
     container::Container,
@@ -86,16 +84,12 @@ impl CraftingMenu {
         let result_container: SyncResultContainer =
             Arc::new(SyncMutex::new(ResultContainer::new()));
 
-        let handler = RecipeHandlerType::Crafting(CraftingHandler::new(
-            crafting_container.clone(),
-            result_container.clone(),
-            3,
-        ));
+        let handler = CraftingHandler::new(crafting_container.clone(), result_container.clone(), 3);
 
         // Slot 0: Crafting result
-        menu_slots.push(SlotType::ProcessingResultSlot(ProcessingResultSlot::new(
+        menu_slots.push(SlotType::Result(ResultSlot::new(
+            Arc::new(handler),
             ContainerRef::ResultContainer(result_container.clone()),
-            handler.clone(),
         )));
 
         // Slots 1-9: 3x3 Crafting grid

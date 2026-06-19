@@ -18,7 +18,8 @@ use crate::inventory::lock::{ContainerId, ContainerLockGuard};
 use crate::inventory::simple_menu::SimpleContainer;
 use crate::inventory::slots::armor_slot::ArmorSlot;
 use crate::inventory::slots::normal_slot::NormalSlot;
-use crate::inventory::slots::{AnvilResultSlot, ProcessingResultSlot};
+use crate::inventory::slots::restricted_slot::RestrictedSlot;
+use crate::inventory::slots::result_slot::ResultSlot;
 use crate::player::Player;
 
 /// A synchronized crafting container.
@@ -42,16 +43,6 @@ pub trait Slot {
 
     /// Sets the item in this slot.
     fn set_item(&self, guard: &mut ContainerLockGuard, stack: ItemStack);
-
-    /// Modifies the item in this slot in-place.
-    fn modify_item<R>(
-        &self,
-        guard: &mut ContainerLockGuard,
-        f: impl FnOnce(&mut ItemStack) -> R,
-    ) -> R {
-        let item = self.get_item_mut(guard);
-        f(item)
-    }
 
     /// Sets the item in this slot, triggered by a player action.
     ///
@@ -201,6 +192,109 @@ pub trait Slot {
     }
 }
 
+/// Forwarding impl so any smart pointer to a `Slot` is itself a `Slot`.
+///
+/// This is what lets `SlotType::Custom(Arc<dyn Slot + Send + Sync>)` satisfy
+/// `enum_dispatch`'s requirement that every variant's inner type implements
+/// the trait directly. It also makes `Arc<NormalSlot>`, `Arc<MyPluginSlot>`,
+/// etc. usable wherever a `Slot` is expected.
+///
+/// Every method is forwarded explicitly (not just the required ones) so that
+/// overrides on the inner type — e.g. `ArmorSlot::may_pickup` — are preserved
+/// when called through the wrapper, instead of silently falling back to the
+/// trait defaults.
+impl<T: Slot + ?Sized> Slot for Arc<T> {
+    fn get_item<'a>(&self, guard: &'a ContainerLockGuard) -> &'a ItemStack {
+        (**self).get_item(guard)
+    }
+
+    fn get_item_mut<'a>(&self, guard: &'a mut ContainerLockGuard) -> &'a mut ItemStack {
+        (**self).get_item_mut(guard)
+    }
+
+    fn set_item(&self, guard: &mut ContainerLockGuard, stack: ItemStack) {
+        (**self).set_item(guard, stack);
+    }
+
+    fn set_by_player(
+        &self,
+        guard: &mut ContainerLockGuard,
+        stack: ItemStack,
+        previous: &ItemStack,
+    ) {
+        (**self).set_by_player(guard, stack, previous);
+    }
+
+    fn has_item(&self, guard: &ContainerLockGuard) -> bool {
+        (**self).has_item(guard)
+    }
+
+    fn may_place(&self, stack: &ItemStack) -> bool {
+        (**self).may_place(stack)
+    }
+
+    fn may_pickup(&self, guard: &ContainerLockGuard, player: &Player) -> bool {
+        (**self).may_pickup(guard, player)
+    }
+
+    fn allow_modification(&self, guard: &ContainerLockGuard, player: &Player) -> bool {
+        (**self).allow_modification(guard, player)
+    }
+
+    fn get_max_stack_size(&self, guard: &ContainerLockGuard) -> i32 {
+        (**self).get_max_stack_size(guard)
+    }
+
+    fn get_max_stack_size_for_item(&self, guard: &ContainerLockGuard, stack: &ItemStack) -> i32 {
+        (**self).get_max_stack_size_for_item(guard, stack)
+    }
+
+    fn remove(&self, guard: &mut ContainerLockGuard, amount: i32) -> ItemStack {
+        (**self).remove(guard, amount)
+    }
+
+    fn try_remove(
+        &self,
+        guard: &mut ContainerLockGuard,
+        amount: i32,
+        max_amount: i32,
+        player: &Player,
+    ) -> Option<ItemStack> {
+        (**self).try_remove(guard, amount, max_amount, player)
+    }
+
+    fn on_take(
+        &self,
+        guard: &mut ContainerLockGuard,
+        stack: &ItemStack,
+        player: &Player,
+    ) -> Option<ItemStack> {
+        (**self).on_take(guard, stack, player)
+    }
+
+    fn safe_take(
+        &self,
+        guard: &mut ContainerLockGuard,
+        amount: i32,
+        max_amount: i32,
+        player: &Player,
+    ) -> ItemStack {
+        (**self).safe_take(guard, amount, max_amount, player)
+    }
+
+    fn set_changed(&self, guard: &mut ContainerLockGuard) {
+        (**self).set_changed(guard);
+    }
+
+    fn get_container_slot(&self) -> usize {
+        (**self).get_container_slot()
+    }
+
+    fn is_fake(&self) -> bool {
+        (**self).is_fake()
+    }
+}
+
 /// Enum of all slot types that implement the Slot trait.
 #[enum_dispatch(Slot)]
 pub enum SlotType {
@@ -208,10 +302,12 @@ pub enum SlotType {
     Normal(NormalSlot),
     /// Armor slot that only accepts armor items.
     Armor(ArmorSlot),
-    /// Crafting result slot (fake, doesn't persist items).
-    ProcessingResultSlot(ProcessingResultSlot),
-    /// Anvil result slot (fake, doesn't persist items).
-    AnvilResult(AnvilResultSlot),
+    /// Result slot (fake, doesn't persist items).
+    Result(ResultSlot),
+    /// A slot that takes a predicate function to restrict when and what can be placed and removed
+    Restricted(RestrictedSlot),
+    /// Custom implementations by Plugins
+    Custom(Arc<dyn Slot + Send + Sync>),
 }
 
 impl SlotType {

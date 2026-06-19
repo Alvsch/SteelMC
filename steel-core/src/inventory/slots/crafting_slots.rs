@@ -6,7 +6,7 @@ use crate::{
         lock::{ContainerId, ContainerLockGuard},
         recipe_manager,
         slots::{
-            recipe_handlers::RecipeHandler,
+            result_handler::ResultHandler,
             slot::{SyncCraftingContainer, SyncResultContainer},
         },
     },
@@ -54,7 +54,7 @@ impl CraftingHandler {
     }
 }
 
-impl RecipeHandler for CraftingHandler {
+impl ResultHandler for CraftingHandler {
     fn update_result(&self, guard: &mut ContainerLockGuard) {
         let crafting = guard
             .get_crafting_container(self.crafting_id())
@@ -63,10 +63,11 @@ impl RecipeHandler for CraftingHandler {
         let result_stack = recipe_manager::find_recipe(crafting, self.is_2x2())
             .map_or_else(ItemStack::empty, |r| r.assemble());
 
-        guard
+        let result_container = guard
             .get_result_container_mut(self.result_id())
-            .expect("result container not locked")
-            .set_item(0, result_stack);
+            .expect("result container not locked");
+        result_container.set_item(0, result_stack);
+        result_container.set_changed();
     }
 
     fn on_result_taken(
@@ -144,7 +145,7 @@ impl RecipeHandler for CraftingHandler {
         None
     }
 
-    fn is_result_valid(&self, guard: &ContainerLockGuard) -> bool {
+    fn is_result_valid(&self, guard: &ContainerLockGuard, _player: &Player) -> bool {
         let Some(result) = guard.get(self.result_id()) else {
             return false;
         };

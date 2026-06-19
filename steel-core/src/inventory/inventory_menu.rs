@@ -22,8 +22,7 @@ use crate::inventory::{
     menu::{Menu, MenuBehavior},
     recipe_manager,
     slots::{
-        ArmorSlot, CraftingHandler, NormalSlot, ProcessingResultSlot, RecipeHandler,
-        RecipeHandlerType,
+        ArmorSlot, CraftingHandler, NormalSlot, ResultHandler, ResultSlot,
         slot::{
             Slot, SlotType, SyncCraftingContainer, SyncResultContainer,
             add_standard_inventory_slots,
@@ -91,9 +90,9 @@ impl InventoryMenu {
         let handler = CraftingHandler::new(crafting_container.clone(), result_container.clone(), 2);
 
         // Slot 0: Crafting result
-        menu_slots.push(SlotType::ProcessingResultSlot(ProcessingResultSlot::new(
+        menu_slots.push(SlotType::Result(ResultSlot::new(
+            Arc::new(handler.clone()),
             ContainerRef::ResultContainer(result_container.clone()),
-            RecipeHandlerType::Crafting(handler.clone()),
         )));
 
         // Slots 1-4: 2x2 Crafting grid

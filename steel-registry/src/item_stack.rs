@@ -564,10 +564,16 @@ impl ItemStack {
             }
         }
 
-        if self.has(STORED_ENCHANTMENTS) {
-            self.set(STORED_ENCHANTMENTS, current);
+        let component = if self.has(STORED_ENCHANTMENTS) {
+            STORED_ENCHANTMENTS
         } else {
-            self.set(ENCHANTMENTS, current);
+            ENCHANTMENTS
+        };
+
+        if current.is_empty() {
+            self.remove(component);
+        } else {
+            self.set(component, current);
         }
     }
 

@@ -345,6 +345,18 @@ impl ContainerLockGuard {
             })
     }
 
+    /// Get access to a locked result container.
+    pub fn get_result_container(&self, id: impl Into<ContainerId>) -> Option<&ResultContainer> {
+        self.id_to_index
+            .get(&id.into())
+            .copied()
+            .and_then(|idx| self.guards.get(idx))
+            .and_then(|(_, guard)| match guard {
+                LockedContainer::ResultContainer(g) => Some(&**g),
+                _ => None,
+            })
+    }
+
     /// Get mutable access to a locked result container.
     pub fn get_result_container_mut(
         &mut self,

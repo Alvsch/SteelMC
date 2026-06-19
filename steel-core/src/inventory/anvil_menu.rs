@@ -31,7 +31,7 @@ use crate::{
         menu::{Menu, MenuBehavior},
         simple_menu::SimpleContainer,
         slots::{
-            AnvilResultSlot, NormalSlot, Slot, SlotType, SyncResultContainer,
+            AnvilResultHandler, NormalSlot, ResultSlot, Slot, SlotType, SyncResultContainer,
             add_standard_inventory_slots,
         },
     },
@@ -99,13 +99,16 @@ impl AnvilMenu {
 
         menu_slots.push(SlotType::Normal(NormalSlot::new(container_ref.clone(), 0)));
         menu_slots.push(SlotType::Normal(NormalSlot::new(container_ref.clone(), 1)));
-        menu_slots.push(SlotType::AnvilResult(AnvilResultSlot::new(
-            simple_container.clone(),
-            result_container.clone(),
-            repair_item_count.clone(),
-            level_cost.clone(),
-            pos,
-            world.clone(),
+        menu_slots.push(SlotType::Result(ResultSlot::new(
+            Arc::new(AnvilResultHandler::new(
+                simple_container.clone(),
+                result_container.clone(),
+                repair_item_count.clone(),
+                level_cost.clone(),
+                pos,
+                world.clone(),
+            )),
+            ContainerRef::ResultContainer(result_container.clone()),
         )));
 
         add_standard_inventory_slots(&mut menu_slots, &inventory);
@@ -297,13 +300,14 @@ impl AnvilMenu {
             result.remove(CUSTOM_NAME);
         }
 
-        // --- Final cost calculation ---
+        // Final cost calculation
         let total_cost = if additional_cost == 0 {
             0
         } else {
             (prior_repair_cost + i64::from(additional_cost)).clamp(0, i64::from(i32::MAX)) as i32
         };
-        self.behavior.set_data(0, total_cost as i16);
+        self.behavior
+            .set_data(0, total_cost.clamp(0, i32::from(i16::MAX)) as i16);
         self.level_cost.store(total_cost, Ordering::Relaxed);
 
         if additional_cost == 0 {
@@ -320,7 +324,7 @@ impl AnvilMenu {
             result = ItemStack::empty();
         }
 
-        // --- Write repair cost to result ---
+        // Write repair cost to result
         if !result.is_empty() {
             let second_repair_cost = *second.get(REPAIR_COST).unwrap_or(&0);
             let mut final_repair_cost = *result.get(REPAIR_COST).unwrap_or(&0);
@@ -330,7 +334,9 @@ impl AnvilMenu {
             if rename_cost != additional_cost as i32 || rename_cost == 0 {
                 final_repair_cost = Self::calculate_increased_repair_cost(final_repair_cost);
             }
-            result.set(REPAIR_COST, final_repair_cost);
+            if final_repair_cost > 0 {
+                result.set(REPAIR_COST, final_repair_cost);
+            }
             result.set_enchantments(enchantments.iter(), false);
         }
 
@@ -338,6 +344,9 @@ impl AnvilMenu {
     }
 
     /// Sets the item name of the item
+    ///
+    /// # Panics
+    /// When failing to lock the result container
     #[tracing::instrument(skip(self, player) level = "info")]
     pub fn set_item_name(&mut self, name: String, player: &Arc<Player>) {
         let Some(validated_name) = Self::validate_item_name(name) else {
@@ -345,10 +354,25 @@ impl AnvilMenu {
         };
 
         {
-            let mut guard = self.item_name.lock();
-            match &*guard {
+            let mut item_name_guard = self.item_name.lock();
+            let is_empty = validated_name.is_empty();
+            let text_component = TextComponent::from(validated_name.clone());
+            match &*item_name_guard {
                 Some(current) if *current == validated_name => return,
-                _ => *guard = Some(validated_name),
+                _ => *item_name_guard = Some(validated_name),
+            }
+
+            let mut guard = self.behavior.lock_all_containers();
+            let Some(result) = guard.get_mut(ContainerId::from_arc(&self.result_container)) else {
+                panic!("failed to lock input container")
+            };
+
+            let item = result.get_item_mut(0);
+
+            if is_empty {
+                item.remove(CUSTOM_NAME);
+            } else {
+                item.set(CUSTOM_NAME, text_component);
             }
         }
 
