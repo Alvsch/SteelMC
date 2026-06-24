@@ -431,6 +431,12 @@ impl MenuLayout {
             return ItemStack::empty();
         }
 
+        // Reject stale pickups — e.g. a result slot whose recipe no longer
+        // matches the inputs. Normal slots always allow it.
+        if !behavior.slots[slot_index].may_pickup(guard, player) {
+            return ItemStack::empty();
+        }
+
         let mut remaining = clicked.clone();
         let moved = route.targets.iter().any(|target| {
             behavior.move_item_stack_to(
@@ -469,6 +475,11 @@ impl MenuLayout {
             let taken = clicked.copy_with_count(clicked.count - remaining.count);
             if let Some(leftover) = slot.on_take(guard, &taken, player) {
                 player.add_item_or_drop_with_guard(guard, leftover);
+            }
+            // Output that didn't fit in the inventory is dropped, matching
+            // vanilla's result-slot shift-click (`player.drop(stack, false)`).
+            if !remaining.is_empty() {
+                player.drop_item(remaining.clone(), false, true);
             }
         }
 

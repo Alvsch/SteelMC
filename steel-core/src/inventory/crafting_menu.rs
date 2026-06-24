@@ -17,12 +17,10 @@ use steel_registry::vanilla_menu_types;
 use steel_utils::BlockPos;
 use steel_utils::locks::SyncMutex;
 
-use crate::inventory::slots::slot::{
-    Slot, SlotType, SyncCraftingContainer, SyncResultContainer, add_standard_inventory_slots,
-};
-use crate::inventory::slots::{CraftingHandler, NormalSlot, ResultHandler, ResultSlot};
+use crate::inventory::slots::slot::{SyncCraftingContainer, SyncResultContainer};
+use crate::inventory::slots::{CraftingHandler, ResultHandler};
 use crate::inventory::{
-    SyncPlayerInv,
+    BuiltMenu, MenuBuilder, MenuLayout, SyncPlayerInv,
     container::Container,
     crafting::{CraftingContainer, ResultContainer},
     lock::{ContainerLockGuard, ContainerRef},
@@ -30,26 +28,6 @@ use crate::inventory::{
     menu_provider::MenuInstance,
 };
 use crate::player::Player;
-
-/// Slot indices for the crafting menu.
-pub mod slots {
-    /// Slot index for the crafting result (slot 0).
-    pub const RESULT_SLOT: usize = 0;
-    /// Start of the 3x3 crafting grid (slot 1).
-    pub const CRAFT_SLOT_START: usize = 1;
-    /// End of the 3x3 crafting grid (slot 10, exclusive).
-    pub const CRAFT_SLOT_END: usize = 10;
-    /// Start of main inventory (slot 10).
-    pub const INV_SLOT_START: usize = 10;
-    /// End of main inventory (slot 37, exclusive).
-    pub const INV_SLOT_END: usize = 37;
-    /// Start of hotbar (slot 37).
-    pub const HOTBAR_SLOT_START: usize = 37;
-    /// End of hotbar (slot 46, exclusive).
-    pub const HOTBAR_SLOT_END: usize = 46;
-    /// Total number of slots in the crafting menu.
-    pub const TOTAL_SLOTS: usize = 46;
-}
 
 /// The crafting table menu with a 3x3 crafting grid.
 ///
@@ -63,6 +41,8 @@ pub struct CraftingMenu {
     /// The position of the crafting table block.
     block_pos: BlockPos,
     handler: CraftingHandler,
+    /// Section ranges and shift-click routes.
+    layout: MenuLayout,
 }
 
 impl CraftingMenu {
@@ -74,8 +54,6 @@ impl CraftingMenu {
     /// * `block_pos` - The position of the crafting table block
     #[must_use]
     pub fn new(inventory: SyncPlayerInv, container_id: u8, block_pos: BlockPos) -> Self {
-        let mut menu_slots = Vec::with_capacity(slots::TOTAL_SLOTS);
-
         // Create the crafting containers
         let crafting_container: SyncCraftingContainer =
             Arc::new(SyncMutex::new(CraftingContainer::new(3, 3)));
@@ -84,38 +62,33 @@ impl CraftingMenu {
 
         let handler = CraftingHandler::new(crafting_container.clone(), result_container.clone(), 3);
 
-        // Slot 0: Crafting result
-        menu_slots.push(SlotType::Result(ResultSlot::new(
+        let mut builder = MenuBuilder::new(&vanilla_menu_types::CRAFTING, container_id);
+        let result = builder.result_slot(
             Arc::new(handler),
             ContainerRef::ResultContainer(result_container.clone()),
-        )));
+        );
+        let grid = builder.section(
+            ContainerRef::CraftingContainer(crafting_container.clone()),
+            9,
+        );
+        let player = builder.player_inventory(&inventory);
 
-        // Slots 1-9: 3x3 Crafting grid
-        for i in 0..9 {
-            menu_slots.push(SlotType::Normal(NormalSlot::new(
-                ContainerRef::CraftingContainer(crafting_container.clone()),
-                i,
-            )));
-        }
+        // Vanilla CraftingMenu::quickMoveStack routing.
+        builder.route(result, [player.all], true);
+        builder.route(grid, [player.all], false);
+        builder.route(player.main, [grid, player.hotbar], false);
+        builder.route(player.hotbar, [grid, player.main], false);
+        builder.drain([grid]);
 
-        // Slots 10-45: Standard inventory (main inventory + hotbar)
-        add_standard_inventory_slots(&mut menu_slots, &inventory);
+        let BuiltMenu { behavior, layout } = builder.build();
 
         Self {
-            behavior: MenuBehavior::new(
-                menu_slots,
-                container_id,
-                Some(&vanilla_menu_types::CRAFTING),
-                vec![
-                    ContainerRef::CraftingContainer(crafting_container.clone()),
-                    ContainerRef::ResultContainer(result_container.clone()),
-                    ContainerRef::PlayerInventory(inventory.clone()),
-                ],
-            ),
+            behavior,
             crafting_container: crafting_container.clone(),
             result_container: result_container.clone(),
             block_pos,
             handler: CraftingHandler::new(crafting_container, result_container, 3),
+            layout,
         }
     }
 
@@ -165,140 +138,21 @@ impl Menu for CraftingMenu {
         &mut self.behavior
     }
 
-    /// Handles shift-click (quick move) for a slot.
-    ///
-    /// Based on Java's `CraftingMenu::quickMoveStack`:
-    /// - Result slot (0) -> inventory (10-46), prefer existing stacks
-    /// - Crafting grid (1-9) -> inventory (10-46)
-    /// - Inventory (10-36) -> crafting grid (1-9), then hotbar (37-45)
-    /// - Hotbar (37-45) -> crafting grid (1-9), then inventory (10-36)
+    /// Handles shift-click (quick move) for a slot via the declarative routes.
     fn quick_move_stack(
         &mut self,
         guard: &mut ContainerLockGuard,
         slot_index: usize,
         player: &Player,
     ) -> ItemStack {
-        if slot_index >= self.behavior.slots.len() {
-            return ItemStack::empty();
-        }
-
-        // Get the current item from the slot
-        let stack = self.behavior.slots[slot_index].get_item(guard).clone();
-        if stack.is_empty() {
-            return ItemStack::empty();
-        }
-        if slot_index == slots::RESULT_SLOT
-            && !self.behavior.slots[slot_index].may_pickup(guard, player)
-        {
-            return ItemStack::empty();
-        }
-
-        let clicked = stack.clone();
-        let mut stack_mut = stack;
-
-        let moved = if slot_index == slots::RESULT_SLOT {
-            // Result slot -> inventory (10-46), prefer to fill existing stacks first (backwards)
-            // Java: moveItemStackTo(stack, 10, 46, true)
-            // Also calls onCraftedBy for achievements
-            if !self.behavior.move_item_stack_to(
-                guard,
-                &mut stack_mut,
-                slots::INV_SLOT_START,
-                slots::HOTBAR_SLOT_END,
-                true,
-            ) {
-                return ItemStack::empty();
-            }
-            // slot.onQuickCraft is handled by on_take below
-            true
-        } else if (slots::INV_SLOT_START..slots::HOTBAR_SLOT_END).contains(&slot_index) {
-            // Inventory or hotbar -> try crafting grid first, then other inventory section
-            // Java: moveItemStackTo(stack, 1, 10, false) first
-            if !self.behavior.move_item_stack_to(
-                guard,
-                &mut stack_mut,
-                slots::CRAFT_SLOT_START,
-                slots::CRAFT_SLOT_END,
-                false,
-            ) {
-                // Then try the other inventory section
-                if slot_index < slots::HOTBAR_SLOT_START {
-                    // Main inventory -> hotbar
-                    // Java: moveItemStackTo(stack, 37, 46, false)
-                    if !self.behavior.move_item_stack_to(
-                        guard,
-                        &mut stack_mut,
-                        slots::HOTBAR_SLOT_START,
-                        slots::HOTBAR_SLOT_END,
-                        false,
-                    ) {
-                        return ItemStack::empty();
-                    }
-                } else {
-                    // Hotbar -> main inventory
-                    // Java: moveItemStackTo(stack, 10, 37, false)
-                    if !self.behavior.move_item_stack_to(
-                        guard,
-                        &mut stack_mut,
-                        slots::INV_SLOT_START,
-                        slots::HOTBAR_SLOT_START,
-                        false,
-                    ) {
-                        return ItemStack::empty();
-                    }
-                }
-            }
-            true
-        } else if (slots::CRAFT_SLOT_START..slots::CRAFT_SLOT_END).contains(&slot_index) {
-            // Crafting grid -> inventory (10-46)
-            // Java: moveItemStackTo(stack, 10, 46, false)
-            self.behavior.move_item_stack_to(
-                guard,
-                &mut stack_mut,
-                slots::INV_SLOT_START,
-                slots::HOTBAR_SLOT_END,
-                false,
-            )
-        } else {
-            false
-        };
-
-        if !moved {
-            return ItemStack::empty();
-        }
-
-        // Update the source slot with the remaining items
-        self.behavior.slots[slot_index].set_item(guard, stack_mut.clone());
-
-        // Check if unchanged
-        if stack_mut.count == clicked.count {
-            return ItemStack::empty();
-        }
-
-        self.behavior.slots[slot_index].set_changed(guard);
-
-        // Call on_take for the result slot to consume ingredients
-        if slot_index == slots::RESULT_SLOT {
-            if let Some(remainder) =
-                self.behavior.slots[slot_index].on_take(guard, &clicked, player)
-            {
-                player.add_item_or_drop_with_guard(guard, remainder);
-            }
-
-            // Java: if (slotIndex == 0) { player.drop(stack, false); }
-            // Drop any items from the result slot that couldn't fit in the inventory
-            if !stack_mut.is_empty() {
-                player.drop_item(stack_mut, false, true);
-            }
-        }
-
-        clicked
+        self.layout
+            .quick_move(&self.behavior, guard, slot_index, player)
     }
 
     /// Returns true if the item can be taken from the slot during pickup all.
-    /// Prevents taking from the crafting result slot.
+    /// Prevents taking from the crafting result slot (index 0).
     fn can_take_item_for_pick_all(&self, _carried: &ItemStack, slot_index: usize) -> bool {
-        slot_index != slots::RESULT_SLOT
+        slot_index != 0
     }
 
     /// Returns true if the player is still within range of the crafting table.
@@ -317,29 +171,13 @@ impl Menu for CraftingMenu {
     ///
     /// Based on Java's `CraftingMenu::removed` which calls `clearContainer`.
     fn removed(&mut self, player: &Player) {
-        // Clear the carried item first
         let carried = mem::take(&mut self.behavior.carried);
-
-        // If player was holding something, try to return it to inventory
         if !carried.is_empty() {
             player.add_item_or_drop(carried);
         }
 
-        // Collect all items from crafting grid first (to release the lock)
-        let crafting_items: Vec<ItemStack> = self
-            .crafting_container
-            .lock()
-            .iter_mut()
-            .map(mem::take)
-            .filter(|item| !item.is_empty())
-            .collect();
-
-        // Now place collected items back in inventory
-        for item in crafting_items {
-            player.add_item_or_drop(item);
-        }
-
-        // Clear the result slot (it's virtual, just clear it)
+        // Return the crafting grid to the player; the result is virtual.
+        self.layout.return_drained_items(&self.behavior, player);
         self.result_container.lock().set_item(0, ItemStack::empty());
     }
 
