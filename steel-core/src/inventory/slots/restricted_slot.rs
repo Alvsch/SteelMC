@@ -1,20 +1,40 @@
+use std::sync::Arc;
+
 use steel_registry::item_stack::ItemStack;
 
 use crate::{
     inventory::{
-        lock::ContainerLockGuard,
+        lock::{ContainerLockGuard, ContainerRef},
         slots::{NormalSlot, Slot},
     },
     player::Player,
 };
 
-type MayPickupFn = Box<dyn Fn(&ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync>;
+pub type MayPlaceFn = Arc<dyn Fn(&ItemStack) -> bool + Send + Sync>;
+pub type MayPickupFn = Arc<dyn Fn(&ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync>;
 
 pub struct RestrictedSlot {
     base: NormalSlot,
-    may_place_fn: Box<dyn Fn(&ItemStack) -> bool + Send + Sync>,
+    may_place_fn: MayPlaceFn,
     may_pickup_fn: Option<MayPickupFn>,
     max_stack: i32,
+}
+
+impl RestrictedSlot {
+    pub fn new(
+        container: impl Into<ContainerRef>,
+        index: usize,
+        may_place_fn: MayPlaceFn,
+        may_pickup_fn: Option<MayPickupFn>,
+        max_stack: i32,
+    ) -> Self {
+        Self {
+            base: NormalSlot::new(container, index),
+            may_place_fn,
+            may_pickup_fn,
+            max_stack,
+        }
+    }
 }
 
 impl Slot for RestrictedSlot {

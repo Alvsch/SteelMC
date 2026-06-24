@@ -13,6 +13,7 @@ pub use anvil_slots::*;
 pub use armor_slot::ArmorSlot;
 pub use crafting_slots::CraftingHandler;
 pub use normal_slot::NormalSlot;
+pub use restricted_slot::*;
 pub use result_handler::ResultHandler;
 pub use result_slot::*;
 pub use slot::*;

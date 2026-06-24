@@ -24,16 +24,13 @@ use text_components::TextComponent;
 
 use crate::{
     inventory::{
-        MenuInstance, MenuProvider, SyncPlayerInv,
+        BuiltMenu, DataSlot, MenuBuilder, MenuInstance, MenuLayout, MenuProvider, SyncPlayerInv,
         container::Container,
         crafting::ResultContainer,
         lock::{ContainerId, ContainerRef},
         menu::{Menu, MenuBehavior},
         simple_menu::SimpleContainer,
-        slots::{
-            AnvilResultHandler, NormalSlot, ResultSlot, Slot, SlotType, SyncResultContainer,
-            add_standard_inventory_slots,
-        },
+        slots::{AnvilResultHandler, SyncResultContainer},
     },
     player::Player,
     world::World,
@@ -74,8 +71,9 @@ pub struct AnvilMenu {
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
     repair_item_count: Arc<AtomicI32>,
-    level_cost: Arc<AtomicI32>,
+    level_cost: DataSlot,
     item_name: SyncMutex<Option<String>>,
+    layout: MenuLayout,
 }
 
 impl AnvilMenu {
@@ -87,21 +85,20 @@ impl AnvilMenu {
         pos: BlockPos,
         world: &Arc<World>,
     ) -> Self {
-        let mut menu_slots = Vec::with_capacity(slots::TOTAL_SLOTS);
-
-        let simple_container = Arc::new(SyncMutex::new(SimpleContainer::new(2)));
-        let container_ref = ContainerRef::SimpleContainer(simple_container.clone());
+        let input_container = Arc::new(SyncMutex::new(SimpleContainer::new(2)));
+        let container_ref = ContainerRef::SimpleContainer(input_container.clone());
         let repair_item_count = Arc::new(AtomicI32::new(0));
         let level_cost = Arc::new(AtomicI32::new(0));
 
         let result_container: SyncResultContainer =
             Arc::new(SyncMutex::new(ResultContainer::new()));
 
-        menu_slots.push(SlotType::Normal(NormalSlot::new(container_ref.clone(), 0)));
-        menu_slots.push(SlotType::Normal(NormalSlot::new(container_ref.clone(), 1)));
-        menu_slots.push(SlotType::Result(ResultSlot::new(
+        let mut builder = MenuBuilder::new(&vanilla_menu_types::ANVIL, container_id);
+
+        let input = builder.section(container_ref, 2);
+        let result = builder.result_slot(
             Arc::new(AnvilResultHandler::new(
-                simple_container.clone(),
+                input_container.clone(),
                 result_container.clone(),
                 repair_item_count.clone(),
                 level_cost.clone(),
@@ -109,30 +106,28 @@ impl AnvilMenu {
                 world.clone(),
             )),
             ContainerRef::ResultContainer(result_container.clone()),
-        )));
-
-        add_standard_inventory_slots(&mut menu_slots, &inventory);
-
-        let mut behavior = MenuBehavior::new(
-            menu_slots,
-            container_id,
-            Some(&vanilla_menu_types::ANVIL),
-            vec![
-                container_ref.clone(),
-                ContainerRef::ResultContainer(result_container.clone()),
-                ContainerRef::PlayerInventory(inventory.clone()),
-            ],
         );
-        behavior.add_data_slot(0);
+
+        let player = builder.player_inventory(&inventory);
+
+        let level_cost_data_slot = builder.data_slot(0);
+
+        builder.route(result, [player.all], true);
+        builder.route(input, [player.all], false);
+        builder.route(player.main, [input, player.hotbar], false);
+        builder.drain([input]);
+
+        let BuiltMenu { behavior, layout } = builder.build();
 
         Self {
             behavior,
-            input_container: simple_container,
+            input_container,
             result_container,
             block_pos: pos,
             repair_item_count: repair_item_count.clone(),
-            level_cost: level_cost.clone(),
+            level_cost: level_cost_data_slot,
             item_name: SyncMutex::new(None),
+            layout,
         }
     }
 
@@ -157,12 +152,12 @@ impl AnvilMenu {
         let mut additional_cost = 0_u32;
         let mut rename_cost = 0_i32;
         self.behavior.set_data(0, 0);
-        self.level_cost.store(0, Ordering::Relaxed);
+        self.level_cost.set(&mut self.behavior, 0);
 
         if first.is_empty() || !Self::can_store_enchantments(first) {
             result_container.set_item(0, ItemStack::empty());
             self.behavior.set_data(0, 0);
-            self.level_cost.store(0, Ordering::Relaxed);
+            self.level_cost.set(&mut self.behavior, 0);
             return;
         }
 
@@ -202,7 +197,7 @@ impl AnvilMenu {
                 {
                     result_container.set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
-                    self.level_cost.store(0, Ordering::Relaxed);
+                    self.level_cost.set(&mut self.behavior, 0);
                     return;
                 }
 
@@ -281,7 +276,7 @@ impl AnvilMenu {
                 if any_incompatible && !any_compatible {
                     result_container.set_item(0, ItemStack::empty());
                     self.behavior.set_data(0, 0);
-                    self.level_cost.store(0, Ordering::Relaxed);
+                    self.level_cost.set(&mut self.behavior, 0);
                     return;
                 }
             }
@@ -308,7 +303,7 @@ impl AnvilMenu {
         };
         self.behavior
             .set_data(0, total_cost.clamp(0, i32::from(i16::MAX)) as i16);
-        self.level_cost.store(total_cost, Ordering::Relaxed);
+        self.level_cost.set(&mut self.behavior, 0);
 
         if additional_cost == 0 {
             result = ItemStack::empty();
@@ -317,7 +312,7 @@ impl AnvilMenu {
         let only_renaming = rename_cost == additional_cost as i32 && rename_cost > 0;
         if only_renaming && total_cost >= 40 {
             self.behavior.set_data(0, 39);
-            self.level_cost.store(39, Ordering::Relaxed);
+            self.level_cost.set(&mut self.behavior, 39);
         }
 
         if total_cost >= 40 && !only_renaming && !player.has_infinite_materials() {
@@ -420,104 +415,18 @@ impl Menu for AnvilMenu {
         slot_index: usize,
         player: &Player,
     ) -> ItemStack {
-        if slot_index >= self.behavior.slots.len() {
-            return ItemStack::empty();
-        }
-
-        let clicked = self.behavior.slots[slot_index].get_item(guard).clone();
-        if clicked.is_empty() {
-            return ItemStack::empty();
-        }
-
-        let mut stack_mut = clicked.clone();
-
-        if slot_index == slots::RESULT_SLOT {
-            if !self.behavior.move_item_stack_to(
-                guard,
-                &mut stack_mut,
-                slots::INV_SLOT_START,
-                slots::HOTBAR_SLOT_END,
-                true,
-            ) {
-                return ItemStack::empty();
-            }
-        } else if (0..slots::RESULT_SLOT).contains(&slot_index) {
-            if !self.behavior.move_item_stack_to(
-                guard,
-                &mut stack_mut,
-                slots::INV_SLOT_START,
-                slots::HOTBAR_SLOT_END,
-                false,
-            ) {
-                return ItemStack::empty();
-            }
-        } else if (slots::INV_SLOT_START..slots::HOTBAR_SLOT_END).contains(&slot_index) {
-            if !self.behavior.move_item_stack_to(
-                guard,
-                &mut stack_mut,
-                0,
-                slots::RESULT_SLOT,
-                false,
-            ) {
-                if (slots::INV_SLOT_START..slots::INV_SLOT_END).contains(&slot_index) {
-                    if !self.behavior.move_item_stack_to(
-                        guard,
-                        &mut stack_mut,
-                        slots::HOTBAR_SLOT_START,
-                        slots::HOTBAR_SLOT_END,
-                        false,
-                    ) {
-                        return ItemStack::empty();
-                    }
-                } else if !self.behavior.move_item_stack_to(
-                    guard,
-                    &mut stack_mut,
-                    slots::INV_SLOT_START,
-                    slots::INV_SLOT_END,
-                    false,
-                ) {
-                    return ItemStack::empty();
-                }
-            }
-        } else {
-            return ItemStack::empty();
-        }
-
-        if stack_mut.is_empty() {
-            self.behavior.slots[slot_index].set_by_player(guard, ItemStack::empty(), &clicked);
-        } else {
-            self.behavior.slots[slot_index].set_changed(guard);
-        }
-
-        if stack_mut.count == clicked.count {
-            return ItemStack::empty();
-        }
-
-        self.behavior.slots[slot_index].on_take(guard, &stack_mut, player);
-
-        stack_mut
+        self.layout
+            .quick_move(&mut self.behavior, guard, slot_index, player)
     }
 
     fn removed(&mut self, player: &Player) {
         // TODO: this needs to be called before the server closes or the items inside will be deleted
         let carried = mem::take(&mut self.behavior.carried);
-
         if !carried.is_empty() {
             player.add_item_or_drop(carried);
         }
 
-        let items = self
-            .input_container
-            .lock()
-            .iter_mut()
-            .map(mem::take)
-            .filter(|item| !item.is_empty())
-            .collect::<Vec<ItemStack>>();
-
-        for item in items {
-            player.add_item_or_drop(item);
-        }
-
+        self.layout.return_drained_items(&self.behavior, player);
         self.result_container.lock().set_item(0, ItemStack::empty());
     }
 
