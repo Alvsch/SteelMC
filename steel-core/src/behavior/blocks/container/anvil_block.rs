@@ -6,11 +6,12 @@ use steel_registry::{
     items::item::BlockHitResult,
     vanilla_blocks,
 };
-use steel_utils::BlockStateId;
+use steel_utils::{BlockStateId, translations};
+use text_components::TextComponent;
 
 use crate::{
     behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess},
-    inventory::anvil_menu::AnvilMenuProvider,
+    inventory::anvil_menu::AnvilMenu,
     player::Player,
     world::World,
 };
@@ -67,7 +68,10 @@ impl BlockBehavior for AnvilBlock {
         _hit_result: &BlockHitResult,
         _inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        player.open_menu(&AnvilMenuProvider::new(player.inventory.clone(), pos));
+        player.open_menu(
+            TextComponent::translated(translations::CONTAINER_REPAIR.msg()),
+            move |id, world| Box::new(AnvilMenu::new(player.inventory.clone(), id, pos, world)),
+        );
         InteractionResult::Success
     }
 }

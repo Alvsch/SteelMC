@@ -3,7 +3,7 @@
 use std::{
     array,
     f32::consts::TAU,
-    sync::{LazyLock, Weak},
+    sync::{Arc, LazyLock, Weak},
 };
 
 use glam::DVec3;
@@ -13,11 +13,12 @@ use steel_protocol::packets::game::{
 };
 use steel_registry::item_stack::ItemStack;
 use steel_utils::types::{GameType, InteractionHand};
+use text_components::TextComponent;
 
 use crate::{
     entity::Entity,
     inventory::{
-        MenuProvider,
+        MenuInstance,
         container::Container,
         equipment::{EntityEquipment, EquipmentSlot},
         inventory_menu::InventoryMenu,
@@ -26,6 +27,7 @@ use crate::{
         slots::Slot,
     },
     player::Player,
+    world::World,
 };
 
 /// Maps inventory slot indices (36+) to equipment slots.
@@ -494,17 +496,23 @@ impl Player {
     /// Based on Java's `ServerPlayer::openMenu`.
     ///
     /// # Arguments
-    /// * `provider` - The menu provider containing the title and factory
-    pub fn open_menu(&self, provider: &impl MenuProvider) {
+    /// * `title` - The display title shown in the open-screen packet.
+    /// * `create` - Factory invoked with the allocated container id and the
+    ///   player's world; returns the menu to open.
+    pub fn open_menu(
+        &self,
+        title: TextComponent,
+        create: impl FnOnce(u8, &Arc<World>) -> Box<dyn MenuInstance>,
+    ) {
         self.do_close_container();
 
         let container_id = self.next_container_counter();
-        let mut menu = provider.create(container_id, &self.get_world());
+        let mut menu = create(container_id, &self.get_world());
 
         self.send_packet(COpenScreen {
             container_id: i32::from(menu.container_id()),
             menu_type: menu.menu_type(),
-            title: provider.title(),
+            title,
         });
 
         menu.behavior_mut()

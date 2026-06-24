@@ -15,8 +15,7 @@ use steel_registry::menu_type::MenuTypeRef;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_menu_types;
 use steel_utils::locks::SyncMutex;
-use steel_utils::{BlockPos, translations};
-use text_components::TextComponent;
+use steel_utils::BlockPos;
 
 use crate::inventory::slots::slot::{
     Slot, SlotType, SyncCraftingContainer, SyncResultContainer, add_standard_inventory_slots,
@@ -28,10 +27,9 @@ use crate::inventory::{
     crafting::{CraftingContainer, ResultContainer},
     lock::{ContainerLockGuard, ContainerRef},
     menu::{Menu, MenuBehavior},
-    menu_provider::{MenuInstance, MenuProvider},
+    menu_provider::MenuInstance,
 };
 use crate::player::Player;
-use crate::world::World;
 
 /// Slot indices for the crafting menu.
 pub mod slots {
@@ -370,33 +368,5 @@ impl MenuInstance for CraftingMenu {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
-    }
-}
-
-/// Provider for creating a crafting menu.
-pub struct CraftingMenuProvider {
-    inventory: SyncPlayerInv,
-    pos: BlockPos,
-}
-
-impl CraftingMenuProvider {
-    /// Creates a new crafting menu provider.
-    #[must_use]
-    pub const fn new(inventory: SyncPlayerInv, pos: BlockPos) -> Self {
-        Self { inventory, pos }
-    }
-}
-
-impl MenuProvider for CraftingMenuProvider {
-    fn title(&self) -> TextComponent {
-        TextComponent::translated(translations::CONTAINER_CRAFTING.msg())
-    }
-
-    fn create(&self, container_id: u8, _world: &Arc<World>) -> Box<dyn MenuInstance> {
-        Box::new(CraftingMenu::new(
-            self.inventory.clone(),
-            container_id,
-            self.pos,
-        ))
     }
 }

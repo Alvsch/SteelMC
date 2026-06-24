@@ -5,24 +5,20 @@
 //! - Slots `rows * 9` to `rows * 9 + 26`: Main inventory (27 slots)
 //! - Slots `rows * 9 + 27` to `rows * 9 + 35`: Hotbar (9 slots)
 
-use std::{any::Any, mem, sync::Arc};
+use std::{any::Any, mem};
 
 use steel_registry::item_stack::ItemStack;
 use steel_registry::menu_type::MenuTypeRef;
 use steel_registry::vanilla_menu_types;
-use text_components::TextComponent;
 
-use crate::player::Player;
-use crate::{
-    inventory::{
-        SyncPlayerInv,
-        lock::{ContainerLockGuard, ContainerRef},
-        menu::{Menu, MenuBehavior},
-        menu_provider::{MenuInstance, MenuProvider},
-        slots::{NormalSlot, Slot, SlotType, add_standard_inventory_slots},
-    },
-    world::World,
+use crate::inventory::{
+    SyncPlayerInv,
+    lock::{ContainerLockGuard, ContainerRef},
+    menu::{Menu, MenuBehavior},
+    menu_provider::MenuInstance,
+    slots::{NormalSlot, Slot, SlotType, add_standard_inventory_slots},
 };
+use crate::player::Player;
 
 /// Number of slots per row in a chest menu.
 pub const SLOTS_PER_ROW: usize = 9;
@@ -309,69 +305,3 @@ impl MenuInstance for ChestMenu {
     }
 }
 
-/// Provider for creating chest menus.
-pub struct ChestMenuProvider {
-    inventory: SyncPlayerInv,
-    container: ContainerRef,
-    rows: usize,
-    title: TextComponent,
-}
-
-impl ChestMenuProvider {
-    /// Creates a new chest menu provider.
-    ///
-    /// # Arguments
-    /// * `inventory` - The player's inventory
-    /// * `container` - Reference to the container
-    /// * `rows` - Number of rows (1-6)
-    /// * `title` - Display title for the menu
-    #[must_use]
-    pub const fn new(
-        inventory: SyncPlayerInv,
-        container: ContainerRef,
-        rows: usize,
-        title: TextComponent,
-    ) -> Self {
-        Self {
-            inventory,
-            container,
-            rows,
-            title,
-        }
-    }
-
-    /// Creates a provider for a 3-row chest menu (standard chest).
-    #[must_use]
-    pub const fn three_rows(
-        inventory: SyncPlayerInv,
-        container: ContainerRef,
-        title: TextComponent,
-    ) -> Self {
-        Self::new(inventory, container, 3, title)
-    }
-
-    /// Creates a provider for a 6-row chest menu (double chest).
-    #[must_use]
-    pub const fn six_rows(
-        inventory: SyncPlayerInv,
-        container: ContainerRef,
-        title: TextComponent,
-    ) -> Self {
-        Self::new(inventory, container, 6, title)
-    }
-}
-
-impl MenuProvider for ChestMenuProvider {
-    fn title(&self) -> TextComponent {
-        self.title.clone()
-    }
-
-    fn create(&self, container_id: u8, _world: &Arc<World>) -> Box<dyn MenuInstance> {
-        Box::new(ChestMenu::new(
-            self.inventory.clone(),
-            container_id,
-            self.container.clone(),
-            self.rows,
-        ))
-    }
-}

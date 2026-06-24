@@ -19,12 +19,12 @@ use steel_registry::{
     menu_type::MenuTypeRef,
     vanilla_items, vanilla_menu_types,
 };
-use steel_utils::{BlockPos, locks::SyncMutex, translations};
+use steel_utils::{BlockPos, locks::SyncMutex};
 use text_components::TextComponent;
 
 use crate::{
     inventory::{
-        BuiltMenu, DataSlot, MenuBuilder, MenuInstance, MenuLayout, MenuProvider, SyncPlayerInv,
+        BuiltMenu, DataSlot, MenuBuilder, MenuInstance, MenuLayout, SyncPlayerInv,
         container::Container,
         crafting::ResultContainer,
         lock::{ContainerId, ContainerRef},
@@ -416,7 +416,7 @@ impl Menu for AnvilMenu {
         player: &Player,
     ) -> ItemStack {
         self.layout
-            .quick_move(&mut self.behavior, guard, slot_index, player)
+            .quick_move(&self.behavior, guard, slot_index, player)
     }
 
     fn removed(&mut self, player: &Player) {
@@ -455,34 +455,5 @@ impl MenuInstance for AnvilMenu {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
-    }
-}
-
-/// Provider for creating a anvil menu.
-pub struct AnvilMenuProvider {
-    inventory: SyncPlayerInv,
-    pos: BlockPos,
-}
-
-impl AnvilMenuProvider {
-    /// Creates a new anvil menu provider.
-    #[must_use]
-    pub const fn new(inventory: SyncPlayerInv, pos: BlockPos) -> Self {
-        Self { inventory, pos }
-    }
-}
-
-impl MenuProvider for AnvilMenuProvider {
-    fn title(&self) -> TextComponent {
-        TextComponent::translated(translations::CONTAINER_REPAIR.msg())
-    }
-
-    fn create(&self, container_id: u8, world: &Arc<World>) -> Box<dyn MenuInstance> {
-        Box::new(AnvilMenu::new(
-            self.inventory.clone(),
-            container_id,
-            self.pos,
-            world,
-        ))
     }
 }

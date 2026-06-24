@@ -6,12 +6,13 @@ use std::sync::Arc;
 
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
-use steel_utils::{BlockPos, BlockStateId};
+use steel_utils::{BlockPos, BlockStateId, translations};
+use text_components::TextComponent;
 
 use crate::behavior::InventoryAccess;
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
-use crate::inventory::CraftingMenuProvider;
+use crate::inventory::CraftingMenu;
 use crate::player::Player;
 use crate::world::World;
 
@@ -46,7 +47,10 @@ impl BlockBehavior for CraftingTableBlock {
         _hit_result: &BlockHitResult,
         _inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        player.open_menu(&CraftingMenuProvider::new(player.inventory.clone(), pos));
+        player.open_menu(
+            TextComponent::translated(translations::CONTAINER_CRAFTING.msg()),
+            move |id, _world| Box::new(CraftingMenu::new(player.inventory.clone(), id, pos)),
+        );
         // TODO: Award stat INTERACT_WITH_CRAFTING_TABLE
         InteractionResult::Success
     }

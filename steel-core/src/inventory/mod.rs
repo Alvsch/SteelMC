@@ -18,10 +18,10 @@ pub mod recipe_manager;
 pub mod simple_menu;
 pub mod slots;
 
-pub use chest_menu::{ChestMenu, ChestMenuProvider};
-pub use crafting_menu::{CraftingMenu, CraftingMenuProvider};
+pub use chest_menu::ChestMenu;
+pub use crafting_menu::CraftingMenu;
 pub use lock::SyncPlayerInv;
 pub use menu_builder::{
     BuiltMenu, DataSlot, MenuBuilder, MenuLayout, PlayerInventorySections, Section,
 };
-pub use menu_provider::{MenuInstance, MenuProvider};
+pub use menu_provider::MenuInstance;
