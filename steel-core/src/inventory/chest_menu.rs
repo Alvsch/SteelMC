@@ -304,4 +304,3 @@ impl MenuInstance for ChestMenu {
         self
     }
 }
-

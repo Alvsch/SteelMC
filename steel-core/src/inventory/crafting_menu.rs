@@ -14,8 +14,8 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::menu_type::MenuTypeRef;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_menu_types;
-use steel_utils::locks::SyncMutex;
 use steel_utils::BlockPos;
+use steel_utils::locks::SyncMutex;
 
 use crate::inventory::slots::slot::{
     Slot, SlotType, SyncCraftingContainer, SyncResultContainer, add_standard_inventory_slots,

@@ -73,7 +73,14 @@ impl BlockBehavior for BarrelBlock {
         // Open the chest menu (3 rows for barrel)
         player.open_menu(
             TextComponent::translated(translations::CONTAINER_BARREL.msg()),
-            move |id, _world| Box::new(ChestMenu::new(player.inventory.clone(), id, container_ref, 3)),
+            move |id, _world| {
+                Box::new(ChestMenu::new(
+                    player.inventory.clone(),
+                    id,
+                    container_ref,
+                    3,
+                ))
+            },
         );
 
         // TODO: Award stat OPEN_BARREL
