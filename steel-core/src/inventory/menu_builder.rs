@@ -449,6 +449,12 @@ impl MenuLayout {
         if remaining.is_empty() {
             slot.set_by_player(guard, ItemStack::empty(), &clicked);
         } else {
+            // Write the un-moved remainder back to the source. Fake/result slots
+            // don't store items (their contents are recomputed), so only touch
+            // real slots — otherwise the moved portion would be duplicated.
+            if !slot.is_fake() {
+                slot.set_item(guard, remaining.clone());
+            }
             slot.set_changed(guard);
         }
 

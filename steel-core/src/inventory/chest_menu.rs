@@ -12,57 +12,15 @@ use steel_registry::menu_type::MenuTypeRef;
 use steel_registry::vanilla_menu_types;
 
 use crate::inventory::{
-    SyncPlayerInv,
+    BuiltMenu, MenuBuilder, MenuLayout, SyncPlayerInv,
     lock::{ContainerLockGuard, ContainerRef},
     menu::{Menu, MenuBehavior},
     menu_provider::MenuInstance,
-    slots::{NormalSlot, Slot, SlotType, add_standard_inventory_slots},
 };
 use crate::player::Player;
 
 /// Number of slots per row in a chest menu.
 pub const SLOTS_PER_ROW: usize = 9;
-
-/// Slot index helpers for chest menus.
-pub mod slots {
-    use super::SLOTS_PER_ROW;
-
-    /// Returns the number of container slots for a given row count.
-    #[must_use]
-    pub const fn container_slot_count(rows: usize) -> usize {
-        rows * SLOTS_PER_ROW
-    }
-
-    /// Returns the start index of the main inventory slots.
-    #[must_use]
-    pub const fn inv_slot_start(rows: usize) -> usize {
-        container_slot_count(rows)
-    }
-
-    /// Returns the end index (exclusive) of the main inventory slots.
-    #[must_use]
-    pub const fn inv_slot_end(rows: usize) -> usize {
-        inv_slot_start(rows) + 27
-    }
-
-    /// Returns the start index of the hotbar slots.
-    #[must_use]
-    pub const fn hotbar_slot_start(rows: usize) -> usize {
-        inv_slot_end(rows)
-    }
-
-    /// Returns the end index (exclusive) of the hotbar slots (total slot count).
-    #[must_use]
-    pub const fn hotbar_slot_end(rows: usize) -> usize {
-        hotbar_slot_start(rows) + 9
-    }
-
-    /// Returns the total number of slots for a given row count.
-    #[must_use]
-    pub const fn total_slots(rows: usize) -> usize {
-        hotbar_slot_end(rows)
-    }
-}
 
 /// A menu for chest-like containers.
 ///
@@ -76,6 +34,8 @@ pub struct ChestMenu {
     container: ContainerRef,
     /// Number of rows in the container (1-6).
     rows: usize,
+    /// Section ranges and shift-click routes.
+    layout: MenuLayout,
 }
 
 impl ChestMenu {
@@ -101,30 +61,21 @@ impl ChestMenu {
             "Chest rows must be between 1 and 6"
         );
 
-        let container_slots = slots::container_slot_count(rows);
-        let total_slots = slots::total_slots(rows);
-        let mut menu_slots = Vec::with_capacity(total_slots);
+        let mut builder = MenuBuilder::new(Self::menu_type_for_rows(rows), container_id);
+        let chest = builder.section(container.clone(), rows * SLOTS_PER_ROW);
+        let player = builder.player_inventory(&inventory);
 
-        // Add container slots (0 to rows * 9 - 1)
-        for i in 0..container_slots {
-            menu_slots.push(SlotType::Normal(NormalSlot::new(container.clone(), i)));
-        }
+        // Vanilla ChestMenu treats the player inventory as one block both ways.
+        builder.route(chest, [player.all], true);
+        builder.route(player.all, [chest], false);
 
-        // Add standard inventory slots (main inventory + hotbar)
-        add_standard_inventory_slots(&mut menu_slots, &inventory);
+        let BuiltMenu { behavior, layout } = builder.build();
 
         Self {
-            behavior: MenuBehavior::new(
-                menu_slots,
-                container_id,
-                Some(Self::menu_type_for_rows(rows)),
-                vec![
-                    container.clone(),
-                    ContainerRef::PlayerInventory(inventory.clone()),
-                ],
-            ),
+            behavior,
             container,
             rows,
+            layout,
         }
     }
 
@@ -203,65 +154,15 @@ impl Menu for ChestMenu {
         &mut self.behavior
     }
 
-    /// Handles shift-click (quick move) for a slot.
-    ///
-    /// Based on Java's `ChestMenu::quickMoveStack`:
-    /// - Container slots (< rows * 9) -> player inventory (backwards = true)
-    /// - Player inventory slots -> container (backwards = false)
+    /// Handles shift-click (quick move) for a slot via the declarative routes.
     fn quick_move_stack(
         &mut self,
         guard: &mut ContainerLockGuard,
         slot_index: usize,
-        _player: &Player,
+        player: &Player,
     ) -> ItemStack {
-        if slot_index >= self.behavior.slots.len() {
-            return ItemStack::empty();
-        }
-
-        let slot = &self.behavior.slots[slot_index];
-        let stack = slot.get_item(guard).clone();
-        if stack.is_empty() {
-            return ItemStack::empty();
-        }
-
-        let clicked = stack.clone();
-        let mut stack_mut = stack;
-
-        let container_slots = slots::container_slot_count(self.rows);
-        let total_slots = self.behavior.slots.len();
-
-        let moved = if slot_index < container_slots {
-            // Container slot -> player inventory
-            // Use backwards = true to prefer filling existing stacks first
-            self.behavior.move_item_stack_to(
-                guard,
-                &mut stack_mut,
-                container_slots,
-                total_slots,
-                true,
-            )
-        } else {
-            // Player inventory -> container
-            // Use backwards = false for forward iteration
-            self.behavior
-                .move_item_stack_to(guard, &mut stack_mut, 0, container_slots, false)
-        };
-
-        if !moved {
-            return ItemStack::empty();
-        }
-
-        // Update the source slot with remaining items
-        self.behavior.slots[slot_index].set_item(guard, stack_mut.clone());
-
-        // Check if unchanged
-        if stack_mut.count == clicked.count {
-            return ItemStack::empty();
-        }
-
-        self.behavior.slots[slot_index].set_changed(guard);
-
-        clicked
+        self.layout
+            .quick_move(&self.behavior, guard, slot_index, player)
     }
 
     /// Returns true if the container is still valid for interaction.
