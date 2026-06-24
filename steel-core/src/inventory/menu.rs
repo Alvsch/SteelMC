@@ -1241,9 +1241,20 @@ pub trait Menu {
                 ClickType::QuickCraft => unreachable!(),
             }
         }
-        if slot_num >= 0 && (slot_num as usize) < self.behavior().slots.len() {
+        // Recompute recipe-driven slots after the click. Normal clicks carry the
+        // touched slot index, but a QuickCraft (drag) distributes its items on
+        // the end phase with slot_num = -999 — fall back to slot 0 so the result
+        // still recomputes after a drag-place into a crafting grid.
+        let recompute_slot = if slot_num >= 0 && (slot_num as usize) < self.behavior().slots.len() {
+            Some(slot_num as usize)
+        } else if click_type == ClickType::QuickCraft && !self.behavior().slots.is_empty() {
+            Some(0)
+        } else {
+            None
+        };
+        if let Some(index) = recompute_slot {
             let mut guard = self.behavior().lock_all_containers();
-            self.slots_changed(&mut guard, slot_num as usize, player);
+            self.slots_changed(&mut guard, index, player);
         }
     }
 

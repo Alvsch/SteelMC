@@ -378,7 +378,16 @@ impl Player {
         );
 
         for (slot, hash) in packet.changed_slots {
-            menu.behavior_mut().set_remote_slot(slot as usize, hash);
+            let slot = slot as usize;
+            // Result/fake slots are server-authoritative (their contents are
+            // recomputed from a recipe). Don't let the client's prediction set
+            // our view of what it knows, or `broadcast_changes` will think the
+            // client already has the freshly-crafted result and skip syncing it
+            // — leaving the slot blank until the next click forces a resend.
+            if menu.behavior().slots.get(slot).is_some_and(Slot::is_fake) {
+                continue;
+            }
+            menu.behavior_mut().set_remote_slot(slot, hash);
         }
 
         menu.behavior_mut().set_remote_carried(packet.carried_item);
