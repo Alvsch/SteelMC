@@ -330,13 +330,21 @@ impl ItemStack {
 
     /// Sets a component value in this item's patch, overriding the prototype.
     pub fn set<T: Component>(&mut self, component: DataComponentType<T>, value: T) {
-        self.patch.set(component, value);
+        let data = value.into_data();
+        if self.prototype().get_raw(&component.key) == Some(&data) {
+            self.patch.clear(component);
+        } else {
+            self.patch.set_data(component.key, data);
+        }
     }
 
-    /// Removes a component from this item (marks it as removed in the patch).
-    /// This will hide the component even if it exists in the prototype.
+    /// Removes a component from this item.
     pub fn remove<T: 'static>(&mut self, component: DataComponentType<T>) {
-        self.patch.remove(component);
+        if self.prototype().get_raw(&component.key).is_some() {
+            self.patch.remove(component);
+        } else {
+            self.patch.clear(component);
+        }
     }
 
     /// Clears any patch entry for this component (neither set nor removed).
@@ -571,7 +579,7 @@ impl ItemStack {
         };
 
         if current.is_empty() {
-            self.remove(component);
+            self.clear(component);
         } else {
             self.set(component, current);
         }
