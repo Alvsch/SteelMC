@@ -510,7 +510,7 @@ impl Player {
     ///   player's world; returns the menu to open.
     pub fn open_menu(
         &self,
-        title: TextComponent,
+        title: impl Into<TextComponent>,
         create: impl FnOnce(u8, &Arc<World>) -> Box<dyn MenuInstance>,
     ) {
         self.do_close_container();
@@ -521,7 +521,7 @@ impl Player {
         self.send_packet(COpenScreen {
             container_id: i32::from(menu.container_id()),
             menu_type: menu.menu_type(),
-            title,
+            title: title.into(),
         });
 
         menu.behavior_mut()

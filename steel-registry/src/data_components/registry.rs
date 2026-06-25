@@ -534,6 +534,12 @@ impl DataComponentPatch {
         );
     }
 
+    /// Sets already-encoded component data in the patch as a `Set` override,
+    /// taking ownership of the key to avoid a clone.
+    pub(crate) fn set_data(&mut self, key: Identifier, data: ComponentData) {
+        self.entries.insert(key, ComponentPatchEntry::Set(data));
+    }
+
     /// Sets raw component data (for plugin use).
     ///
     /// Returns `true` if the data was set successfully, `false` if the data type
