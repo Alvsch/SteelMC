@@ -160,12 +160,22 @@ impl InventoryMenu {
     ) -> bool {
         if self.main.contains(slot_index) {
             // Main inventory -> hotbar.
-            self.behavior
-                .move_item_stack_to(guard, stack, self.hotbar.start(), self.hotbar.end(), false)
+            self.behavior.move_item_stack_to(
+                guard,
+                stack,
+                self.hotbar.start(),
+                self.hotbar.end(),
+                false,
+            )
         } else if self.hotbar.contains(slot_index) {
             // Hotbar -> main inventory.
-            self.behavior
-                .move_item_stack_to(guard, stack, self.main.start(), self.main.end(), false)
+            self.behavior.move_item_stack_to(
+                guard,
+                stack,
+                self.main.start(),
+                self.main.end(),
+                false,
+            )
         } else {
             // Offhand (or fallback) -> main inventory + hotbar.
             self.behavior
