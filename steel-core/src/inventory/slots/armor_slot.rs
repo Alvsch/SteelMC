@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use steel_registry::{
-    data_components::EquippableSlot, item_stack::ItemStack, vanilla_enchantments::BINDING_CURSE,
+    equipment::EquipmentSlot, item_stack::ItemStack, vanilla_enchantments::BINDING_CURSE,
 };
 
 use crate::{
@@ -18,12 +18,12 @@ pub struct ArmorSlot {
     container: SyncPlayerInv,
     index: usize,
     /// The equipment slot this armor slot accepts.
-    slot: EquippableSlot,
+    slot: EquipmentSlot,
 }
 
 impl ArmorSlot {
     /// Creates a new armor slot.
-    pub const fn new(container: SyncPlayerInv, index: usize, slot: EquippableSlot) -> Self {
+    pub const fn new(container: SyncPlayerInv, index: usize, slot: EquipmentSlot) -> Self {
         Self {
             container,
             index,
@@ -33,7 +33,7 @@ impl ArmorSlot {
 
     /// Returns the equipment slot this armor slot accepts.
     #[must_use]
-    pub const fn equipment_slot(&self) -> EquippableSlot {
+    pub const fn equipment_slot(&self) -> EquipmentSlot {
         self.slot
     }
 

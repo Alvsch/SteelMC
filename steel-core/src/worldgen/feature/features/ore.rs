@@ -1,7 +1,6 @@
 use super::super::instrumentation::OreFeatureProfile;
 use super::super::prelude::*;
 use super::super::runner::FeatureDecorationRunner;
-use crate::chunk::section::{BlockStateSectionCounts, ChunkSection};
 use smallvec::SmallVec;
 use std::f32::consts::PI;
 use std::time::Instant;
@@ -501,7 +500,7 @@ struct PendingOreSectionKey {
 
 struct PendingOreSection {
     key: PendingOreSectionKey,
-    positions: SmallVec<[PackedSectionBlockPos; 128]>,
+    positions: SmallVec<[PackedSectionBlockPos; 256]>,
 }
 
 struct ResolvedOreTargets {
@@ -511,7 +510,6 @@ struct ResolvedOreTargets {
 struct ResolvedOreTarget {
     matcher: ResolvedOreRuleTest,
     state: BlockStateId,
-    state_counts: BlockStateSectionCounts,
 }
 
 enum ResolvedOreRuleTest {
@@ -575,12 +573,7 @@ impl ResolvedOreTargets {
                 &target.state,
                 "ore feature",
             );
-            let state_counts = ChunkSection::block_state_section_counts(state);
-            targets.push(ResolvedOreTarget {
-                matcher,
-                state,
-                state_counts,
-            });
+            targets.push(ResolvedOreTarget { matcher, state });
         }
 
         Self { targets }
@@ -594,13 +587,11 @@ impl ResolvedOreTargets {
         &self,
         registry: &Registry,
         state: BlockStateId,
-    ) -> Option<(BlockStateId, BlockStateSectionCounts)> {
+    ) -> Option<BlockStateId> {
         let block_id = Self::block_id_for_state(registry, state);
-        self.targets.iter().find_map(|target| {
-            target
-                .matches_block_id(block_id)
-                .then_some((target.state, target.state_counts))
-        })
+        self.targets
+            .iter()
+            .find_map(|target| target.matches_block_id(block_id).then_some(target.state))
     }
 
     fn block_id_for_state(registry: &Registry, state: BlockStateId) -> usize {

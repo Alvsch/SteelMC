@@ -34,6 +34,8 @@ pub struct RuntimeConfig {
     pub simulation_distance: u8,
     /// Whether the server is in online mode.
     pub online_mode: bool,
+    /// Optional authentication endpoint for online-mode `hasJoined` checks.
+    pub auth_server: Option<String>,
     /// Whether the server should use encryption.
     pub encryption: bool,
     /// Whether vanilla floating/flying movement checks permit unauthorized flight.
@@ -54,6 +56,8 @@ pub struct RuntimeConfig {
     pub compression: Option<CompressionInfo>,
     /// All settings and configurations for server links.
     pub server_links: Option<ServerLinks>,
+    /// Optional worker count for the Rayon chunk generation pool.
+    pub chunk_generation_threads: Option<usize>,
 }
 
 impl RuntimeConfig {

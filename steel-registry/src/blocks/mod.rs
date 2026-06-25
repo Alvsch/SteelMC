@@ -16,12 +16,70 @@ use steel_utils::{BlockPos, BlockStateId};
 
 /// Function type for shape lookups. Takes a state offset and returns the shape.
 pub type ShapeFn = fn(u16) -> shapes::VoxelShape;
+/// Function type for light-property lookups. Takes a state offset and returns extracted vanilla properties.
+pub type LightPropertiesFn = fn(u16) -> BlockLightProperties;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockLightProperties {
+    pub light_emission: u8,
+    pub light_dampening: u8,
+    pub use_shape_for_light_occlusion: bool,
+}
+
+impl BlockLightProperties {
+    pub const OPAQUE_FULL_BLOCK: Self = Self {
+        light_emission: 0,
+        light_dampening: 15,
+        use_shape_for_light_occlusion: false,
+    };
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StateBooleanOverwrite {
+    pub offset: u16,
+    pub value: bool,
+}
+
+impl StateBooleanOverwrite {
+    pub const fn new(offset: u16, value: bool) -> Self {
+        Self { offset, value }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StateBooleanData {
+    pub default: bool,
+    pub overwrites: &'static [StateBooleanOverwrite],
+}
+
+impl StateBooleanData {
+    pub const TRUE: Self = Self::new(true, &[]);
+    pub const FALSE: Self = Self::new(false, &[]);
+
+    pub const fn new(default: bool, overwrites: &'static [StateBooleanOverwrite]) -> Self {
+        Self {
+            default,
+            overwrites,
+        }
+    }
+
+    pub fn value(self, offset: u16) -> bool {
+        self.overwrites
+            .iter()
+            .find(|overwrite| overwrite.offset == offset)
+            .map_or(self.default, |overwrite| overwrite.value)
+    }
+}
 
 pub struct Block {
     pub key: Identifier,
     pub config: BlockConfig,
     pub properties: &'static [&'static dyn DynProperty],
     pub default_state_offset: u16,
+    /// Vanilla `BlockState.isSuffocating` values indexed by block-local state offset.
+    pub suffocating: StateBooleanData,
+    /// Extracted vanilla light properties indexed by block-local state offset.
+    pub light_properties: LightPropertiesFn,
     /// Function to get collision shape for a state offset
     pub collision_shape: ShapeFn,
     /// Function to get block support shape for a state offset
@@ -56,6 +114,10 @@ const fn full_block_shape(_offset: u16) -> shapes::VoxelShape {
     shapes::VoxelShape::FULL_BLOCK
 }
 
+const fn opaque_full_block_light_properties(_offset: u16) -> BlockLightProperties {
+    BlockLightProperties::OPAQUE_FULL_BLOCK
+}
+
 /// Default interaction shape function that returns an empty shape.
 const fn empty_shape(_offset: u16) -> shapes::VoxelShape {
     shapes::VoxelShape::EMPTY
@@ -72,6 +134,8 @@ impl Block {
             config,
             properties,
             default_state_offset: 0,
+            suffocating: StateBooleanData::TRUE,
+            light_properties: opaque_full_block_light_properties,
             collision_shape: full_block_shape,
             support_shape: full_block_shape,
             outline_shape: full_block_shape,
@@ -99,6 +163,18 @@ impl Block {
         self.occlusion_shape = occlusion;
         self.interaction_shape = interaction;
         self.visual_shape = visual;
+        self
+    }
+
+    /// Sets the extracted vanilla `BlockState.isSuffocating` values for this block.
+    pub const fn with_suffocating(mut self, suffocating: StateBooleanData) -> Self {
+        self.suffocating = suffocating;
+        self
+    }
+
+    /// Sets the extracted vanilla light properties for this block.
+    pub const fn with_light_properties(mut self, light_properties: LightPropertiesFn) -> Self {
+        self.light_properties = light_properties;
         self
     }
 
@@ -142,6 +218,11 @@ impl Block {
     #[inline]
     pub fn get_visual_shape(&self, offset: u16) -> shapes::VoxelShape {
         (self.visual_shape)(offset)
+    }
+
+    #[inline]
+    pub fn get_light_properties(&self, offset: u16) -> BlockLightProperties {
+        (self.light_properties)(offset)
     }
 
     /// Returns the vanilla block-state positional offset for this block.
@@ -199,15 +280,6 @@ impl Block {
 }
 
 pub type BlockRef = &'static Block;
-
-impl PartialEq for BlockRef {
-    #[expect(clippy::disallowed_methods)] // This IS the PartialEq impl; ptr::eq is correct here
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(*self, *other)
-    }
-}
-
-impl Eq for BlockRef {}
 
 // The central registry for all blocks.
 pub struct BlockRegistry {
@@ -552,6 +624,8 @@ impl BlockRegistry {
 
 crate::impl_registry_ext!(BlockRegistry, Block, blocks_by_id, blocks_by_key);
 
+crate::impl_registry_entry_eq!(Block);
+
 impl crate::RegistryEntry for Block {
     fn key(&self) -> &Identifier {
         &self.key
@@ -618,6 +692,15 @@ impl BlockRegistry {
     #[must_use]
     pub fn get_static_collision_shape(&self, state_id: BlockStateId) -> shapes::VoxelShape {
         self.static_shape_for_state(state_id, Block::get_collision_shape)
+    }
+
+    /// Returns vanilla `BlockState.isSuffocating`.
+    #[must_use]
+    pub fn is_suffocating(&self, state_id: BlockStateId) -> bool {
+        let Some((block, offset)) = self.block_and_state_offset(state_id) else {
+            return false;
+        };
+        block.suffocating.value(offset)
     }
 
     #[must_use]
@@ -741,6 +824,14 @@ impl BlockRegistry {
             self.get_static_interaction_shape(state_id),
             self.get_static_visual_shape(state_id),
         )
+    }
+
+    #[must_use]
+    pub fn get_light_properties(&self, state_id: BlockStateId) -> BlockLightProperties {
+        let Some((block, offset)) = self.block_and_state_offset(state_id) else {
+            return BlockLightProperties::OPAQUE_FULL_BLOCK;
+        };
+        block.get_light_properties(offset)
     }
 
     pub fn copy_matching_properties(&self, source: BlockStateId, target: BlockRef) -> BlockStateId {
