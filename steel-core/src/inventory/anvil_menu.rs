@@ -71,7 +71,11 @@ pub struct AnvilMenu {
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
     repair_item_count: Arc<AtomicI32>,
+    /// Client-facing level cost data slot (the number shown in the anvil UI).
     level_cost: DataSlot,
+    /// Level cost shared with [`AnvilResultHandler`], read when validating the
+    /// result pickup and deducting experience. Kept in sync with `level_cost`.
+    level_cost_value: Arc<AtomicI32>,
     item_name: SyncMutex<Option<String>>,
     layout: MenuLayout,
 }
@@ -114,6 +118,7 @@ impl AnvilMenu {
 
         builder.route(result, [player.all], true);
         builder.route(input, [player.all], false);
+        builder.route(player.hotbar, [input], false);
         builder.route(player.main, [input, player.hotbar], false);
         builder.drain([input]);
 
@@ -126,9 +131,21 @@ impl AnvilMenu {
             block_pos: pos,
             repair_item_count: repair_item_count.clone(),
             level_cost: level_cost_data_slot,
+            level_cost_value: level_cost,
             item_name: SyncMutex::new(None),
             layout,
         }
+    }
+
+    /// Sets the level cost, keeping the client-facing data slot and the value
+    /// shared with the result handler in sync. The displayed value is clamped to
+    /// `i16`, while the handler reads the full cost for validation/XP deduction.
+    fn set_cost(&mut self, cost: i32) {
+        self.level_cost.set(
+            &mut self.behavior,
+            cost.clamp(0, i32::from(i16::MAX)) as i16,
+        );
+        self.level_cost_value.store(cost, Ordering::Relaxed);
     }
 
     /// Creates the resulting item from the combining and renaming of the two input items
@@ -151,13 +168,11 @@ impl AnvilMenu {
 
         let mut additional_cost = 0_u32;
         let mut rename_cost = 0_i32;
-        self.behavior.set_data(0, 0);
-        self.level_cost.set(&mut self.behavior, 0);
+        self.set_cost(0);
 
         if first.is_empty() || !Self::can_store_enchantments(first) {
             result_container.set_item(0, ItemStack::empty());
-            self.behavior.set_data(0, 0);
-            self.level_cost.set(&mut self.behavior, 0);
+            self.set_cost(0);
             return;
         }
 
@@ -176,7 +191,7 @@ impl AnvilMenu {
                     result.get_damage_value().min(result.get_max_damage() / 4);
                 if repair_per_unit <= 0 {
                     result_container.set_item(0, ItemStack::empty());
-                    self.behavior.set_data(0, 0);
+                    self.set_cost(0);
                     return;
                 }
 
@@ -196,8 +211,7 @@ impl AnvilMenu {
                     && (!result.is(second.item) || !result.is_damageable_item())
                 {
                     result_container.set_item(0, ItemStack::empty());
-                    self.behavior.set_data(0, 0);
-                    self.level_cost.set(&mut self.behavior, 0);
+                    self.set_cost(0);
                     return;
                 }
 
@@ -275,8 +289,7 @@ impl AnvilMenu {
 
                 if any_incompatible && !any_compatible {
                     result_container.set_item(0, ItemStack::empty());
-                    self.behavior.set_data(0, 0);
-                    self.level_cost.set(&mut self.behavior, 0);
+                    self.set_cost(0);
                     return;
                 }
             }
@@ -301,9 +314,7 @@ impl AnvilMenu {
         } else {
             (prior_repair_cost + i64::from(additional_cost)).clamp(0, i64::from(i32::MAX)) as i32
         };
-        self.behavior
-            .set_data(0, total_cost.clamp(0, i32::from(i16::MAX)) as i16);
-        self.level_cost.set(&mut self.behavior, 0);
+        self.set_cost(total_cost);
 
         if additional_cost == 0 {
             result = ItemStack::empty();
@@ -311,8 +322,7 @@ impl AnvilMenu {
 
         let only_renaming = rename_cost == additional_cost as i32 && rename_cost > 0;
         if only_renaming && total_cost >= 40 {
-            self.behavior.set_data(0, 39);
-            self.level_cost.set(&mut self.behavior, 39);
+            self.set_cost(39);
         }
 
         if total_cost >= 40 && !only_renaming && !player.has_infinite_materials() {
