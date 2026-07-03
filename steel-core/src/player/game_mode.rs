@@ -40,7 +40,6 @@ use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, LivingEntity, SharedEntity};
 use crate::inventory::equipment::EquipmentSlot;
-use crate::inventory::menu::Menu;
 use crate::physics::collision::{CollisionWorld, WorldCollisionProvider};
 use crate::physics::shapes;
 use crate::player::Player;

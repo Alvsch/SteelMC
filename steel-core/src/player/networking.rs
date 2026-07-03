@@ -22,7 +22,6 @@ use steel_protocol::packets::game::{
 
 use steel_protocol::utils::{ConnectionProtocol, PacketError, RawPacket};
 use steel_registry::packets::play;
-use steel_registry::vanilla_menu_types;
 use steel_utils::locks::{AsyncMutex, SyncMutex};
 use steel_utils::translations;
 use text_components::TextComponent;
@@ -37,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info_span;
 
 use crate::command::sender::CommandSender;
-use crate::inventory::anvil_menu::AnvilMenu;
+use crate::inventory::MenuKindType;
 use crate::player::Player;
 use crate::player::connection::NetworkConnection;
 use crate::server::Server;
@@ -388,15 +387,14 @@ impl JavaConnection {
                     log::error!("failed to get open_menu out of the lock? maybe its empty");
                     return Err(PacketError::Other("asdf".to_string()));
                 };
-                if open_menu.menu_type() == &vanilla_menu_types::ANVIL
+                if matches!(open_menu.kind(), MenuKindType::Anvil(_))
                     && open_menu.still_valid(&player)
-                    && let Some(anvil_menu) = open_menu.as_any_mut().downcast_mut::<AnvilMenu>()
                 {
-                    anvil_menu.set_item_name(packet.name, &player);
+                    open_menu.set_anvil_item_name(packet.name, &player);
                 } else {
                     log::error!(
-                        "maybe downcast failed? anvil_menu_type = {}; still_valid = {}",
-                        open_menu.menu_type() == &vanilla_menu_types::ANVIL,
+                        "anvil rename on wrong/invalid menu? is_anvil = {}; still_valid = {}",
+                        matches!(open_menu.kind(), MenuKindType::Anvil(_)),
                         open_menu.still_valid(&player)
                     );
                 }

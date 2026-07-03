@@ -21,10 +21,9 @@ use text_components::TextComponent;
 use crate::{
     entity::Entity,
     inventory::{
-        MenuInstance,
         container::Container,
         equipment::{EntityEquipment, EquipmentSlot},
-        inventory_menu::InventoryMenu,
+        inventory_menu::INVENTORY_MENU_CONTAINER_ID,
         lock::{ContainerId, ContainerLockGuard},
         menu::Menu,
         slots::Slot,
@@ -765,7 +764,7 @@ impl Player {
                 return;
             }
 
-            self.process_container_click(menu.as_mut(), packet);
+            self.process_container_click(menu, packet);
         } else {
             drop(open_menu_guard);
             let mut menu = self.inventory_menu.lock();
@@ -774,7 +773,7 @@ impl Player {
                 return;
             }
 
-            self.process_container_click(&mut *menu, packet);
+            self.process_container_click(&mut menu, packet);
         }
     }
 
@@ -782,7 +781,7 @@ impl Player {
     ///
     /// This is the common implementation shared between inventory menu and
     /// external menus (crafting table, chest, etc.).
-    fn process_container_click(&self, menu: &mut dyn Menu, packet: SContainerClick) {
+    fn process_container_click(&self, menu: &mut Menu, packet: SContainerClick) {
         if self.game_mode() == GameType::Spectator {
             menu.behavior_mut()
                 .send_all_data_to_remote(&self.connection);
@@ -863,7 +862,7 @@ impl Player {
         }
         drop(open_menu);
 
-        if packet.container_id == i32::from(InventoryMenu::CONTAINER_ID) {
+        if packet.container_id == i32::from(INVENTORY_MENU_CONTAINER_ID) {
             let mut menu = self.inventory_menu.lock();
             menu.removed(self);
         }
@@ -961,10 +960,14 @@ impl Player {
     /// * `title` - The display title shown in the open-screen packet.
     /// * `create` - Factory invoked with the allocated container id and the
     ///   player's world; returns the menu to open.
+    ///
+    /// # Panics
+    /// Panics if the created menu has no menu type (i.e. the player's own
+    /// inventory menu, which must never be opened via `open_menu`).
     pub fn open_menu(
         &self,
         title: impl Into<TextComponent>,
-        create: impl FnOnce(u8, &Arc<World>) -> Box<dyn MenuInstance>,
+        create: impl FnOnce(u8, &Arc<World>) -> Menu,
     ) {
         self.do_close_container();
 
@@ -973,7 +976,9 @@ impl Player {
 
         self.send_packet(COpenScreen {
             container_id: i32::from(menu.container_id()),
-            menu_type: menu.menu_type(),
+            menu_type: menu
+                .menu_type()
+                .expect("a menu opened via open_menu must declare a menu type"),
             title: title.into(),
         });
 

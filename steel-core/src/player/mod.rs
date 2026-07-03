@@ -118,7 +118,7 @@ use steel_registry::item_stack::ItemStack;
 
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, Identifier};
 
-use crate::inventory::{MenuInstance, container::Container, inventory_menu::InventoryMenu};
+use crate::inventory::{Menu, container::Container, inventory_menu::inventory_menu};
 
 /// Re-export `PreviousMessage` as `PreviousMessageEntry` for use in `signature_cache`
 pub type PreviousMessageEntry = PreviousMessage;
@@ -238,11 +238,11 @@ pub struct Player {
     last_item_in_main_hand: SyncMutex<ItemStack>,
 
     /// The player's inventory menu (always open, even when `container_id` is 0).
-    inventory_menu: SyncMutex<InventoryMenu>,
+    inventory_menu: SyncMutex<Menu>,
 
     /// The currently open menu (None if player inventory is open).
     /// This is separate from `inventory_menu` which is always present.
-    open_menu: SyncMutex<Option<Box<dyn MenuInstance>>>,
+    open_menu: SyncMutex<Option<Menu>>,
 
     /// Counter for generating container IDs (1-100, wraps around).
     container_counter: SyncMutex<ContainerCounter>,
@@ -489,7 +489,7 @@ impl Player {
             game_modes: SyncMutex::new(PlayerGameModeState::new(GameType::Survival)),
             inventory: inventory.clone(),
             last_item_in_main_hand: SyncMutex::new(ItemStack::empty()),
-            inventory_menu: SyncMutex::new(InventoryMenu::new(inventory)),
+            inventory_menu: SyncMutex::new(inventory_menu(inventory)),
             open_menu: SyncMutex::new(None),
             container_counter: SyncMutex::new(ContainerCounter::new()),
             teleport_state: SyncMutex::new(TeleportState::new()),

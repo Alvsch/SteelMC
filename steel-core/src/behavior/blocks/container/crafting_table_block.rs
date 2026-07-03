@@ -12,7 +12,7 @@ use text_components::TextComponent;
 use crate::behavior::InventoryAccess;
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
-use crate::inventory::CraftingMenu;
+use crate::inventory::crafting_menu::crafting;
 use crate::player::Player;
 use crate::world::World;
 
@@ -49,7 +49,7 @@ impl BlockBehavior for CraftingTableBlock {
     ) -> InteractionResult {
         player.open_menu(
             TextComponent::translated(translations::CONTAINER_CRAFTING.msg()),
-            move |id, _world| Box::new(CraftingMenu::new(player.inventory.clone(), id, pos)),
+            move |id, _world| crafting(player.inventory.clone(), id, pos),
         );
         // TODO: Award stat INTERACT_WITH_CRAFTING_TABLE
         InteractionResult::Success

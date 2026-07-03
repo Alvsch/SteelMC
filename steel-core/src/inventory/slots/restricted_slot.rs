@@ -10,9 +10,20 @@ use crate::{
     player::Player,
 };
 
+/// Shared predicate deciding whether an item may be placed into a
+/// [`RestrictedSlot`]. Stored behind an [`Arc`] so one closure serves every
+/// slot in a section.
 pub type MayPlaceFn = Arc<dyn Fn(&ItemStack) -> bool + Send + Sync>;
+/// Shared predicate gating whether the player may take the current item back
+/// out of a [`RestrictedSlot`]; receives the lock guard, the player, and the
+/// item being removed.
 pub type MayPickupFn = Arc<dyn Fn(&ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync>;
 
+/// A [`NormalSlot`] whose place/pickup rules and max stack size are supplied
+/// as closures instead of a dedicated [`Slot`] impl.
+///
+/// Built via
+/// [`MenuBuilder::restricted_section`](crate::inventory::MenuBuilder::restricted_section).
 pub struct RestrictedSlot {
     base: NormalSlot,
     may_place_fn: MayPlaceFn,
@@ -21,6 +32,8 @@ pub struct RestrictedSlot {
 }
 
 impl RestrictedSlot {
+    /// Creates a restricted slot over `container[index]`. Pass `None` for
+    /// `may_pickup_fn` to always allow pickup.
     pub fn new(
         container: impl Into<ContainerRef>,
         index: usize,

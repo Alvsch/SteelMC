@@ -36,6 +36,16 @@ use crate::{
 };
 use std::sync::Arc;
 
+use enum_dispatch::enum_dispatch;
+
+use crate::inventory::{
+    anvil_menu::AnvilKind,
+    chest_menu::ChestKind,
+    crafting_menu::CraftingKind,
+    inventory_menu::InventoryKind,
+    menu_builder::{MenuInstanceId, MenuLayout},
+};
+
 /// Represents the server's perception of what the client knows about a slot.
 ///
 /// This can be either:
@@ -313,12 +323,17 @@ pub struct MenuBehavior {
     /// The client's perception of the data slot values.
     remote_data_slots: Vec<i16>,
     container_refs: Vec<ContainerRef>,
+    /// Identity stamp tying [`Section`](crate::inventory::Section) /
+    /// [`DataSlot`](crate::inventory::DataSlot) handles to this menu.
+    instance: MenuInstanceId,
 }
 
 impl MenuBehavior {
-    /// Creates a new menu behavior with the given slots.
+    /// Creates a new menu behavior with the given slots. Crate-internal:
+    /// menus are assembled by [`MenuBuilder::build`](crate::inventory::MenuBuilder::build).
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
+        instance: MenuInstanceId,
         slots: Vec<SlotType>,
         container_id: u8,
         menu_type: Option<MenuTypeRef>,
@@ -326,6 +341,7 @@ impl MenuBehavior {
     ) -> Self {
         let slot_count = slots.len();
         Self {
+            instance,
             slots,
             last_slots: vec![ItemStack::empty(); slot_count],
             remote_slots: vec![RemoteSlot::Unknown; slot_count],
@@ -350,24 +366,18 @@ impl MenuBehavior {
         ContainerLockGuard::lock_all(&self.container_refs)
     }
 
+    /// The identity stamp of the menu this behavior belongs to.
+    pub(crate) const fn instance(&self) -> MenuInstanceId {
+        self.instance
+    }
+
     /// Adds a data slot to the menu with an initial value.
     /// Returns the index of the added data slot.
-    pub fn add_data_slot(&mut self, initial_value: i16) -> usize {
+    pub(crate) fn add_data_slot(&mut self, initial_value: i16) -> usize {
         let index = self.data_slots.len();
         self.data_slots.push(initial_value);
         self.remote_data_slots.push(0);
         index
-    }
-
-    /// Adds multiple data slots to the menu.
-    /// Returns the starting index of the added data slots.
-    pub fn add_data_slots(&mut self, count: usize) -> usize {
-        let start_index = self.data_slots.len();
-        for _ in 0..count {
-            self.data_slots.push(0);
-            self.remote_data_slots.push(0);
-        }
-        start_index
     }
 
     /// Gets the value of a data slot.
@@ -800,7 +810,7 @@ impl MenuBehavior {
 
     /// Handles quickcraft (drag) operations.
     /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.QUICK_CRAFT`.
-    pub fn do_quick_craft(
+    pub(crate) fn do_quick_craft(
         &mut self,
         slot_num: i16,
         button: i8,
@@ -922,7 +932,7 @@ impl MenuBehavior {
         clippy::too_many_lines,
         reason = "splitting would hurt readability of the click-handling state machine"
     )]
-    pub fn do_pickup(&mut self, slot_num: i16, button: i8, player: &Player) {
+    pub(crate) fn do_pickup(&mut self, slot_num: i16, button: i8, player: &Player) {
         // Slot -999 means clicked outside the inventory (drop items)
         if slot_num == -999 {
             if !self.carried.is_empty() {
@@ -1067,7 +1077,7 @@ impl MenuBehavior {
     }
 
     /// Handles clone (middle-click in creative).
-    pub fn do_clone(&mut self, slot_num: i16, has_infinite_materials: bool) {
+    pub(crate) fn do_clone(&mut self, slot_num: i16, has_infinite_materials: bool) {
         if !has_infinite_materials || !self.carried.is_empty() || slot_num < 0 {
             return;
         }
@@ -1090,7 +1100,7 @@ impl MenuBehavior {
     /// button 0 = Q (drop 1), button 1 = Ctrl+Q (drop all, repeating while same item)
     ///
     /// Based on Java's `AbstractContainerMenu::doClick` for ClickType.THROW.
-    pub fn do_throw(&mut self, slot_num: i16, button: i8, player: &Player) {
+    pub(crate) fn do_throw(&mut self, slot_num: i16, button: i8, player: &Player) {
         if !self.carried.is_empty() {
             return;
         }
@@ -1153,46 +1163,237 @@ impl MenuBehavior {
     }
 }
 
-/// Trait for menu implementations.
-pub trait Menu {
-    /// Returns a reference to the menu behavior.
-    fn behavior(&self) -> &MenuBehavior;
+/// A menu opened by a player: all the shared click machinery plus one
+/// [`MenuKind`].
+///
+/// This is the single concrete menu type — there is no `trait Menu`. It owns
+/// the [`MenuBehavior`] (slots, sync state), the `MenuLayout` (sections,
+/// shift-click routes, drain list), and a [`MenuKindType`] which is the only
+/// per-menu part (recipe recompute, validity, close cleanup). Every click
+/// handler lives here as an inherent method.
+pub struct Menu {
+    behavior: MenuBehavior,
+    layout: MenuLayout,
+    kind: MenuKindType,
+}
 
-    /// Returns a mutable reference to the menu behavior.
-    fn behavior_mut(&mut self) -> &mut MenuBehavior;
+/// The per-menu behavior that isn't shared: recompute-on-change, validity,
+/// close cleanup, and the optional shift-click override.
+///
+/// Every method has a default, so a trivial storage menu needs to implement
+/// none of them. Dispatched through [`MenuKindType`] (static dispatch for the
+/// vanilla variants, boxed for plugins), mirroring
+/// [`SlotType`](crate::inventory::slots::slot::SlotType) /
+/// [`ResultHandler`](crate::inventory::slots::ResultHandler).
+#[enum_dispatch]
+pub trait MenuKind: Send + Sync {
+    /// Recompute recipe-driven slots after a slot changed (crafting result,
+    /// anvil result). Called after every click that touched a real slot.
+    fn slots_changed(
+        &mut self,
+        _behavior: &mut MenuBehavior,
+        _guard: &mut ContainerLockGuard,
+        _player: &Player,
+    ) {
+    }
 
-    /// Handles shift-click (quick move) for a slot.
+    /// Extra cleanup on close, beyond returning the carried item and draining
+    /// the input sections (both handled by [`Menu::removed`]) — e.g. clearing a
+    /// virtual result container.
+    fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {}
+
+    /// Returns true if this menu is still valid for the player (backing block
+    /// still present, player still in range).
+    fn still_valid(&self, _behavior: &MenuBehavior, _player: &Player) -> bool {
+        true
+    }
+
+    /// Returns true if an item may be taken from `slot_index` during a
+    /// double-click pickup-all. Override to protect result slots.
+    fn can_take_item_for_pick_all(&self, _carried: &ItemStack, _slot_index: usize) -> bool {
+        true
+    }
+
+    /// Shift-click override. Return `Some` to fully handle the quick-move (the
+    /// inventory menu's armor/offhand auto-equip does this); return `None` to
+    /// fall back to the declarative route table (`MenuLayout::quick_move`).
+    fn quick_move(
+        &mut self,
+        _behavior: &mut MenuBehavior,
+        _guard: &mut ContainerLockGuard,
+        _slot_index: usize,
+        _player: &Player,
+    ) -> Option<ItemStack> {
+        None
+    }
+}
+
+/// Static dispatch over the vanilla menu kinds, with a boxed escape hatch for
+/// plugins. Mirrors [`SlotType`](crate::inventory::slots::slot::SlotType).
+#[enum_dispatch(MenuKind)]
+pub enum MenuKindType {
+    /// The always-open player inventory (2×2 grid, armor, offhand).
+    Inventory(InventoryKind),
+    /// A chest-like container (chest, barrel, ender chest, shulker box).
+    Chest(ChestKind),
+    /// A crafting table (3×3 grid + result).
+    Crafting(CraftingKind),
+    /// An anvil (two inputs + result + level-cost data slot).
+    Anvil(AnvilKind),
+    /// Plugin-defined menu logic.
+    Custom(Box<dyn MenuKind>),
+}
+
+// Mirror of `impl Slot for Arc<dyn Slot>` in slot.rs, needed for the `Custom`
+// variant. It's `Box`, not `Arc`, because `MenuKind` methods take `&mut self`
+// and `Arc` only hands out shared references.
+impl MenuKind for Box<dyn MenuKind> {
+    fn slots_changed(
+        &mut self,
+        behavior: &mut MenuBehavior,
+        guard: &mut ContainerLockGuard,
+        player: &Player,
+    ) {
+        (**self).slots_changed(behavior, guard, player);
+    }
+
+    fn removed(&mut self, behavior: &mut MenuBehavior, player: &Player) {
+        (**self).removed(behavior, player);
+    }
+
+    fn still_valid(&self, behavior: &MenuBehavior, player: &Player) -> bool {
+        (**self).still_valid(behavior, player)
+    }
+
+    fn can_take_item_for_pick_all(&self, carried: &ItemStack, slot_index: usize) -> bool {
+        (**self).can_take_item_for_pick_all(carried, slot_index)
+    }
+
+    fn quick_move(
+        &mut self,
+        behavior: &mut MenuBehavior,
+        guard: &mut ContainerLockGuard,
+        slot_index: usize,
+        player: &Player,
+    ) -> Option<ItemStack> {
+        (**self).quick_move(behavior, guard, slot_index, player)
+    }
+}
+
+impl Menu {
+    /// Assembles a menu from its parts. Crate-internal: the only way to obtain
+    /// a `Menu` is [`MenuBuilder::build`](crate::inventory::MenuBuilder::build),
+    /// which guarantees the layout's slot ranges match the behavior's slots.
+    pub(crate) const fn from_parts(
+        behavior: MenuBehavior,
+        layout: MenuLayout,
+        kind: MenuKindType,
+    ) -> Self {
+        Self {
+            behavior,
+            layout,
+            kind,
+        }
+    }
+
+    /// Returns a reference to the shared menu behavior.
+    #[must_use]
+    pub const fn behavior(&self) -> &MenuBehavior {
+        &self.behavior
+    }
+
+    /// Returns a mutable reference to the shared menu behavior.
+    pub const fn behavior_mut(&mut self) -> &mut MenuBehavior {
+        &mut self.behavior
+    }
+
+    /// Returns a reference to this menu's kind.
+    #[must_use]
+    pub const fn kind(&self) -> &MenuKindType {
+        &self.kind
+    }
+
+    /// Returns a mutable reference to this menu's kind.
+    pub const fn kind_mut(&mut self) -> &mut MenuKindType {
+        &mut self.kind
+    }
+
+    /// The container ID for this menu (0 for the player inventory).
+    #[must_use]
+    pub const fn container_id(&self) -> u8 {
+        self.behavior.container_id
+    }
+
+    /// The menu type for the open-screen packet, or `None` for the player's own
+    /// inventory (which is never opened via `open_menu`).
+    #[must_use]
+    pub const fn menu_type(&self) -> Option<MenuTypeRef> {
+        self.behavior.menu_type
+    }
+
+    /// Returns true if this menu is still valid for the player.
+    #[must_use]
+    pub fn still_valid(&self, player: &Player) -> bool {
+        self.kind.still_valid(&self.behavior, player)
+    }
+
+    /// Returns true if the item can be taken from the slot during pickup all.
+    #[must_use]
+    pub fn can_take_item_for_pick_all(&self, carried: &ItemStack, slot_index: usize) -> bool {
+        self.kind.can_take_item_for_pick_all(carried, slot_index)
+    }
+
+    /// Called when the menu is closed/removed. Returns the carried item to the
+    /// player, drains the input sections back to the player, then runs the
+    /// kind's extra cleanup.
+    pub fn removed(&mut self, player: &Player) {
+        let carried = mem::take(&mut self.behavior.carried);
+        if !carried.is_empty() {
+            player.add_item_or_drop(carried);
+        }
+        self.layout.return_drained_items(&self.behavior, player);
+
+        let Self { behavior, kind, .. } = self;
+        kind.removed(behavior, player);
+    }
+
+    /// Applies an anvil rename to this menu; a no-op unless it is an anvil menu.
     ///
-    /// Returns the item that was originally in the slot (before any move occurred),
-    /// or empty if nothing was moved.
+    /// Replaces the old `as_any_mut().downcast_mut::<AnvilMenu>()` path with a
+    /// plain match on the kind.
+    pub fn set_anvil_item_name(&mut self, name: String, player: &Arc<Player>) {
+        let Self { behavior, kind, .. } = self;
+        if let MenuKindType::Anvil(anvil) = kind {
+            anvil.set_item_name(behavior, name, player);
+        }
+    }
+
+    /// Recomputes recipe-driven slots after a change (delegates to the kind).
+    fn slots_changed(&mut self, guard: &mut ContainerLockGuard, player: &Player) {
+        let Self { behavior, kind, .. } = self;
+        kind.slots_changed(behavior, guard, player);
+    }
+
+    /// Handles shift-click (quick move) for a slot: the kind's override if it
+    /// provides one, otherwise the declarative route table.
     ///
+    /// Returns the item originally in the slot, or empty if nothing was moved.
     /// Based on Java's `AbstractContainerMenu::quickMoveStack`.
     fn quick_move_stack(
         &mut self,
         guard: &mut ContainerLockGuard,
         slot_index: usize,
         player: &Player,
-    ) -> ItemStack;
-
-    /// Returns true if this menu is still valid for the player.
-    fn still_valid(&self, _player: &Player) -> bool {
-        true
-    }
-
-    /// Returns true if the item can be taken from the slot during pickup all.
-    /// Override to prevent pickup from certain slots (like crafting result).
-    fn can_take_item_for_pick_all(&self, _carried: &ItemStack, _slot_index: usize) -> bool {
-        true
-    }
-
-    /// Called when the menu is closed/removed.
-    /// Override to handle cleanup like returning crafting grid items to the player.
-    /// The default implementation returns the carried item to the player's inventory.
-    fn removed(&mut self, player: &Player) {
-        // Default: return the carried item to the player's inventory, dropping overflow.
-        let carried = mem::take(&mut self.behavior_mut().carried);
-        if !carried.is_empty() {
-            player.add_item_or_drop(carried);
+    ) -> ItemStack {
+        let Self {
+            behavior,
+            layout,
+            kind,
+        } = self;
+        if let Some(result) = kind.quick_move(behavior, guard, slot_index, player) {
+            result
+        } else {
+            layout.quick_move(behavior, guard, slot_index, player)
         }
     }
 
@@ -1202,7 +1403,7 @@ pub trait Menu {
     /// `has_infinite_materials` should be true if the player is in creative mode.
     ///
     /// TODO: Add `tryItemClickBehaviorOverride` for bundle item support.
-    fn clicked(
+    pub fn clicked(
         &mut self,
         slot_num: i16,
         button: i8,
@@ -1242,19 +1443,14 @@ pub trait Menu {
             }
         }
         // Recompute recipe-driven slots after the click. Normal clicks carry the
-        // touched slot index, but a QuickCraft (drag) distributes its items on
-        // the end phase with slot_num = -999 — fall back to slot 0 so the result
-        // still recomputes after a drag-place into a crafting grid.
-        let recompute_slot = if slot_num >= 0 && (slot_num as usize) < self.behavior().slots.len() {
-            Some(slot_num as usize)
-        } else if click_type == ClickType::QuickCraft && !self.behavior().slots.is_empty() {
-            Some(0)
-        } else {
-            None
-        };
-        if let Some(index) = recompute_slot {
+        // touched slot index; a QuickCraft (drag) distributes its items on the
+        // end phase with slot_num = -999, so recompute on any non-empty menu too
+        // — otherwise the result stays stale after a drag-place into a grid.
+        let should_recompute = (slot_num >= 0 && (slot_num as usize) < self.behavior().slots.len())
+            || (click_type == ClickType::QuickCraft && !self.behavior().slots.is_empty());
+        if should_recompute {
             let mut guard = self.behavior().lock_all_containers();
-            self.slots_changed(&mut guard, index, player);
+            self.slots_changed(&mut guard, player);
         }
     }
 
@@ -1466,15 +1662,5 @@ pub trait Menu {
                 i += step;
             }
         }
-    }
-
-    /// Called when slots are clicked inside of the menu
-    #[expect(unused_variables, reason = "trait method")]
-    fn slots_changed(
-        &mut self,
-        guard: &mut ContainerLockGuard,
-        slot_index: usize,
-        player: &Player,
-    ) {
     }
 }

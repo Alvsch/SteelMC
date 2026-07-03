@@ -11,7 +11,7 @@ use text_components::TextComponent;
 
 use crate::{
     behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess},
-    inventory::anvil_menu::AnvilMenu,
+    inventory::anvil_menu::anvil,
     player::Player,
     world::World,
 };
@@ -70,7 +70,7 @@ impl BlockBehavior for AnvilBlock {
     ) -> InteractionResult {
         player.open_menu(
             TextComponent::translated(translations::CONTAINER_REPAIR.msg()),
-            move |id, world| Box::new(AnvilMenu::new(player.inventory.clone(), id, pos, world)),
+            move |id, world| anvil(player.inventory.clone(), id, pos, world),
         );
         InteractionResult::Success
     }

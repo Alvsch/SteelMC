@@ -1,11 +1,7 @@
 //! Anvil Menus
-use std::{
-    any::Any,
-    mem,
-    sync::{
-        Arc,
-        atomic::{AtomicI32, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicI32, Ordering},
 };
 
 use steel_registry::{
@@ -16,7 +12,6 @@ use steel_registry::{
     },
     enchantment::Enchantment,
     item_stack::ItemStack,
-    menu_type::MenuTypeRef,
     vanilla_items, vanilla_menu_types,
 };
 use steel_utils::{BlockPos, locks::SyncMutex};
@@ -24,19 +19,17 @@ use text_components::TextComponent;
 
 use crate::{
     inventory::{
-        BuiltMenu, DataSlot, MenuBuilder, MenuInstance, MenuLayout, SyncPlayerInv,
+        DataSlot, MenuBuilder, SyncPlayerInv,
         container::Container,
         crafting::ResultContainer,
-        lock::{ContainerId, ContainerRef},
-        menu::{Menu, MenuBehavior},
+        lock::{ContainerId, ContainerLockGuard, ContainerRef},
+        menu::{Menu, MenuBehavior, MenuKind},
         simple_menu::SimpleContainer,
         slots::{AnvilResultHandler, SyncResultContainer},
     },
     player::Player,
     world::World,
 };
-
-use super::lock::ContainerLockGuard;
 
 /// Slot indices for the anvil menu.
 pub mod slots {
@@ -58,16 +51,68 @@ pub mod slots {
     pub const TOTAL_SLOTS: usize = 39;
 }
 
-/// Anvil Menu Behavior
-/// FIXME: Stopping the server while having items in the anvil deletes them instead of adding them to your inventory
-pub struct AnvilMenu {
-    /// The Menu Behavior
-    behavior: MenuBehavior,
-    /// The Input Slots
+/// Builds the anvil menu.
+///
+/// FIXME: Stopping the server while having items in the anvil deletes them
+/// instead of adding them to your inventory.
+#[must_use]
+pub fn anvil(
+    inventory: SyncPlayerInv,
+    container_id: u8,
+    pos: BlockPos,
+    world: &Arc<World>,
+) -> Menu {
+    let input_container = Arc::new(SyncMutex::new(SimpleContainer::new(2)));
+    let container_ref = ContainerRef::SimpleContainer(input_container.clone());
+    let repair_item_count = Arc::new(AtomicI32::new(0));
+    let level_cost = Arc::new(AtomicI32::new(0));
+
+    let result_container: SyncResultContainer = Arc::new(SyncMutex::new(ResultContainer::new()));
+
+    let mut builder = MenuBuilder::new(&vanilla_menu_types::ANVIL, container_id);
+
+    let input = builder.section(container_ref, 2);
+    let result = builder.result_slot(
+        Arc::new(AnvilResultHandler::new(
+            input_container.clone(),
+            result_container.clone(),
+            repair_item_count.clone(),
+            level_cost.clone(),
+            pos,
+            world.clone(),
+        )),
+        ContainerRef::ResultContainer(result_container.clone()),
+    );
+
+    let player = builder.player_inventory(&inventory);
+
+    let level_cost_data_slot = builder.data_slot(0);
+
+    builder.route(result, [player.all], true);
+    builder.route(input, [player.all], false);
+    builder.route(player.hotbar, [input], false);
+    builder.route(player.main, [input, player.hotbar], false);
+    builder.drain([input]);
+
+    builder.build(AnvilKind {
+        input_container,
+        result_container,
+        block_pos: pos,
+        repair_item_count,
+        level_cost: level_cost_data_slot,
+        level_cost_value: level_cost,
+        item_name: SyncMutex::new(None),
+    })
+}
+
+/// The per-menu part of an anvil: the two input slots, the result, the level
+/// cost (shared with the result handler), and the current rename text.
+pub struct AnvilKind {
+    /// The input container (two slots).
     input_container: Arc<SyncMutex<SimpleContainer>>,
-    /// The Result Slot
+    /// The result container (single virtual slot).
     result_container: SyncResultContainer,
-    /// The Position
+    /// The position of the anvil block.
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
     repair_item_count: Arc<AtomicI32>,
@@ -77,74 +122,15 @@ pub struct AnvilMenu {
     /// result pickup and deducting experience. Kept in sync with `level_cost`.
     level_cost_value: Arc<AtomicI32>,
     item_name: SyncMutex<Option<String>>,
-    layout: MenuLayout,
 }
 
-impl AnvilMenu {
-    /// Creates a new Anvil Menu
-    #[must_use]
-    pub fn new(
-        inventory: SyncPlayerInv,
-        container_id: u8,
-        pos: BlockPos,
-        world: &Arc<World>,
-    ) -> Self {
-        let input_container = Arc::new(SyncMutex::new(SimpleContainer::new(2)));
-        let container_ref = ContainerRef::SimpleContainer(input_container.clone());
-        let repair_item_count = Arc::new(AtomicI32::new(0));
-        let level_cost = Arc::new(AtomicI32::new(0));
-
-        let result_container: SyncResultContainer =
-            Arc::new(SyncMutex::new(ResultContainer::new()));
-
-        let mut builder = MenuBuilder::new(&vanilla_menu_types::ANVIL, container_id);
-
-        let input = builder.section(container_ref, 2);
-        let result = builder.result_slot(
-            Arc::new(AnvilResultHandler::new(
-                input_container.clone(),
-                result_container.clone(),
-                repair_item_count.clone(),
-                level_cost.clone(),
-                pos,
-                world.clone(),
-            )),
-            ContainerRef::ResultContainer(result_container.clone()),
-        );
-
-        let player = builder.player_inventory(&inventory);
-
-        let level_cost_data_slot = builder.data_slot(0);
-
-        builder.route(result, [player.all], true);
-        builder.route(input, [player.all], false);
-        builder.route(player.hotbar, [input], false);
-        builder.route(player.main, [input, player.hotbar], false);
-        builder.drain([input]);
-
-        let BuiltMenu { behavior, layout } = builder.build();
-
-        Self {
-            behavior,
-            input_container,
-            result_container,
-            block_pos: pos,
-            repair_item_count: repair_item_count.clone(),
-            level_cost: level_cost_data_slot,
-            level_cost_value: level_cost,
-            item_name: SyncMutex::new(None),
-            layout,
-        }
-    }
-
+impl AnvilKind {
     /// Sets the level cost, keeping the client-facing data slot and the value
     /// shared with the result handler in sync. The displayed value is clamped to
     /// `i16`, while the handler reads the full cost for validation/XP deduction.
-    fn set_cost(&mut self, cost: i32) {
-        self.level_cost.set(
-            &mut self.behavior,
-            cost.clamp(0, i32::from(i16::MAX)) as i16,
-        );
+    fn set_cost(&mut self, behavior: &mut MenuBehavior, cost: i32) {
+        self.level_cost
+            .set(behavior, cost.clamp(0, i32::from(i16::MAX)) as i16);
         self.level_cost_value.store(cost, Ordering::Relaxed);
     }
 
@@ -152,9 +138,14 @@ impl AnvilMenu {
     ///
     ///# Panics
     /// if the input container doesnt have the shape 1x2
-    #[tracing::instrument(skip(self, player, guard), level = "info", fields(player = %player.gameprofile.name))]
+    #[tracing::instrument(skip(self, behavior, player, guard), level = "info", fields(player = %player.gameprofile.name))]
     #[expect(clippy::too_many_lines, reason = "not my choice its so long .-.")]
-    pub fn create_result(&mut self, guard: &mut ContainerLockGuard, player: &Player) {
+    pub fn create_result(
+        &mut self,
+        behavior: &mut MenuBehavior,
+        guard: &mut ContainerLockGuard,
+        player: &Player,
+    ) {
         let Some([input_container, result_container]) = guard.get_disjoint_mut([
             ContainerId::from_arc(&self.input_container),
             ContainerId::from_arc(&self.result_container),
@@ -168,11 +159,11 @@ impl AnvilMenu {
 
         let mut additional_cost = 0_u32;
         let mut rename_cost = 0_i32;
-        self.set_cost(0);
+        self.set_cost(behavior, 0);
 
         if first.is_empty() || !Self::can_store_enchantments(first) {
             result_container.set_item(0, ItemStack::empty());
-            self.set_cost(0);
+            self.set_cost(behavior, 0);
             return;
         }
 
@@ -191,7 +182,7 @@ impl AnvilMenu {
                     result.get_damage_value().min(result.get_max_damage() / 4);
                 if repair_per_unit <= 0 {
                     result_container.set_item(0, ItemStack::empty());
-                    self.set_cost(0);
+                    self.set_cost(behavior, 0);
                     return;
                 }
 
@@ -211,7 +202,7 @@ impl AnvilMenu {
                     && (!result.is(second.item) || !result.is_damageable_item())
                 {
                     result_container.set_item(0, ItemStack::empty());
-                    self.set_cost(0);
+                    self.set_cost(behavior, 0);
                     return;
                 }
 
@@ -289,7 +280,7 @@ impl AnvilMenu {
 
                 if any_incompatible && !any_compatible {
                     result_container.set_item(0, ItemStack::empty());
-                    self.set_cost(0);
+                    self.set_cost(behavior, 0);
                     return;
                 }
             }
@@ -314,7 +305,7 @@ impl AnvilMenu {
         } else {
             (prior_repair_cost + i64::from(additional_cost)).clamp(0, i64::from(i32::MAX)) as i32
         };
-        self.set_cost(total_cost);
+        self.set_cost(behavior, total_cost);
 
         if additional_cost == 0 {
             result = ItemStack::empty();
@@ -322,7 +313,7 @@ impl AnvilMenu {
 
         let only_renaming = rename_cost == additional_cost as i32 && rename_cost > 0;
         if only_renaming && total_cost >= 40 {
-            self.set_cost(39);
+            self.set_cost(behavior, 39);
         }
 
         if total_cost >= 40 && !only_renaming && !player.has_infinite_materials() {
@@ -352,8 +343,13 @@ impl AnvilMenu {
     ///
     /// # Panics
     /// When failing to lock the result container
-    #[tracing::instrument(skip(self, player) level = "info")]
-    pub fn set_item_name(&mut self, name: String, player: &Arc<Player>) {
+    #[tracing::instrument(skip(self, behavior, player) level = "info")]
+    pub fn set_item_name(
+        &mut self,
+        behavior: &mut MenuBehavior,
+        name: String,
+        player: &Arc<Player>,
+    ) {
         let Some(validated_name) = Self::validate_item_name(name) else {
             return;
         };
@@ -367,7 +363,7 @@ impl AnvilMenu {
                 _ => *item_name_guard = Some(validated_name),
             }
 
-            let mut guard = self.behavior.lock_all_containers();
+            let mut guard = behavior.lock_all_containers();
             let Some(result) = guard.get_mut(ContainerId::from_arc(&self.result_container)) else {
                 panic!("failed to lock input container")
             };
@@ -382,11 +378,10 @@ impl AnvilMenu {
         }
 
         {
-            let mut guard = self.behavior.lock_all_containers();
-
-            self.create_result(&mut guard, player);
+            let mut guard = behavior.lock_all_containers();
+            self.create_result(behavior, &mut guard, player);
         }
-        self.behavior.broadcast_changes(&player.connection);
+        behavior.broadcast_changes(&player.connection);
     }
 
     fn validate_item_name(name: String) -> Option<String> {
@@ -410,60 +405,19 @@ impl AnvilMenu {
     }
 }
 
-impl Menu for AnvilMenu {
-    fn behavior(&self) -> &MenuBehavior {
-        &self.behavior
-    }
-
-    fn behavior_mut(&mut self) -> &mut MenuBehavior {
-        &mut self.behavior
-    }
-
-    fn quick_move_stack(
-        &mut self,
-        guard: &mut ContainerLockGuard,
-        slot_index: usize,
-        player: &Player,
-    ) -> ItemStack {
-        self.layout
-            .quick_move(&self.behavior, guard, slot_index, player)
-    }
-
-    fn removed(&mut self, player: &Player) {
-        // TODO: this needs to be called before the server closes or the items inside will be deleted
-        let carried = mem::take(&mut self.behavior.carried);
-        if !carried.is_empty() {
-            player.add_item_or_drop(carried);
-        }
-
-        self.layout.return_drained_items(&self.behavior, player);
-        self.result_container.lock().set_item(0, ItemStack::empty());
-    }
-
+impl MenuKind for AnvilKind {
     fn slots_changed(
         &mut self,
+        behavior: &mut MenuBehavior,
         guard: &mut ContainerLockGuard,
-        _slot_index: usize,
         player: &Player,
     ) {
-        self.create_result(guard, player);
-    }
-}
-
-impl MenuInstance for AnvilMenu {
-    fn menu_type(&self) -> MenuTypeRef {
-        &vanilla_menu_types::ANVIL
+        self.create_result(behavior, guard, player);
     }
 
-    fn container_id(&self) -> u8 {
-        self.behavior.container_id
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
+    /// Called when the anvil menu is closed. The inputs are drained back to the
+    /// player by [`Menu::removed`]; here we just clear the virtual result.
+    fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
+        self.result_container.lock().set_item(0, ItemStack::empty());
     }
 }

@@ -15,9 +15,9 @@
 //! - [`data_slot`](MenuBuilder::data_slot) returns a typed [`DataSlot`] handle,
 //!   replacing "remember that data slot 0 is the level cost".
 //! - Shift-click behavior is described declaratively with
-//!   [`route`](MenuBuilder::route); the resulting [`MenuLayout`] can drive a
-//!   generic [`quick_move`](MenuLayout::quick_move) that does what every
-//!   hand-written `quick_move_stack` currently does.
+//!   [`route`](MenuBuilder::route); the resulting route table drives a generic
+//!   quick-move (`MenuLayout::quick_move`) that does what every hand-written
+//!   `quick_move_stack` currently does.
 //!
 //! ```ignore
 //! let mut builder = MenuBuilder::new(&vanilla_menu_types::ANVIL, container_id);
@@ -32,19 +32,20 @@
 //! builder.route(player.hotbar, [inputs, player.main], false);
 //! builder.drain([inputs]);
 //!
-//! let BuiltMenu { behavior, layout } = builder.build();
+//! let menu = builder.build(AnvilKind { /* per-menu state */ });
 //! ```
 
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef};
 
 use crate::inventory::{
     SyncPlayerInv,
     lock::{ContainerLockGuard, ContainerRef},
-    menu::MenuBehavior,
+    menu::{Menu, MenuBehavior, MenuKindType},
     slots::{
         MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot, ResultHandler, ResultSlot, Slot,
         SlotType, add_standard_inventory_slots,
@@ -52,21 +53,48 @@ use crate::inventory::{
 };
 use crate::player::Player;
 
+/// Identity of one built menu.
+///
+/// Stamped onto every [`Section`] and [`DataSlot`] a [`MenuBuilder`] mints, so
+/// a handle can never silently act on a different menu's slots: the consuming
+/// sites ([`MenuBuilder::route`], [`MenuBuilder::drain`], [`DataSlot::get`] /
+/// [`DataSlot::set`]) verify the stamp in debug builds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MenuInstanceId(u64);
+
+impl MenuInstanceId {
+    /// Mints a process-unique id (one per menu built, not per click).
+    fn next() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 /// A handle to a contiguous range of slots added to a [`MenuBuilder`].
 ///
-/// Sections are `Copy` and carry only a `start..end` range, so passing them
-/// around (e.g. into [`MenuBuilder::route`]) is free.
+/// Sections are `Copy` and carry only a `start..end` range plus the identity
+/// of the menu that minted them, so passing them around (e.g. into
+/// [`MenuBuilder::route`]) is free. Two sections covering the same range in
+/// different menus compare unequal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Section {
+    menu: MenuInstanceId,
     start: usize,
     end: usize,
 }
 
 impl Section {
-    /// Creates a section over an explicit slot range.
+    /// Creates a section over an explicit slot range, stamped with the menu it
+    /// belongs to.
+    ///
+    /// Crate-internal: sections are only meaningful as handles minted by a
+    /// [`MenuBuilder`] over its own slots. Restricting construction keeps a
+    /// fabricated out-of-range section from reaching [`MenuBuilder::route`] /
+    /// [`MenuBuilder::drain`] and panicking during click handling.
     #[must_use]
-    pub const fn new(range: Range<usize>) -> Self {
+    pub(crate) const fn new(menu: MenuInstanceId, range: Range<usize>) -> Self {
         Self {
+            menu,
             start: range.start,
             end: range.end,
         }
@@ -130,18 +158,39 @@ pub struct PlayerInventorySections {
 /// behavior instead of remembering a bare index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DataSlot {
+    menu: MenuInstanceId,
     index: usize,
 }
 
 impl DataSlot {
-    /// Reads the current value of this data slot (0 if it no longer exists).
+    /// Reads the current value of this data slot.
+    ///
+    /// # Panics
+    /// In debug builds, panics if `behavior` belongs to a different menu than
+    /// the [`MenuBuilder`] that minted this handle.
     #[must_use]
     pub fn get(self, behavior: &MenuBehavior) -> i16 {
-        behavior.get_data(self.index).unwrap_or(0)
+        debug_assert_eq!(
+            self.menu,
+            behavior.instance(),
+            "DataSlot used with a MenuBehavior it does not belong to"
+        );
+        behavior
+            .get_data(self.index)
+            .expect("DataSlot index is always valid for its own menu")
     }
 
     /// Writes a new value to this data slot.
+    ///
+    /// # Panics
+    /// In debug builds, panics if `behavior` belongs to a different menu than
+    /// the [`MenuBuilder`] that minted this handle.
     pub fn set(self, behavior: &mut MenuBehavior, value: i16) {
+        debug_assert_eq!(
+            self.menu,
+            behavior.instance(),
+            "DataSlot used with a MenuBehavior it does not belong to"
+        );
         behavior.set_data(self.index, value);
     }
 
@@ -163,8 +212,8 @@ struct Route {
 /// Builds the slots, containers, data slots and routing for a menu.
 ///
 /// See the [module documentation](self) for an overview.
-#[derive(Default)]
 pub struct MenuBuilder {
+    instance: MenuInstanceId,
     menu_type: Option<MenuTypeRef>,
     container_id: u8,
     slots: Vec<SlotType>,
@@ -182,9 +231,14 @@ impl MenuBuilder {
     #[must_use]
     pub fn new(menu_type: impl Into<Option<MenuTypeRef>>, container_id: u8) -> Self {
         Self {
+            instance: MenuInstanceId::next(),
             menu_type: menu_type.into(),
             container_id,
-            ..Self::default()
+            slots: Vec::new(),
+            container_refs: Vec::new(),
+            data_slots: Vec::new(),
+            routes: Vec::new(),
+            drain_sections: Vec::new(),
         }
     }
 
@@ -251,9 +305,9 @@ impl MenuBuilder {
         add_standard_inventory_slots(&mut self.slots, inventory);
         self.register_container(ContainerRef::PlayerInventory(inventory.clone()));
 
-        let main = Section::new(start..start + 27);
-        let hotbar = Section::new(start + 27..self.slots.len());
-        let all = Section::new(start..self.slots.len());
+        let main = Section::new(self.instance, start..start + 27);
+        let hotbar = Section::new(self.instance, start + 27..self.slots.len());
+        let all = Section::new(self.instance, start..self.slots.len());
         PlayerInventorySections { all, main, hotbar }
     }
 
@@ -298,24 +352,33 @@ impl MenuBuilder {
     pub fn data_slot(&mut self, initial: i16) -> DataSlot {
         let index = self.data_slots.len();
         self.data_slots.push(initial);
-        DataSlot { index }
+        DataSlot {
+            menu: self.instance,
+            index,
+        }
     }
 
     /// Declares a shift-click route from one section into others.
     ///
-    /// When a slot in `from` is shift-clicked, [`MenuLayout::quick_move`] walks
+    /// When a slot in `from` is shift-clicked, the generic quick-move walks
     /// `targets` in order and stops at the first that accepts any items. Set
     /// `backwards` to fill the targets from the end (vanilla does this when
     /// moving into the player inventory so existing stacks top up first).
+    ///
+    /// # Panics
+    /// In debug builds, panics if any section was minted by a different
+    /// [`MenuBuilder`].
     pub fn route(
         &mut self,
         from: Section,
         targets: impl IntoIterator<Item = Section>,
         backwards: bool,
     ) -> &mut Self {
+        let from = self.owned(from);
+        let targets = targets.into_iter().map(|s| self.owned(s)).collect();
         self.routes.push(Route {
-            from: from.range(),
-            targets: targets.into_iter().map(Section::range).collect(),
+            from,
+            targets,
             backwards,
         });
         self
@@ -324,19 +387,25 @@ impl MenuBuilder {
     /// Marks `sections` to be emptied back into the player on close.
     ///
     /// Input grids (crafting, anvil, …) must not swallow items when the window
-    /// closes; [`MenuLayout::return_drained_items`] returns the listed slots'
+    /// closes; on close, `MenuLayout::return_drained_items` returns the listed slots'
     /// contents to the player's inventory (dropping overflow). Only list real
     /// input sections — fake/result slots are computed and would dupe items.
+    ///
+    /// # Panics
+    /// In debug builds, panics if any section was minted by a different
+    /// [`MenuBuilder`].
     pub fn drain(&mut self, sections: impl IntoIterator<Item = Section>) -> &mut Self {
-        self.drain_sections
-            .extend(sections.into_iter().map(Section::range));
+        let ranges: Vec<_> = sections.into_iter().map(|s| self.owned(s)).collect();
+        self.drain_sections.extend(ranges);
         self
     }
 
-    /// Consumes the builder, producing the menu behavior and its layout.
+    /// Consumes the builder, assembling the finished [`Menu`] around its
+    /// per-menu [`MenuKind`](crate::inventory::MenuKind).
     #[must_use]
-    pub fn build(self) -> BuiltMenu {
+    pub fn build(self, kind: impl Into<MenuKindType>) -> Menu {
         let mut behavior = MenuBehavior::new(
+            self.instance,
             self.slots,
             self.container_id,
             self.menu_type,
@@ -346,13 +415,11 @@ impl MenuBuilder {
             behavior.add_data_slot(initial);
         }
 
-        BuiltMenu {
-            behavior,
-            layout: MenuLayout {
-                routes: self.routes,
-                drain_sections: self.drain_sections,
-            },
-        }
+        let layout = MenuLayout {
+            routes: self.routes,
+            drain_sections: self.drain_sections,
+        };
+        Menu::from_parts(behavior, layout, kind.into())
     }
 
     /// Records a container to lock, ignoring it if an equal one is already present.
@@ -363,25 +430,26 @@ impl MenuBuilder {
         }
     }
 
+    /// Verifies (in debug builds) that `section` was minted by this builder,
+    /// returning its raw slot range.
+    fn owned(&self, section: Section) -> Range<usize> {
+        debug_assert_eq!(
+            section.menu, self.instance,
+            "Section was minted by a different MenuBuilder"
+        );
+        section.range()
+    }
+
     /// Returns a section spanning `start..self.slots.len()`.
     const fn section_from(&self, start: usize) -> Section {
-        Section::new(start..self.slots.len())
+        Section::new(self.instance, start..self.slots.len())
     }
-}
-
-/// The result of [`MenuBuilder::build`]: a ready [`MenuBehavior`] plus the
-/// [`MenuLayout`] describing its sections and routing.
-pub struct BuiltMenu {
-    /// The assembled shared menu state.
-    pub behavior: MenuBehavior,
-    /// Section ranges and shift-click routes derived from the builder.
-    pub layout: MenuLayout,
 }
 
 /// The static layout of a built menu: named section ranges and the shift-click
 /// route table. Held alongside [`MenuBehavior`] so a menu can drive a generic
 /// [`quick_move`](MenuLayout::quick_move) instead of writing one by hand.
-pub struct MenuLayout {
+pub(crate) struct MenuLayout {
     routes: Vec<Route>,
     drain_sections: Vec<Range<usize>>,
 }
