@@ -844,6 +844,8 @@ impl Player {
             });
         }
 
+        self.do_close_container();
+
         if world.get_game_rule(&KEEP_INVENTORY) != GameRuleValue::Bool(true) {
             let items: Vec<ItemStack> = {
                 let mut inventory = self.inventory.lock();
