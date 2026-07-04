@@ -106,6 +106,11 @@ impl World {
         let Some(player) = self.players.remove_player(&player).await else {
             return;
         };
+        // Close any open menu so its contents (crafting grid, anvil inputs,
+        // cursor) are handled instead of being silently lost with the dropped
+        // menu. The player is disconnecting, so `Menu::removed` drops them into
+        // the world at their position, matching vanilla's `clearContainer`.
+        player.do_close_container();
         let uuid = player.gameprofile.id;
         let entity_id = player.id();
         let domain = self.domain().to_owned();
