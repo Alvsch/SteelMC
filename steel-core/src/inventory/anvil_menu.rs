@@ -19,7 +19,7 @@ use text_components::TextComponent;
 
 use crate::{
     inventory::{
-        DataSlot, MenuBuilder, SyncPlayerInv,
+        DataSlot, FillDirection, MenuBuilder, SyncPlayerInv,
         container::Container,
         crafting::ResultContainer,
         lock::{ContainerId, ContainerLockGuard, ContainerRef},
@@ -52,9 +52,6 @@ pub mod slots {
 }
 
 /// Builds the anvil menu.
-///
-/// FIXME: Stopping the server while having items in the anvil deletes them
-/// instead of adding them to your inventory.
 #[must_use]
 pub fn anvil(
     inventory: SyncPlayerInv,
@@ -88,10 +85,10 @@ pub fn anvil(
 
     let level_cost_data_slot = builder.data_slot(0);
 
-    builder.route(result, [player.all], true);
-    builder.route(input, [player.all], false);
-    builder.route(player.hotbar, [input], false);
-    builder.route(player.main, [input, player.hotbar], false);
+    builder.route(result, [player.all], FillDirection::Backward);
+    builder.route(input, [player.all], FillDirection::Forward);
+    builder.route(player.hotbar, [input], FillDirection::Forward);
+    builder.route(player.main, [input, player.hotbar], FillDirection::Forward);
     builder.drain([input]);
 
     builder.build(AnvilKind {

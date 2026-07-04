@@ -21,6 +21,7 @@ use text_components::TextComponent;
 use crate::{
     entity::Entity,
     inventory::{
+        Click,
         container::Container,
         equipment::{EntityEquipment, EquipmentSlot},
         inventory_menu::INVENTORY_MENU_CONTAINER_ID,
@@ -28,7 +29,7 @@ use crate::{
         menu::Menu,
         slots::Slot,
     },
-    player::Player,
+    player::{Player, connection::NetworkConnection},
     world::World,
 };
 
@@ -796,28 +797,33 @@ impl Player {
             return;
         }
 
-        if !menu.behavior().is_valid_slot_index(packet.slot_num) {
+        // Parse and validate the raw click fields once. A malformed click
+        // (out-of-range slot, bad button, invalid drag encoding — including
+        // the -1 "no slot" clicks Java accepts) is not applied, but the state
+        // sync below still runs so the client's prediction gets corrected.
+        let click = Click::parse(
+            packet.slot_num,
+            packet.button_num,
+            packet.click_type,
+            menu.behavior().slot_count(),
+        );
+        if click.is_none() {
             log::debug!(
-                "Player {} clicked invalid slot index: {}, available: {}",
+                "Player {} sent malformed container click (slot {}, button {}, {:?})",
                 self.gameprofile.name,
                 packet.slot_num,
-                menu.behavior().slot_count()
+                packet.button_num,
+                packet.click_type
             );
-            return;
         }
 
         let full_resync_needed = packet.state_id as u32 != menu.behavior().get_state_id();
 
         menu.behavior_mut().suppress_remote_updates();
 
-        let has_infinite_materials = self.game_mode() == GameType::Creative;
-        menu.clicked(
-            packet.slot_num,
-            packet.button_num,
-            packet.click_type,
-            has_infinite_materials,
-            self,
-        );
+        if let Some(click) = click {
+            menu.clicked(click, self);
+        }
 
         for (slot, hash) in packet.changed_slots {
             let slot = slot as usize;
@@ -1133,6 +1139,19 @@ impl Player {
     pub fn can_drop_items(&self) -> bool {
         !self.is_removed()
         // TODO: Check if player is alive (health > 0)
+    }
+
+    /// Returns whether items from a closing menu (crafting grid, anvil inputs,
+    /// cursor) should be placed back into the inventory instead of dropped into
+    /// the world.
+    ///
+    /// Mirrors vanilla's `AbstractContainerMenu.clearContainer` / `removed`
+    /// guard (`player.isAlive() && !hasDisconnected()`): a dead or disconnected
+    /// player has the items dropped at their position instead, so they are not
+    /// resurrected into a respawned inventory or saved on a hard disconnect.
+    #[must_use]
+    pub fn returns_menu_items_to_inventory(&self) -> bool {
+        self.is_alive() && !self.connection.closed()
     }
 
     /// Tries to add an item to the player's inventory, dropping it if it doesn't fit.

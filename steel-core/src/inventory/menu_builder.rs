@@ -26,10 +26,10 @@
 //! let player = builder.player_inventory(&inventory);
 //! let level_cost = builder.data_slot(0);
 //!
-//! builder.route(result, [player.all], true);
-//! builder.route(inputs, [player.all], false);
-//! builder.route(player.main, [inputs, player.hotbar], false);
-//! builder.route(player.hotbar, [inputs, player.main], false);
+//! builder.route(result, [player.all], FillDirection::Backward);
+//! builder.route(inputs, [player.all], FillDirection::Forward);
+//! builder.route(player.main, [inputs, player.hotbar], FillDirection::Forward);
+//! builder.route(player.hotbar, [inputs, player.main], FillDirection::Forward);
 //! builder.drain([inputs]);
 //!
 //! let menu = builder.build(AnvilKind { /* per-menu state */ });
@@ -201,12 +201,25 @@ impl DataSlot {
     }
 }
 
+/// The direction in which a slot range is walked when distributing items.
+///
+/// Vanilla fills backwards when moving into the player inventory so existing
+/// hotbar stacks top up first; the same enum steers double-click pickup-all
+/// collection order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FillDirection {
+    /// Walk from the first slot of the range to the last.
+    Forward,
+    /// Walk from the last slot of the range to the first.
+    Backward,
+}
+
 /// A declarative shift-click route: take from `from`, then try each target
 /// range in order, stopping at the first that accepts anything.
 struct Route {
     from: Range<usize>,
     targets: Vec<Range<usize>>,
-    backwards: bool,
+    direction: FillDirection,
 }
 
 /// Builds the slots, containers, data slots and routing for a menu.
@@ -361,9 +374,10 @@ impl MenuBuilder {
     /// Declares a shift-click route from one section into others.
     ///
     /// When a slot in `from` is shift-clicked, the generic quick-move walks
-    /// `targets` in order and stops at the first that accepts any items. Set
-    /// `backwards` to fill the targets from the end (vanilla does this when
-    /// moving into the player inventory so existing stacks top up first).
+    /// `targets` in order and stops at the first that accepts any items. Pass
+    /// [`FillDirection::Backward`] to fill the targets from the end (vanilla
+    /// does this when moving into the player inventory so existing stacks top
+    /// up first).
     ///
     /// # Panics
     /// In debug builds, panics if any section was minted by a different
@@ -372,14 +386,14 @@ impl MenuBuilder {
         &mut self,
         from: Section,
         targets: impl IntoIterator<Item = Section>,
-        backwards: bool,
+        direction: FillDirection,
     ) -> &mut Self {
         let from = self.owned(from);
         let targets = targets.into_iter().map(|s| self.owned(s)).collect();
         self.routes.push(Route {
             from,
             targets,
-            backwards,
+            direction,
         });
         self
     }
@@ -458,7 +472,16 @@ impl MenuLayout {
     /// Returns every item in the [`drain`](MenuBuilder::drain) sections to the
     /// player, emptying those slots. Call from `removed` so input grids hand
     /// their contents back on close instead of deleting them.
-    pub fn return_drained_items(&self, behavior: &MenuBehavior, player: &Player) {
+    ///
+    /// When `return_to_inventory` is false (a dead or disconnected player) the
+    /// items are dropped into the world instead, mirroring vanilla's
+    /// `clearContainer` guard.
+    pub fn return_drained_items(
+        &self,
+        behavior: &MenuBehavior,
+        player: &Player,
+        return_to_inventory: bool,
+    ) {
         if self.drain_sections.is_empty() {
             return;
         }
@@ -467,8 +490,13 @@ impl MenuLayout {
         for range in &self.drain_sections {
             for slot_index in range.clone() {
                 let item = mem::take(behavior.slots[slot_index].get_item_mut(&mut guard));
-                if !item.is_empty() {
+                if item.is_empty() {
+                    continue;
+                }
+                if return_to_inventory {
                     player.add_item_or_drop_with_guard(&mut guard, item);
+                } else {
+                    player.drop_item(item, false, false);
                 }
             }
         }
@@ -512,7 +540,7 @@ impl MenuLayout {
                 &mut remaining,
                 target.start,
                 target.end,
-                route.backwards,
+                route.direction,
             )
         });
         if !moved {

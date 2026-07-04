@@ -14,7 +14,7 @@ use steel_registry::item_stack::ItemStack;
 use steel_utils::locks::SyncMutex;
 
 use crate::inventory::{
-    MenuBuilder, Section, SyncPlayerInv,
+    FillDirection, MenuBuilder, Section, SyncPlayerInv,
     container::Container,
     crafting::{CraftingContainer, ResultContainer},
     equipment::{EquipmentSlot, EquipmentSlotType},
@@ -124,13 +124,31 @@ impl InventoryKind {
     ) -> bool {
         if self.main.contains(slot_index) {
             // Main inventory -> hotbar.
-            behavior.move_item_stack_to(guard, stack, self.hotbar.start(), self.hotbar.end(), false)
+            behavior.move_item_stack_to(
+                guard,
+                stack,
+                self.hotbar.start(),
+                self.hotbar.end(),
+                FillDirection::Forward,
+            )
         } else if self.hotbar.contains(slot_index) {
             // Hotbar -> main inventory.
-            behavior.move_item_stack_to(guard, stack, self.main.start(), self.main.end(), false)
+            behavior.move_item_stack_to(
+                guard,
+                stack,
+                self.main.start(),
+                self.main.end(),
+                FillDirection::Forward,
+            )
         } else {
             // Offhand (or fallback) -> main inventory + hotbar.
-            behavior.move_item_stack_to(guard, stack, self.inv.start(), self.inv.end(), false)
+            behavior.move_item_stack_to(
+                guard,
+                stack,
+                self.inv.start(),
+                self.inv.end(),
+                FillDirection::Forward,
+            )
         }
     }
 }
@@ -179,7 +197,7 @@ impl MenuKind for InventoryKind {
                 &mut stack_mut,
                 self.inv.start(),
                 self.inv.end(),
-                true,
+                FillDirection::Backward,
             )
         } else if self.grid.contains(slot_index) || self.armor.contains(slot_index) {
             // Crafting grid / armor -> inventory.
@@ -188,7 +206,7 @@ impl MenuKind for InventoryKind {
                 &mut stack_mut,
                 self.inv.start(),
                 self.inv.end(),
-                false,
+                FillDirection::Forward,
             )
         } else {
             // Item is in inventory/hotbar - try to equip it first
@@ -222,7 +240,7 @@ impl MenuKind for InventoryKind {
                             &mut stack_mut,
                             armor_slot_index,
                             armor_slot_index + 1,
-                            false,
+                            FillDirection::Forward,
                         )
                     }
                 } else if eq_slot == EquipmentSlot::OffHand {
@@ -240,7 +258,7 @@ impl MenuKind for InventoryKind {
                             &mut stack_mut,
                             self.offhand.start(),
                             self.offhand.end(),
-                            false,
+                            FillDirection::Forward,
                         )
                     }
                 } else {

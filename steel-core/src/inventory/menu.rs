@@ -20,14 +20,15 @@ use std::mem;
 
 use steel_protocol::packet_traits::{ClientPacket, EncodedPacket};
 use steel_protocol::packets::game::{
-    CContainerSetContent, CContainerSetData, CContainerSetSlot, CSetCursorItem, ClickType,
-    HashedPatchMap, HashedStack,
+    CContainerSetContent, CContainerSetData, CContainerSetSlot, CSetCursorItem, HashedPatchMap,
+    HashedStack,
 };
 use steel_protocol::utils::ConnectionProtocol;
 use steel_registry::{
     REGISTRY, RegistryEntry, RegistryExt, data_components::DataComponentPatch,
     item_stack::ItemStack, menu_type::MenuTypeRef,
 };
+use steel_utils::types::GameType;
 
 use crate::inventory::slots::slot::{Slot, SlotType};
 use crate::{
@@ -41,9 +42,10 @@ use enum_dispatch::enum_dispatch;
 use crate::inventory::{
     anvil_menu::AnvilKind,
     chest_menu::ChestKind,
+    click::{Click, DragKind, MouseButton, QuickCraft, SwapTarget},
     crafting_menu::CraftingKind,
     inventory_menu::InventoryKind,
-    menu_builder::{MenuInstanceId, MenuLayout},
+    menu_builder::{FillDirection, MenuInstanceId, MenuLayout},
 };
 
 /// Represents the server's perception of what the client knows about a slot.
@@ -204,9 +206,6 @@ fn validate_component_hashes(hashed: &HashedPatchMap, patch: &DataComponentPatch
     true
 }
 
-/// Slot index for clicking outside the inventory window (drop items).
-pub const SLOT_CLICKED_OUTSIDE: i16 = -999;
-
 /// `QuickCraft` (drag) type constants.
 pub const QUICKCRAFT_TYPE_CHARITABLE: i32 = 0; // Left-click drag (distribute evenly)
 /// Right-click drag mode (place one item in each slot).
@@ -214,49 +213,11 @@ pub const QUICKCRAFT_TYPE_GREEDY: i32 = 1; // Right-click drag (place one each)
 /// Middle-click drag mode (creative only, place full stacks).
 pub const QUICKCRAFT_TYPE_CLONE: i32 = 2; // Middle-click drag (creative only, full stacks)
 
-/// `QuickCraft` header constants (packet phase).
-pub const QUICKCRAFT_HEADER_START: i32 = 0;
-/// Continue adding slots to the drag operation.
-pub const QUICKCRAFT_HEADER_CONTINUE: i32 = 1;
-/// Finish the drag operation and distribute items.
-pub const QUICKCRAFT_HEADER_END: i32 = 2;
-
 /// Number of slots per row in standard inventory grids.
 pub const SLOTS_PER_ROW: usize = 9;
 
 /// Standard slot size in pixels (for UI calculations).
 pub const SLOT_SIZE: i32 = 18;
-
-/// Extracts the quickcraft type from a button mask.
-/// Type is stored in bits 2-3.
-#[must_use]
-pub const fn get_quickcraft_type(button: i32) -> i32 {
-    (button >> 2) & 3
-}
-
-/// Extracts the quickcraft header (phase) from a button mask.
-/// Header is stored in bits 0-1.
-#[must_use]
-pub const fn get_quickcraft_header(button: i32) -> i32 {
-    button & 3
-}
-
-/// Creates a quickcraft button mask from header and type.
-#[must_use]
-pub const fn get_quickcraft_mask(header: i32, quickcraft_type: i32) -> i32 {
-    (header & 3) | ((quickcraft_type & 3) << 2)
-}
-
-/// Checks if a quickcraft type is valid for the given player.
-/// Type 2 (clone) requires creative mode (infinite materials).
-#[must_use]
-pub const fn is_valid_quickcraft_type(quickcraft_type: i32, has_infinite_materials: bool) -> bool {
-    match quickcraft_type {
-        0 | 1 => true,
-        2 => has_infinite_materials,
-        _ => false,
-    }
-}
 
 /// Calculates how many items to place per slot during quickcraft.
 #[must_use]
@@ -407,9 +368,8 @@ impl MenuBehavior {
         true
     }
 
-    /// Moves items from `item_stack` to slots in the range [`start_slot`, `end_slot`).
-    /// If `backwards` is true, iterates from end_slot-1 down to `start_slot`.
-    /// Returns true if any items were moved.
+    /// Moves items from `item_stack` to slots in the range [`start_slot`, `end_slot`),
+    /// walking the range in `direction`. Returns true if any items were moved.
     ///
     /// This is used by `quick_move_stack` implementations to distribute items.
     /// Based on Java's `AbstractContainerMenu::moveItemStackTo`.
@@ -419,8 +379,9 @@ impl MenuBehavior {
         item_stack: &mut ItemStack,
         start_slot: usize,
         end_slot: usize,
-        backwards: bool,
+        direction: FillDirection,
     ) -> bool {
+        let backwards = direction == FillDirection::Backward;
         let mut anything_changed = false;
 
         // First pass: try to stack with existing items
@@ -555,14 +516,6 @@ impl MenuBehavior {
                 self.remote_slots[slot_index] = other.remote_slots[other_slot_index].clone();
             }
         }
-    }
-
-    /// Returns true if a slot index is valid for this menu.
-    /// -999 is used for clicking outside the inventory.
-    /// -1 is also accepted (matches Java behavior, though not used by vanilla clients).
-    #[must_use]
-    pub const fn is_valid_slot_index(&self, slot: i16) -> bool {
-        slot == -1 || slot == -999 || (slot >= 0 && (slot as usize) < self.slots.len())
     }
 
     /// Returns the number of slots in this menu.
@@ -808,20 +761,21 @@ impl MenuBehavior {
         self.send_all_data_to_remote(connection);
     }
 
-    /// Handles quickcraft (drag) operations.
+    /// Handles one phase of a quickcraft (drag) operation.
     /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.QUICK_CRAFT`.
     pub(crate) fn do_quick_craft(
         &mut self,
-        slot_num: i16,
-        button: i8,
+        action: QuickCraft,
         has_infinite_materials: bool,
         player: &Player,
     ) {
-        let expected_status = self.quickcraft_status;
-        let new_status = get_quickcraft_header(i32::from(button));
-
-        // Validate state transitions: must go 0->1->2 or stay at 1
-        if (expected_status != 1 || new_status != 2) && expected_status != new_status {
+        // Validate the phase against the state machine position: a drag must
+        // go Start -> AddSlot* -> End (`quickcraft_status` 0 -> 1 -> reset).
+        let valid_transition = match action {
+            QuickCraft::Start { .. } => self.quickcraft_status == 0,
+            QuickCraft::AddSlot { .. } | QuickCraft::End { .. } => self.quickcraft_status == 1,
+        };
+        if !valid_transition {
             self.reset_quick_craft();
             return;
         }
@@ -832,127 +786,137 @@ impl MenuBehavior {
             return;
         }
 
-        if new_status == QUICKCRAFT_HEADER_START {
-            // Starting a new drag
-            self.quickcraft_type = get_quickcraft_type(i32::from(button));
-            if is_valid_quickcraft_type(self.quickcraft_type, has_infinite_materials) {
+        match action {
+            QuickCraft::Start { kind } => {
+                // A clone (middle-click) drag requires creative mode.
+                if kind == DragKind::Clone && !has_infinite_materials {
+                    self.reset_quick_craft();
+                    return;
+                }
+                self.quickcraft_type = kind.quickcraft_type();
                 self.quickcraft_status = 1;
                 self.quickcraft_slots.clear();
-            } else {
-                self.reset_quick_craft();
             }
-        } else if new_status == QUICKCRAFT_HEADER_CONTINUE {
-            // Adding a slot to the drag
-            if slot_num < 0 || slot_num as usize >= self.slots.len() {
+            QuickCraft::AddSlot {
+                slot: slot_index, ..
+            } => {
+                let slot = &self.slots[slot_index];
+
+                let guard = self.lock_all_containers();
+                let slot_item = slot.get_item(&guard).clone();
+
+                if can_item_quick_replace(&slot_item, &self.carried, true)
+                    && slot.may_place(&self.carried)
+                    && (self.quickcraft_type == QUICKCRAFT_TYPE_CLONE
+                        || self.carried.count > self.quickcraft_slots.len() as i32)
+                    && self.can_drag_to(slot_index)
+                    && !self.quickcraft_slots.contains(&slot_index)
+                {
+                    self.quickcraft_slots.push(slot_index);
+                }
+            }
+            QuickCraft::End { .. } => self.finish_quick_craft(player),
+        }
+    }
+
+    /// Distributes the carried items over the dragged slots and resets the
+    /// drag state (the `End` phase of [`MenuBehavior::do_quick_craft`]).
+    fn finish_quick_craft(&mut self, player: &Player) {
+        // Finishing the drag - distribute items
+        if !self.quickcraft_slots.is_empty() {
+            if self.quickcraft_slots.len() == 1 {
+                // Only one slot - treat as a regular pickup click
+                let slot = self.quickcraft_slots[0];
+                self.reset_quick_craft();
+                // A left drag places like a left click; right and clone
+                // drags act as secondary (matching Java's ClickAction).
+                let button = if self.quickcraft_type == QUICKCRAFT_TYPE_CHARITABLE {
+                    MouseButton::Left
+                } else {
+                    MouseButton::Right
+                };
+                self.do_pickup(slot, button, player);
                 return;
             }
-            let slot_index = slot_num as usize;
-            let slot = &self.slots[slot_index];
 
-            let guard = self.lock_all_containers();
-            let slot_item = slot.get_item(&guard).clone();
-
-            if can_item_quick_replace(&slot_item, &self.carried, true)
-                && slot.may_place(&self.carried)
-                && (self.quickcraft_type == QUICKCRAFT_TYPE_CLONE
-                    || self.carried.count > self.quickcraft_slots.len() as i32)
-                && self.can_drag_to(slot_index)
-                && !self.quickcraft_slots.contains(&slot_index)
-            {
-                self.quickcraft_slots.push(slot_index);
-            }
-        } else if new_status == QUICKCRAFT_HEADER_END {
-            // Finishing the drag - distribute items
-            if !self.quickcraft_slots.is_empty() {
-                if self.quickcraft_slots.len() == 1 {
-                    // Only one slot - treat as a regular pickup click
-                    let slot = self.quickcraft_slots[0];
-                    self.reset_quick_craft();
-                    self.do_pickup(slot as i16, self.quickcraft_type as i8, player);
-                    return;
-                }
-
-                let source = self.carried.clone();
-                if source.is_empty() {
-                    self.reset_quick_craft();
-                    return;
-                }
-
-                let mut remaining = self.carried.count;
-                let quickcraft_slots = self.quickcraft_slots.clone();
-
-                let mut guard = self.lock_all_containers();
-
-                for &slot_index in &quickcraft_slots {
-                    let slot = &self.slots[slot_index];
-                    let slot_item = slot.get_item(&guard).clone();
-
-                    if can_item_quick_replace(&slot_item, &self.carried, true)
-                        && slot.may_place(&self.carried)
-                        && (self.quickcraft_type == QUICKCRAFT_TYPE_CLONE
-                            || self.carried.count >= quickcraft_slots.len() as i32)
-                        && self.can_drag_to(slot_index)
-                    {
-                        let current_count = if slot_item.is_empty() {
-                            0
-                        } else {
-                            slot_item.count
-                        };
-                        let max_size = source
-                            .max_stack_size()
-                            .min(slot.get_max_stack_size_for_item(&guard, &source));
-                        let place_count = get_quickcraft_place_count(
-                            quickcraft_slots.len(),
-                            self.quickcraft_type,
-                            &source,
-                        );
-                        let new_count = (place_count + current_count).min(max_size);
-                        remaining -= new_count - current_count;
-
-                        let mut new_item = source.clone();
-                        new_item.set_count(new_count);
-                        slot.set_by_player(&mut guard, new_item, &slot_item);
-                    }
-                }
-
-                let mut new_carried = source;
-                new_carried.set_count(remaining);
-                self.carried = new_carried;
+            let source = self.carried.clone();
+            if source.is_empty() {
+                self.reset_quick_craft();
+                return;
             }
 
-            self.reset_quick_craft();
-        } else {
-            self.reset_quick_craft();
+            let mut remaining = self.carried.count;
+            let quickcraft_slots = self.quickcraft_slots.clone();
+
+            let mut guard = self.lock_all_containers();
+
+            for &slot_index in &quickcraft_slots {
+                let slot = &self.slots[slot_index];
+                let slot_item = slot.get_item(&guard).clone();
+
+                if can_item_quick_replace(&slot_item, &self.carried, true)
+                    && slot.may_place(&self.carried)
+                    && (self.quickcraft_type == QUICKCRAFT_TYPE_CLONE
+                        || self.carried.count >= quickcraft_slots.len() as i32)
+                    && self.can_drag_to(slot_index)
+                {
+                    let current_count = if slot_item.is_empty() {
+                        0
+                    } else {
+                        slot_item.count
+                    };
+                    let max_size = source
+                        .max_stack_size()
+                        .min(slot.get_max_stack_size_for_item(&guard, &source));
+                    let place_count = get_quickcraft_place_count(
+                        quickcraft_slots.len(),
+                        self.quickcraft_type,
+                        &source,
+                    );
+                    let new_count = (place_count + current_count).min(max_size);
+                    remaining -= new_count - current_count;
+
+                    let mut new_item = source.clone();
+                    new_item.set_count(new_count);
+                    slot.set_by_player(&mut guard, new_item, &slot_item);
+                }
+            }
+
+            let mut new_carried = source;
+            new_carried.set_count(remaining);
+            self.carried = new_carried;
+        }
+
+        self.reset_quick_craft();
+    }
+
+    /// Drops the carried stack when the player clicks outside the window.
+    /// Based on the `slotId == -999` branch of Java's
+    /// `AbstractContainerMenu::doClick` for `ClickType.PICKUP`.
+    pub(crate) fn drop_carried(&mut self, button: MouseButton, player: &Player) {
+        if self.carried.is_empty() {
+            return;
+        }
+        match button {
+            MouseButton::Left => {
+                // Left click outside - drop all carried items
+                let to_drop = mem::take(&mut self.carried);
+                player.drop_item(to_drop, false, true);
+            }
+            MouseButton::Right => {
+                // Right click outside - drop one carried item
+                player.drop_item(self.carried.split(1), false, true);
+            }
         }
     }
 
     /// Handles pickup click (left/right click to pick up or place items).
-    /// Based on Java's `AbstractContainerMenu::doClick` for ClickType.PICKUP.
+    /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.PICKUP`.
     #[expect(
         clippy::too_many_lines,
         reason = "splitting would hurt readability of the click-handling state machine"
     )]
-    pub(crate) fn do_pickup(&mut self, slot_num: i16, button: i8, player: &Player) {
-        // Slot -999 means clicked outside the inventory (drop items)
-        if slot_num == -999 {
-            if !self.carried.is_empty() {
-                if button == 0 {
-                    // Left click outside - drop all carried items
-                    let to_drop = mem::take(&mut self.carried);
-                    player.drop_item(to_drop, false, true);
-                } else {
-                    // Right click outside - drop one carried item
-                    player.drop_item(self.carried.split(1), false, true);
-                }
-            }
-            return;
-        }
-
-        let slot_index = slot_num as usize;
-        if slot_index >= self.slots.len() {
-            return;
-        }
-
+    pub(crate) fn do_pickup(&mut self, slot_index: usize, button: MouseButton, player: &Player) {
         let mut guard = self.lock_all_containers();
 
         let slot = &self.slots[slot_index];
@@ -965,7 +929,11 @@ impl MenuBehavior {
             // Slot is empty - place carried items (if allowed)
             if !carried.is_empty() && slot.may_place(&carried) {
                 let max_for_slot = slot.get_max_stack_size_for_item(&guard, &carried);
-                let requested = if button == 0 { carried.count } else { 1 };
+                let requested = if button == MouseButton::Left {
+                    carried.count
+                } else {
+                    1
+                };
                 let amount = requested.min(max_for_slot);
 
                 let to_place = carried.split(amount);
@@ -982,7 +950,7 @@ impl MenuBehavior {
             // Carried is empty - pick up from slot (if allowed)
             // Use try_remove which enforces allow_modification rules
             // (result slots must be picked up in full, not partially)
-            let amount = if button == 0 {
+            let amount = if button == MouseButton::Left {
                 slot_item.count
             } else {
                 (slot_item.count + 1) / 2
@@ -1000,7 +968,7 @@ impl MenuBehavior {
         } else if ItemStack::is_same_item_same_components(&slot_item, &carried) {
             // Same item type - try to stack (if slot allows this item type)
             if slot.may_place(&carried) {
-                if button == 0 {
+                if button == MouseButton::Left {
                     // Left click - add as many as possible to slot
                     let max = slot.get_max_stack_size_for_item(&guard, &carried);
                     let space = max - slot_item.count;
@@ -1077,13 +1045,8 @@ impl MenuBehavior {
     }
 
     /// Handles clone (middle-click in creative).
-    pub(crate) fn do_clone(&mut self, slot_num: i16, has_infinite_materials: bool) {
-        if !has_infinite_materials || !self.carried.is_empty() || slot_num < 0 {
-            return;
-        }
-
-        let slot_index = slot_num as usize;
-        if slot_index >= self.slots.len() {
+    pub(crate) fn do_clone(&mut self, slot_index: usize, has_infinite_materials: bool) {
+        if !has_infinite_materials || !self.carried.is_empty() {
             return;
         }
 
@@ -1096,21 +1059,13 @@ impl MenuBehavior {
         }
     }
 
-    /// Handles throw (drop key Q or Ctrl+Q).
-    /// button 0 = Q (drop 1), button 1 = Ctrl+Q (drop all, repeating while same item)
+    /// Handles throw (drop key). Q drops a single item; Ctrl+Q
+    /// (`whole_stack`) drops the whole stack, repeating while the slot
+    /// refills with the same item.
     ///
-    /// Based on Java's `AbstractContainerMenu::doClick` for ClickType.THROW.
-    pub(crate) fn do_throw(&mut self, slot_num: i16, button: i8, player: &Player) {
+    /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.THROW`.
+    pub(crate) fn do_throw(&mut self, slot_index: usize, whole_stack: bool, player: &Player) {
         if !self.carried.is_empty() {
-            return;
-        }
-
-        if slot_num < 0 {
-            return;
-        }
-
-        let slot_index = slot_num as usize;
-        if slot_index >= self.slots.len() {
             return;
         }
 
@@ -1127,10 +1082,10 @@ impl MenuBehavior {
             return;
         }
 
-        let amount = if button == 0 {
-            1
-        } else {
+        let amount = if whole_stack {
             slot.get_item(&guard).count
+        } else {
+            1
         };
 
         let dropped = slot.safe_take(&mut guard, amount, i32::MAX, player);
@@ -1139,7 +1094,7 @@ impl MenuBehavior {
         }
 
         // Ctrl+Q: Keep dropping while the slot has the same item type
-        if button == 1 {
+        if whole_stack {
             loop {
                 // Check may_pickup again for each iteration (Java does this via safeTake)
                 if !slot.may_pickup(&guard, player) {
@@ -1343,15 +1298,26 @@ impl Menu {
         self.kind.can_take_item_for_pick_all(carried, slot_index)
     }
 
-    /// Called when the menu is closed/removed. Returns the carried item to the
-    /// player, drains the input sections back to the player, then runs the
-    /// kind's extra cleanup.
+    /// Called when the menu is closed/removed. Hands the carried item and the
+    /// input sections back to the player, then runs the kind's extra cleanup.
+    ///
+    /// Mirrors vanilla `AbstractContainerMenu.removed` / `clearContainer`: the
+    /// items go back into the inventory only if the player is alive and still
+    /// connected, otherwise they are dropped into the world (see
+    /// [`Player::returns_menu_items_to_inventory`]).
     pub fn removed(&mut self, player: &Player) {
+        let return_to_inventory = player.returns_menu_items_to_inventory();
+
         let carried = mem::take(&mut self.behavior.carried);
         if !carried.is_empty() {
-            player.add_item_or_drop(carried);
+            if return_to_inventory {
+                player.add_item_or_drop(carried);
+            } else {
+                player.drop_item(carried, false, false);
+            }
         }
-        self.layout.return_drained_items(&self.behavior, player);
+        self.layout
+            .return_drained_items(&self.behavior, player, return_to_inventory);
 
         let Self { behavior, kind, .. } = self;
         kind.removed(behavior, player);
@@ -1398,56 +1364,57 @@ impl Menu {
     }
 
     /// Handles a click action in this menu.
-    /// Based on Java's `AbstractContainerMenu::clicked` and doClick.
     ///
-    /// `has_infinite_materials` should be true if the player is in creative mode.
+    /// Clicks are parsed and validated at the packet boundary via
+    /// [`Click::parse`], so every slot index here is already in range.
+    /// Based on Java's `AbstractContainerMenu::clicked` and `doClick`.
     ///
     /// TODO: Add `tryItemClickBehaviorOverride` for bundle item support.
-    pub fn clicked(
-        &mut self,
-        slot_num: i16,
-        button: i8,
-        click_type: ClickType,
-        has_infinite_materials: bool,
-        player: &Player,
-    ) {
-        if click_type == ClickType::QuickCraft {
+    pub fn clicked(&mut self, click: Click, player: &Player) {
+        let has_infinite_materials = player.game_mode() == GameType::Creative;
+        if let Click::QuickCraft(action) = click {
             self.behavior_mut()
-                .do_quick_craft(slot_num, button, has_infinite_materials, player);
+                .do_quick_craft(action, has_infinite_materials, player);
         } else {
             // Any non-quickcraft click resets quickcraft state if in progress
             if self.behavior().quickcraft_status != 0 {
                 self.behavior_mut().reset_quick_craft();
             }
-            match click_type {
-                ClickType::Pickup => {
-                    self.behavior_mut().do_pickup(slot_num, button, player);
+            match click {
+                Click::Pickup { slot, button } => {
+                    self.behavior_mut().do_pickup(slot, button, player);
                 }
-                ClickType::QuickMove => {
-                    self.do_quick_move(slot_num, player);
+                Click::DropCarried { button } => {
+                    self.behavior_mut().drop_carried(button, player);
                 }
-                ClickType::Swap => {
-                    self.do_swap(slot_num, button, player);
+                Click::QuickMove { slot } => {
+                    self.do_quick_move(slot, player);
                 }
-                ClickType::Clone => {
-                    self.behavior_mut()
-                        .do_clone(slot_num, has_infinite_materials);
+                Click::Swap { slot, with } => {
+                    self.do_swap(slot, with, player);
                 }
-                ClickType::Throw => {
-                    self.behavior_mut().do_throw(slot_num, button, player);
+                Click::Clone { slot } => {
+                    self.behavior_mut().do_clone(slot, has_infinite_materials);
                 }
-                ClickType::PickupAll => {
-                    self.do_pickup_all(slot_num, button, player);
+                Click::Throw { slot, whole_stack } => {
+                    self.behavior_mut().do_throw(slot, whole_stack, player);
                 }
-                ClickType::QuickCraft => unreachable!(),
+                Click::PickupAll { slot, direction } => {
+                    self.do_pickup_all(slot, direction, player);
+                }
+                Click::QuickCraft(_) => unreachable!(),
             }
         }
-        // Recompute recipe-driven slots after the click. Normal clicks carry the
-        // touched slot index; a QuickCraft (drag) distributes its items on the
-        // end phase with slot_num = -999, so recompute on any non-empty menu too
-        // — otherwise the result stays stale after a drag-place into a grid.
-        let should_recompute = (slot_num >= 0 && (slot_num as usize) < self.behavior().slots.len())
-            || (click_type == ClickType::QuickCraft && !self.behavior().slots.is_empty());
+        // Recompute recipe-driven slots after the click. Slot-carrying clicks
+        // are in range by construction; a QuickCraft (drag) distributes its
+        // items on the end phase without a slot, so recompute on any non-empty
+        // menu too — otherwise the result stays stale after a drag-place into
+        // a grid.
+        let should_recompute = match click {
+            Click::DropCarried { .. } => false,
+            Click::QuickCraft(_) => !self.behavior().slots.is_empty(),
+            _ => true,
+        };
         if should_recompute {
             let mut guard = self.behavior().lock_all_containers();
             self.slots_changed(&mut guard, player);
@@ -1456,17 +1423,7 @@ impl Menu {
 
     /// Handles quick move (shift-click).
     /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.QUICK_MOVE`.
-    fn do_quick_move(&mut self, slot_num: i16, player: &Player) {
-        if slot_num < 0 {
-            return;
-        }
-
-        let slot_index = slot_num as usize;
-        let slot_count = self.behavior().slots.len();
-        if slot_index >= slot_count {
-            return;
-        }
-
+    fn do_quick_move(&mut self, slot_index: usize, player: &Player) {
         let mut guard = self.behavior().lock_all_containers();
 
         // Check if slot allows pickup
@@ -1492,25 +1449,11 @@ impl Menu {
         }
     }
 
-    /// Handles swap (number keys to swap with hotbar).
-    /// button is the hotbar slot (0-8) or 40 for offhand.
+    /// Handles swap (number keys to swap with a hotbar slot, or the
+    /// swap-hands key for the offhand).
     ///
     /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.SWAP`.
-    fn do_swap(&mut self, slot_num: i16, button: i8, player: &Player) {
-        // Validate button is a valid hotbar slot (0-8) or offhand (40)
-        if !((0..9).contains(&button) || button == 40) {
-            return;
-        }
-
-        if slot_num < 0 {
-            return;
-        }
-
-        let slot_index = slot_num as usize;
-        if slot_index >= self.behavior().slots.len() {
-            return;
-        }
-
+    fn do_swap(&mut self, slot_index: usize, with: SwapTarget, player: &Player) {
         let mut guard = self.behavior().lock_all_containers();
 
         // Get the player inventory container ID from the player's inventory arc
@@ -1518,7 +1461,7 @@ impl Menu {
 
         let behavior = self.behavior();
         let target_slot = &behavior.slots[slot_index];
-        let inventory_slot = button as usize;
+        let inventory_slot = with.inventory_slot();
 
         // Get items from target slot (menu) and source (player inventory via guard)
         let target_item = target_slot.get_item(&guard).clone();
@@ -1601,16 +1544,7 @@ impl Menu {
     /// Handles pickup all (double-click).
     /// Collects matching items from all slots into the carried stack.
     /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.PICKUP_ALL`.
-    fn do_pickup_all(&mut self, slot_num: i16, button: i8, player: &Player) {
-        if slot_num < 0 {
-            return;
-        }
-
-        let slot_index = slot_num as usize;
-        if slot_index >= self.behavior().slots.len() {
-            return;
-        }
-
+    fn do_pickup_all(&mut self, slot_index: usize, direction: FillDirection, player: &Player) {
         let mut guard = self.behavior().lock_all_containers();
 
         let behavior = self.behavior();
@@ -1628,12 +1562,11 @@ impl Menu {
         let carried_item = behavior.carried.clone();
         let slot_count = behavior.slots.len();
 
-        // Determine iteration direction based on button
-        // Java uses button == 0 for forward, button == 1 for reverse
-        let (start, step): (i32, i32) = if button == 0 {
-            (0, 1)
-        } else {
-            (slot_count as i32 - 1, -1)
+        // Determine iteration direction (Java uses button == 0 for forward,
+        // button == 1 for reverse).
+        let (start, step): (i32, i32) = match direction {
+            FillDirection::Forward => (0, 1),
+            FillDirection::Backward => (slot_count as i32 - 1, -1),
         };
 
         // Two passes: first collect non-full stacks, then full stacks

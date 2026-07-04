@@ -9,7 +9,7 @@ use steel_registry::menu_type::MenuTypeRef;
 use steel_registry::vanilla_menu_types;
 
 use crate::inventory::{
-    MenuBuilder, SyncPlayerInv,
+    FillDirection, MenuBuilder, SyncPlayerInv,
     lock::ContainerRef,
     menu::{Menu, MenuBehavior, MenuKind},
 };
@@ -43,8 +43,8 @@ pub fn chest(
     let player = builder.player_inventory(&inventory);
 
     // Vanilla ChestMenu treats the player inventory as one block both ways.
-    builder.route(chest, [player.all], true);
-    builder.route(player.all, [chest], false);
+    builder.route(chest, [player.all], FillDirection::Backward);
+    builder.route(player.all, [chest], FillDirection::Forward);
 
     builder.build(ChestKind { container })
 }

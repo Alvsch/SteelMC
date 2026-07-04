@@ -18,7 +18,7 @@ use steel_utils::locks::SyncMutex;
 use crate::inventory::slots::slot::SyncResultContainer;
 use crate::inventory::slots::{CraftingHandler, ResultHandler};
 use crate::inventory::{
-    MenuBuilder, SyncPlayerInv,
+    FillDirection, MenuBuilder, SyncPlayerInv,
     container::Container,
     crafting::{CraftingContainer, ResultContainer},
     lock::{ContainerLockGuard, ContainerRef},
@@ -51,10 +51,10 @@ pub fn crafting(inventory: SyncPlayerInv, container_id: u8, block_pos: BlockPos)
     let player = builder.player_inventory(&inventory);
 
     // Vanilla CraftingMenu::quickMoveStack routing.
-    builder.route(result, [player.all], true);
-    builder.route(grid, [player.all], false);
-    builder.route(player.main, [grid, player.hotbar], false);
-    builder.route(player.hotbar, [grid, player.main], false);
+    builder.route(result, [player.all], FillDirection::Backward);
+    builder.route(grid, [player.all], FillDirection::Forward);
+    builder.route(player.main, [grid, player.hotbar], FillDirection::Forward);
+    builder.route(player.hotbar, [grid, player.main], FillDirection::Forward);
     builder.drain([grid]);
 
     builder.build(CraftingKind {

@@ -5,6 +5,7 @@
 
 pub mod anvil_menu;
 pub mod chest_menu;
+pub mod click;
 pub mod container;
 pub mod crafting;
 pub mod crafting_menu;
@@ -17,6 +18,7 @@ pub mod recipe_manager;
 pub mod simple_menu;
 pub mod slots;
 
+pub use click::{Click, DragKind, MouseButton, QuickCraft, SwapTarget};
 pub use lock::SyncPlayerInv;
 pub use menu::{Menu, MenuKind, MenuKindType};
-pub use menu_builder::{DataSlot, MenuBuilder, PlayerInventorySections, Section};
+pub use menu_builder::{DataSlot, FillDirection, MenuBuilder, PlayerInventorySections, Section};
