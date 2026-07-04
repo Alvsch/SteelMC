@@ -83,9 +83,9 @@ pub fn inventory_menu(inventory: SyncPlayerInv) -> Menu {
         handler,
         grid,
         armor,
-        inv: player.all,
-        main: player.main,
-        hotbar: player.hotbar,
+        inv: player.all(),
+        main: player.main(),
+        hotbar: player.hotbar(),
         offhand,
     })
 }

@@ -145,11 +145,29 @@ impl Section {
 #[derive(Clone, Copy, Debug)]
 pub struct PlayerInventorySections {
     /// All 36 player slots (main inventory followed by hotbar).
-    pub all: Section,
+    all: Section,
     /// The 27 main inventory slots.
-    pub main: Section,
+    main: Section,
     /// The 9 hotbar slots.
-    pub hotbar: Section,
+    hotbar: Section,
+}
+
+impl PlayerInventorySections {
+    /// All 36 player slots (main inventory followed by hotbar).
+    #[must_use]
+    pub const fn all(&self) -> Section {
+        self.all
+    }
+    /// The 27 main inventory slots.
+    #[must_use]
+    pub const fn main(&self) -> Section {
+        self.main
+    }
+    /// The 9 hotbar slots.
+    #[must_use]
+    pub const fn hotbar(&self) -> Section {
+        self.hotbar
+    }
 }
 
 /// A typed handle to a data slot (furnace progress, anvil level cost, …).

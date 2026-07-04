@@ -43,8 +43,8 @@ pub fn chest(
     let player = builder.player_inventory(&inventory);
 
     // Vanilla ChestMenu treats the player inventory as one block both ways.
-    builder.route(chest, [player.all], FillDirection::Backward);
-    builder.route(player.all, [chest], FillDirection::Forward);
+    builder.route(chest, [player.all()], FillDirection::Backward);
+    builder.route(player.all(), [chest], FillDirection::Forward);
 
     builder.build(ChestKind { container })
 }

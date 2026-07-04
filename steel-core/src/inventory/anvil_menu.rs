@@ -85,10 +85,14 @@ pub fn anvil(
 
     let level_cost_data_slot = builder.data_slot(0);
 
-    builder.route(result, [player.all], FillDirection::Backward);
-    builder.route(input, [player.all], FillDirection::Forward);
-    builder.route(player.hotbar, [input], FillDirection::Forward);
-    builder.route(player.main, [input, player.hotbar], FillDirection::Forward);
+    builder.route(result, [player.all()], FillDirection::Backward);
+    builder.route(input, [player.all()], FillDirection::Forward);
+    builder.route(player.hotbar(), [input], FillDirection::Forward);
+    builder.route(
+        player.main(),
+        [input, player.hotbar()],
+        FillDirection::Forward,
+    );
     builder.drain([input]);
 
     builder.build(AnvilKind {

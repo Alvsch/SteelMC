@@ -51,10 +51,18 @@ pub fn crafting(inventory: SyncPlayerInv, container_id: u8, block_pos: BlockPos)
     let player = builder.player_inventory(&inventory);
 
     // Vanilla CraftingMenu::quickMoveStack routing.
-    builder.route(result, [player.all], FillDirection::Backward);
-    builder.route(grid, [player.all], FillDirection::Forward);
-    builder.route(player.main, [grid, player.hotbar], FillDirection::Forward);
-    builder.route(player.hotbar, [grid, player.main], FillDirection::Forward);
+    builder.route(result, [player.all()], FillDirection::Backward);
+    builder.route(grid, [player.all()], FillDirection::Forward);
+    builder.route(
+        player.main(),
+        [grid, player.hotbar()],
+        FillDirection::Forward,
+    );
+    builder.route(
+        player.hotbar(),
+        [grid, player.main()],
+        FillDirection::Forward,
+    );
     builder.drain([grid]);
 
     builder.build(CraftingKind {
