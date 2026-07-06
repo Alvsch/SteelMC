@@ -18,9 +18,9 @@ use crate::{
         DataComponentType,
         vanilla_components::{
             ATTACK_RANGE, ATTRIBUTE_MODIFIERS, AttackRange, DAMAGE, DAMAGE_TYPE, ENCHANTMENTS,
-            EQUIPPABLE, Equippable, ItemAttributeModifiers, ItemEnchantments, MAX_DAMAGE,
-            MAX_STACK_SIZE, MINIMUM_ATTACK_CHARGE, PIERCING_WEAPON, PiercingWeapon, TOOL, Tool,
-            UNBREAKABLE, WEAPON, Weapon,
+            EQUIPPABLE, Equippable, ItemAttributeModifiers, ItemEnchantments, ItemLore, LORE,
+            MAX_DAMAGE, MAX_LORE_LINES, MAX_STACK_SIZE, MINIMUM_ATTACK_CHARGE, PIERCING_WEAPON,
+            PiercingWeapon, TOOL, Tool, UNBREAKABLE, WEAPON, Weapon,
         },
     },
     enchantment_effect::EnchantmentEffectComponent,
@@ -690,11 +690,41 @@ impl ItemStack {
         // Set as CUSTOM_NAME component
     }
 
-    /// Sets lore lines on this item.
-    pub fn set_lore(&mut self, _lore: &[&str], _mode: crate::loot_table::ListOperation) {
-        // TODO: Implement lore setting
-        // Parse lore strings as text components and set LORE component
-        // Apply mode (replace, append, insert, etc.)
+    /// Sets lore lines on this item, applying the list operation to any existing lore.
+    pub fn set_lore(&mut self, lore: &[&str], mode: crate::loot_table::ListOperation) {
+        use crate::loot_table::ListOperation;
+
+        let new_lines: Vec<text_components::TextComponent> = lore
+            .iter()
+            .map(|line| text_components::TextComponent::plain((*line).to_string()))
+            .collect();
+        let mut lines = self.lore().map(|l| l.lines.clone()).unwrap_or_default();
+
+        match mode {
+            ListOperation::ReplaceAll => lines = new_lines,
+            ListOperation::ReplaceSection { offset, size } => {
+                let offset = (offset.max(0) as usize).min(lines.len());
+                let size = size.map_or(new_lines.len(), |s| s.max(0) as usize);
+                let end = offset.saturating_add(size).min(lines.len());
+                lines.splice(offset..end, new_lines);
+            }
+            ListOperation::InsertBefore { offset } => {
+                let index = (offset.max(0) as usize).min(lines.len());
+                lines.splice(index..index, new_lines);
+            }
+            ListOperation::InsertAfter { offset } => {
+                let index = (offset.max(0) as usize).saturating_add(1).min(lines.len());
+                lines.splice(index..index, new_lines);
+            }
+            ListOperation::Append => lines.extend(new_lines),
+        }
+
+        lines.truncate(MAX_LORE_LINES);
+        if lines.is_empty() {
+            self.remove(LORE);
+        } else {
+            self.set(LORE, ItemLore::new(lines));
+        }
     }
 
     /// Sets container inventory contents.
@@ -824,6 +854,12 @@ impl ItemStack {
     pub fn set_custom_model_data(&mut self, _value: i32) {
         // TODO: Implement custom model data setting
         // Set CUSTOM_MODEL_DATA component
+    }
+
+    /// Returns the lore lines stored in the LORE component, if any.
+    #[must_use]
+    pub fn lore(&self) -> Option<&ItemLore> {
+        self.get(LORE)
     }
 
     pub fn components_equal(&self, other: &Self) -> bool {

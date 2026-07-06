@@ -15,7 +15,7 @@ pub use crate::equipment::{EquipmentSlot, EquipmentSlotGroup};
 pub use super::components::{
     AttackRange, DamageTypeComponent, Equippable, EquippableAllowedEntities,
     ItemAttributeModifierDisplay, ItemAttributeModifierEntry, ItemAttributeModifiers,
-    ItemEnchantments, PiercingWeapon, Tool, ToolRule, Weapon,
+    ItemEnchantments, ItemLore, MAX_LORE_LINES, PiercingWeapon, Tool, ToolRule, Weapon,
 };
 
 pub const MAX_STACK_SIZE: DataComponentType<i32> =
@@ -66,6 +66,9 @@ pub const ENCHANTMENT_GLINT_OVERRIDE: DataComponentType<bool> =
 pub const POTION_DURATION_SCALE: DataComponentType<f32> =
     DataComponentType::new(Identifier::vanilla_static("potion_duration_scale"));
 
+pub const LORE: DataComponentType<ItemLore> =
+    DataComponentType::new(Identifier::vanilla_static("lore"));
+
 // These components are registered but use placeholder serialization.
 // They use the Todo ComponentData variant.
 
@@ -83,8 +86,6 @@ pub const DAMAGE_TYPE: DataComponentType<DamageTypeComponent> =
 
 pub const ITEM_MODEL: DataComponentType<()> =
     DataComponentType::new(Identifier::vanilla_static("item_model"));
-
-pub const LORE: DataComponentType<()> = DataComponentType::new(Identifier::vanilla_static("lore"));
 
 pub const RARITY: DataComponentType<()> =
     DataComponentType::new(Identifier::vanilla_static("rarity"));
@@ -447,7 +448,7 @@ pub fn register_vanilla_data_components(registry: &mut DataComponentRegistry) {
     // 10: item_model
     register_stub!(registry, ITEM_MODEL.key.clone());
     // 11: lore
-    register_stub!(registry, LORE.key.clone());
+    registry.register(LORE, ComponentDataDiscriminant::Lore);
     // 12: rarity
     register_stub!(registry, RARITY.key.clone());
     // 13: enchantments
