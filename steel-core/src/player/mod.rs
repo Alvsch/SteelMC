@@ -584,6 +584,7 @@ impl Player {
 
         self.tick_living_state();
 
+        self.tick_open_menu();
         self.broadcast_inventory_changes();
         self.update_pose();
 

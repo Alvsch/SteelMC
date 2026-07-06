@@ -42,7 +42,7 @@ use enum_dispatch::enum_dispatch;
 use crate::inventory::{
     anvil_menu::AnvilKind,
     chest_menu::ChestKind,
-    click::{Click, DragKind, MouseButton, QuickCraft, SwapTarget},
+    click::{Click, ClickOutcome, DragKind, MouseButton, QuickCraft, SwapTarget},
     crafting_menu::CraftingKind,
     inventory_menu::InventoryKind,
     menu_builder::{FillDirection, MenuInstanceId, MenuLayout},
@@ -1157,6 +1157,43 @@ pub trait MenuKind: Send + Sync {
     /// virtual result container.
     fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {}
 
+    /// Called after the menu is opened and its initial contents have been built,
+    /// but before they're sent to the client — so anything populated here appears
+    /// in the first render. Use for dynamic population, animations, or a sound.
+    /// Bukkit's `InventoryOpenEvent`.
+    fn on_open(
+        &mut self,
+        _behavior: &mut MenuBehavior,
+        _guard: &mut ContainerLockGuard,
+        _player: &Player,
+    ) {
+    }
+
+    /// Called once per server tick while the menu is open, right before changes
+    /// are synced to the client. Use for live/animated menus (timers, updating
+    /// icons). Keep it cheap — it runs every tick for every viewer.
+    fn on_tick(
+        &mut self,
+        _behavior: &mut MenuBehavior,
+        _guard: &mut ContainerLockGuard,
+        _player: &Player,
+    ) {
+    }
+
+    /// Called for every non-drag click before the default handling. Return
+    /// [`ClickOutcome::Consume`] to treat the slot as a button and skip the
+    /// default pickup/swap/move behavior, or [`ClickOutcome::Fallthrough`] to
+    /// let the menu handle it normally. The clicked slot lives inside `click`.
+    fn on_slot_clicked(
+        &mut self,
+        _behavior: &mut MenuBehavior,
+        _guard: &mut ContainerLockGuard,
+        _click: Click,
+        _player: &Player,
+    ) -> ClickOutcome {
+        ClickOutcome::Fallthrough
+    }
+
     /// Returns true if this menu is still valid for the player (backing block
     /// still present, player still in range).
     fn still_valid(&self, _behavior: &MenuBehavior, _player: &Player) -> bool {
@@ -1232,6 +1269,34 @@ impl MenuKind for Box<dyn MenuKind> {
         player: &Player,
     ) -> Option<ItemStack> {
         (**self).quick_move(behavior, guard, slot_index, player)
+    }
+
+    fn on_open(
+        &mut self,
+        behavior: &mut MenuBehavior,
+        guard: &mut ContainerLockGuard,
+        player: &Player,
+    ) {
+        (**self).on_open(behavior, guard, player);
+    }
+
+    fn on_tick(
+        &mut self,
+        behavior: &mut MenuBehavior,
+        guard: &mut ContainerLockGuard,
+        player: &Player,
+    ) {
+        (**self).on_tick(behavior, guard, player);
+    }
+
+    fn on_slot_clicked(
+        &mut self,
+        behavior: &mut MenuBehavior,
+        guard: &mut ContainerLockGuard,
+        click: Click,
+        player: &Player,
+    ) -> ClickOutcome {
+        (**self).on_slot_clicked(behavior, guard, click, player)
     }
 }
 
@@ -1340,6 +1405,21 @@ impl Menu {
         kind.slots_changed(behavior, guard, player);
     }
 
+    /// Runs the kind's `on_open` hook. Called after the menu's contents are
+    /// built but before they are sent to the client.
+    pub fn on_open(&mut self, player: &Player) {
+        let mut guard = self.behavior().lock_all_containers();
+        let Self { behavior, kind, .. } = self;
+        kind.on_open(behavior, &mut guard, player);
+    }
+
+    /// Runs the kind's `on_tick` hook. Called once per server tick while open.
+    pub fn on_tick(&mut self, player: &Player) {
+        let mut guard = self.behavior().lock_all_containers();
+        let Self { behavior, kind, .. } = self;
+        kind.on_tick(behavior, &mut guard, player);
+    }
+
     /// Handles shift-click (quick move) for a slot: the kind's override if it
     /// provides one, otherwise the declarative route table.
     ///
@@ -1380,29 +1460,41 @@ impl Menu {
             if self.behavior().quickcraft_status != 0 {
                 self.behavior_mut().reset_quick_craft();
             }
-            match click {
-                Click::Pickup { slot, button } => {
-                    self.behavior_mut().do_pickup(slot, button, player);
+
+            // Menu-defined click hook (buttons). If the menu consumes the click,
+            // skip the default pickup/swap/move handling. The guard is dropped
+            // before the default arms below, which re-lock the same containers.
+            let outcome = {
+                let mut guard = self.behavior().lock_all_containers();
+                let Self { behavior, kind, .. } = self;
+                kind.on_slot_clicked(behavior, &mut guard, click, player)
+            };
+
+            if outcome == ClickOutcome::Fallthrough {
+                match click {
+                    Click::Pickup { slot, button } => {
+                        self.behavior_mut().do_pickup(slot, button, player);
+                    }
+                    Click::DropCarried { button } => {
+                        self.behavior_mut().drop_carried(button, player);
+                    }
+                    Click::QuickMove { slot } => {
+                        self.do_quick_move(slot, player);
+                    }
+                    Click::Swap { slot, with } => {
+                        self.do_swap(slot, with, player);
+                    }
+                    Click::Clone { slot } => {
+                        self.behavior_mut().do_clone(slot, has_infinite_materials);
+                    }
+                    Click::Throw { slot, whole_stack } => {
+                        self.behavior_mut().do_throw(slot, whole_stack, player);
+                    }
+                    Click::PickupAll { slot, direction } => {
+                        self.do_pickup_all(slot, direction, player);
+                    }
+                    Click::QuickCraft(_) => unreachable!(),
                 }
-                Click::DropCarried { button } => {
-                    self.behavior_mut().drop_carried(button, player);
-                }
-                Click::QuickMove { slot } => {
-                    self.do_quick_move(slot, player);
-                }
-                Click::Swap { slot, with } => {
-                    self.do_swap(slot, with, player);
-                }
-                Click::Clone { slot } => {
-                    self.behavior_mut().do_clone(slot, has_infinite_materials);
-                }
-                Click::Throw { slot, whole_stack } => {
-                    self.behavior_mut().do_throw(slot, whole_stack, player);
-                }
-                Click::PickupAll { slot, direction } => {
-                    self.do_pickup_all(slot, direction, player);
-                }
-                Click::QuickCraft(_) => unreachable!(),
             }
         }
         // Recompute recipe-driven slots after the click. Slot-carrying clicks

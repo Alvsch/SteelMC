@@ -17,6 +17,12 @@ impl SimpleContainer {
             items: vec![ItemStack::empty(); size],
         }
     }
+
+    /// Creates a Simple Container with already initialized items
+    #[must_use]
+    pub const fn from_items(items: Vec<ItemStack>) -> Self {
+        Self { items }
+    }
 }
 
 impl Container for SimpleContainer {

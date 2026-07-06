@@ -85,6 +85,17 @@ pub enum MouseButton {
     Right,
 }
 
+/// What a menu's [`on_slot_clicked`](crate::inventory::menu::MenuKind::on_slot_clicked)
+/// hook decided about a click.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickOutcome {
+    /// The menu handled the click itself; skip the default pickup/swap/move
+    /// behavior. This is the "button" case — Bukkit's `event.setCancelled(true)`.
+    Consume,
+    /// The menu did not handle the click; run the default behavior.
+    Fallthrough,
+}
+
 /// The player-inventory slot a [`Click::Swap`] exchanges with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SwapTarget {

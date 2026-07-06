@@ -988,6 +988,10 @@ impl Player {
             title: title.into(),
         });
 
+        // Fire on_open before the full sync so anything the menu populates here
+        // is included in the first render sent below.
+        menu.on_open(self);
+
         menu.behavior_mut()
             .send_all_data_to_remote(&self.connection);
 
@@ -1029,6 +1033,17 @@ impl Player {
     #[must_use]
     pub fn has_container_open(&self) -> bool {
         self.open_menu.lock().is_some()
+    }
+
+    /// Runs the open menu's per-tick hook, if an external menu is open.
+    ///
+    /// Scoped to the opened menu; the base inventory menu is not ticked. Called
+    /// once per player tick, before syncing inventory changes to the client.
+    pub fn tick_open_menu(&self) {
+        let mut open_menu = self.open_menu.lock();
+        if let Some(ref mut menu) = *open_menu {
+            menu.on_tick(self);
+        }
     }
 
     /// Broadcasts inventory changes to the client (incremental sync).
