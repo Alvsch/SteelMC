@@ -5,7 +5,7 @@
 //! components use the `Other` variant with opaque bytes.
 use super::components::{
     AttackRange, DamageTypeComponent, Equippable, ItemAttributeModifiers, ItemEnchantments,
-    PiercingWeapon, Repairable, Tool, Weapon,
+    ItemLore, PiercingWeapon, Repairable, Tool, Weapon,
 };
 use text_components::TextComponent;
 
@@ -28,6 +28,7 @@ pub enum ComponentDataDiscriminant {
     AttributeModifiers,
     Enchantments,
     Repairable,
+    Lore,
     TextComponent,
     Todo,
     Other,
@@ -90,6 +91,8 @@ pub enum ComponentData {
     Enchantments(ItemEnchantments),
     /// minecraft:repairable
     Repairable(Repairable),
+    /// minecraft:lore
+    Lore(ItemLore),
     /// TextComponent component (e.g., CustomName, ItemName)
     TextComponent(Box<TextComponent>),
 
@@ -135,6 +138,7 @@ impl ComponentData {
             Self::AttributeModifiers(_) => ComponentDataDiscriminant::AttributeModifiers,
             Self::Enchantments(_) => ComponentDataDiscriminant::Enchantments,
             Self::Repairable(_) => ComponentDataDiscriminant::Repairable,
+            Self::Lore(_) => ComponentDataDiscriminant::Lore,
             Self::TextComponent(_) => ComponentDataDiscriminant::TextComponent,
             Self::Todo => ComponentDataDiscriminant::Todo,
             Self::Other(_) => ComponentDataDiscriminant::Other,
@@ -167,6 +171,7 @@ impl ComponentData {
             Self::AttributeModifiers(v) => v.hash_component(&mut hasher),
             Self::Enchantments(v) => v.hash_component(&mut hasher),
             Self::Repairable(v) => v.hash_component(&mut hasher),
+            Self::Lore(v) => v.hash_component(&mut hasher),
             Self::TextComponent(v) => v.hash_component(&mut hasher),
 
             // Stub/plugin types - hash as empty map for now
@@ -451,6 +456,26 @@ impl Component for ItemAttributeModifiers {
     fn from_data_ref(data: &ComponentData) -> Option<&Self> {
         match data {
             ComponentData::AttributeModifiers(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+impl Component for ItemLore {
+    fn into_data(self) -> ComponentData {
+        ComponentData::Lore(self)
+    }
+
+    fn from_data(data: ComponentData) -> Option<Self> {
+        match data {
+            ComponentData::Lore(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    fn from_data_ref(data: &ComponentData) -> Option<&Self> {
+        match data {
+            ComponentData::Lore(v) => Some(v),
             _ => None,
         }
     }
