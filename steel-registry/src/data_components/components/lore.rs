@@ -103,9 +103,22 @@ impl FromNbtTag for ItemLore {
 /// Parses a single lore line tag. `TextComponent::from_nbt` rejects empty
 /// strings, but an empty string is a valid blank lore line.
 fn text_from_tag(tag: &OwnedNbtTag) -> Option<TextComponent> {
+    if is_blank_line(tag) {
+        return Some(TextComponent::new());
+    }
+    TextComponent::from_nbt(tag)
+}
+
+/// A blank line is an empty string, or an empty string wrapped as `{"": ""}` —
+/// the marker compound vanilla's `ListTag` uses for mismatched elements in
+/// heterogeneous lists.
+fn is_blank_line(tag: &OwnedNbtTag) -> bool {
     match tag {
-        OwnedNbtTag::String(s) if s.to_str().is_empty() => Some(TextComponent::new()),
-        _ => TextComponent::from_nbt(tag),
+        OwnedNbtTag::String(s) => s.to_str().is_empty(),
+        OwnedNbtTag::Compound(c) if c.len() == 1 => {
+            matches!(c.get(""), Some(OwnedNbtTag::String(s)) if s.to_str().is_empty())
+        }
+        _ => false,
     }
 }
 
@@ -128,6 +141,31 @@ mod tests {
         let lore = ItemLore::new(vec![
             TextComponent::plain("first line"),
             TextComponent::plain("second line"),
+        ]);
+
+        let tag = lore.clone().to_nbt_tag();
+        let mut compound = simdnbt::owned::NbtCompound::new();
+        compound.insert("lore", tag);
+        let mut bytes = Vec::new();
+        simdnbt::owned::BaseNbt::new("", compound).write(&mut bytes);
+
+        let mut cursor = std::io::Cursor::new(bytes.as_slice());
+        let nbt = simdnbt::borrow::read(&mut cursor).unwrap();
+        let nbt = nbt.unwrap();
+        let parsed = ItemLore::from_nbt_tag(nbt.get("lore").unwrap()).unwrap();
+        assert_eq!(parsed, lore);
+    }
+
+    #[test]
+    fn nbt_round_trip_mixed_styled_and_blank_lines() {
+        use text_components::{Modifier, format::Color};
+
+        // A styled line forces the compound-list encoding, so the blank line
+        // is written as vanilla's `{"": ""}` wrapper.
+        let lore = ItemLore::new(vec![
+            TextComponent::plain("plain"),
+            TextComponent::new(),
+            TextComponent::plain("styled").color(Color::Red),
         ]);
 
         let tag = lore.clone().to_nbt_tag();
