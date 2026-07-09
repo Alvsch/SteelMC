@@ -7,6 +7,7 @@ mod equippable;
 mod lore;
 mod repairable;
 mod tool;
+mod use_cooldown;
 
 pub use attribute_modifiers::{
     ItemAttributeModifierDisplay, ItemAttributeModifierEntry, ItemAttributeModifiers,
@@ -17,3 +18,4 @@ pub use equippable::{Equippable, EquippableAllowedEntities};
 pub use lore::{ItemLore, MAX_LORE_LINES};
 pub use repairable::Repairable;
 pub use tool::{Tool, ToolRule};
+pub use use_cooldown::UseCooldown;

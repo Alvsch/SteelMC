@@ -45,6 +45,16 @@ pub trait Container {
         &self.items()[slot]
     }
 
+    /// Returns true if this container has a non-empty stack with the same item and components.
+    ///
+    /// Mirrors vanilla `Inventory.contains(ItemStack)`.
+    fn contains_stack(&self, search_stack: &ItemStack) -> bool {
+        (0..self.get_container_size()).any(|slot| {
+            let item = self.get_item(slot);
+            !item.is_empty() && ItemStack::is_same_item_same_components(item, search_stack)
+        })
+    }
+
     /// Returns a mutable reference to the item in the specified slot.
     fn get_item_mut(&mut self, slot: usize) -> &mut ItemStack {
         &mut self.items_mut()[slot]

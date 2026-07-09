@@ -23,22 +23,22 @@ pub struct ItemLore {
 
 impl ItemLore {
     #[must_use]
-    pub fn new(lines: Vec<TextComponent>) -> Self {
+    pub const fn new(lines: Vec<TextComponent>) -> Self {
         Self { lines }
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.lines.is_empty()
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.lines.len()
     }
 }
 
-/// Network format: VarInt count, then each line as an NBT-encoded text component.
+/// Network format: `VarInt` count, then each line as an NBT-encoded text component.
 impl WriteTo for ItemLore {
     fn write(&self, writer: &mut impl std::io::Write) -> std::io::Result<()> {
         VarInt(self.lines.len() as i32).write(writer)?;
@@ -150,9 +150,13 @@ mod tests {
         simdnbt::owned::BaseNbt::new("", compound).write(&mut bytes);
 
         let mut cursor = std::io::Cursor::new(bytes.as_slice());
-        let nbt = simdnbt::borrow::read(&mut cursor).unwrap();
-        let nbt = nbt.unwrap();
-        let parsed = ItemLore::from_nbt_tag(nbt.get("lore").unwrap()).unwrap();
+        let nbt = simdnbt::borrow::read(&mut cursor).expect("nbt should be readable");
+        let parsed = ItemLore::from_nbt_tag(
+            nbt.unwrap()
+                .get("lore")
+                .expect("lore tag should be present"),
+        )
+        .expect("lore tag should parse");
         assert_eq!(parsed, lore);
     }
 
@@ -175,9 +179,13 @@ mod tests {
         simdnbt::owned::BaseNbt::new("", compound).write(&mut bytes);
 
         let mut cursor = std::io::Cursor::new(bytes.as_slice());
-        let nbt = simdnbt::borrow::read(&mut cursor).unwrap();
-        let nbt = nbt.unwrap();
-        let parsed = ItemLore::from_nbt_tag(nbt.get("lore").unwrap()).unwrap();
+        let nbt = simdnbt::borrow::read(&mut cursor).expect("nbt should be readable");
+        let parsed = ItemLore::from_nbt_tag(
+            nbt.unwrap()
+                .get("lore")
+                .expect("lore tag should be present"),
+        )
+        .expect("lore tag should parse");
         assert_eq!(parsed, lore);
     }
 
@@ -190,9 +198,10 @@ mod tests {
         ]);
 
         let mut bytes = Vec::new();
-        lore.write(&mut bytes).unwrap();
+        lore.write(&mut bytes)
+            .expect("write to a Vec is infallible");
         let mut cursor = std::io::Cursor::new(bytes.as_slice());
-        let parsed = ItemLore::read(&mut cursor).unwrap();
+        let parsed = ItemLore::read(&mut cursor).expect("lore should read back");
         assert_eq!(parsed.len(), 3);
         assert_eq!(cursor.position() as usize, bytes.len());
     }
@@ -200,7 +209,9 @@ mod tests {
     #[test]
     fn network_read_rejects_oversized_count() {
         let mut bytes = Vec::new();
-        VarInt(MAX_LORE_LINES as i32 + 1).write(&mut bytes).unwrap();
+        VarInt(MAX_LORE_LINES as i32 + 1)
+            .write(&mut bytes)
+            .expect("write to a Vec is infallible");
         let mut cursor = std::io::Cursor::new(bytes.as_slice());
         assert!(ItemLore::read(&mut cursor).is_err());
     }

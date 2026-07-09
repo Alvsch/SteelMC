@@ -40,7 +40,7 @@ impl Component for Repairable {
     }
 
     fn from_data(data: ComponentData) -> Option<Self> {
-        log::info!("Repairable::from_data called data = {:?}", data);
+        log::info!("Repairable::from_data called data = {data:?}");
         match data {
             ComponentData::Repairable(v) => Some(v),
             _ => None,
@@ -48,7 +48,7 @@ impl Component for Repairable {
     }
 
     fn from_data_ref(data: &ComponentData) -> Option<&Self> {
-        log::info!("Repairable::from_data_ref called data = {:?}", data);
+        log::info!("Repairable::from_data_ref called data = {data:?}");
         match data {
             ComponentData::Repairable(v) => Some(v),
             _ => None,
@@ -80,7 +80,7 @@ impl FromNbtTag for Repairable {
             && !item.is_empty()
         {
             let item_str = item.to_str();
-            if item_str.starts_with("#") {
+            if item_str.starts_with('#') {
                 let ident = item_str.split_at(1).1.parse::<Identifier>().ok()?;
 
                 if REGISTRY
