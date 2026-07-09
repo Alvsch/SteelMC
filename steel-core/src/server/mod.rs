@@ -1357,7 +1357,7 @@ impl Server {
                 player,
                 target_domain,
                 target_world: Some(target_world),
-                restore_saved_location: true,
+                restore_saved_location: false, // FIXME: lets you switch domains to whatever world you want, but always resets your position to spawn
             });
         Ok(())
     }

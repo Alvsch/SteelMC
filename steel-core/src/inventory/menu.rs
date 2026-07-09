@@ -1220,6 +1220,10 @@ pub trait MenuKind: Send + Sync {
     }
 }
 
+/// A basic menu kind that does everything vanilla with no special behavior added
+pub struct BasicKind {}
+impl MenuKind for BasicKind {}
+
 /// Static dispatch over the vanilla menu kinds, with a boxed escape hatch for
 /// plugins. Mirrors [`SlotType`](crate::inventory::slots::slot::SlotType).
 #[enum_dispatch(MenuKind)]
@@ -1232,6 +1236,8 @@ pub enum MenuKindType {
     Crafting(CraftingKind),
     /// An anvil (two inputs + result + level-cost data slot).
     Anvil(AnvilKind),
+    /// All vanilla menu kind
+    Basic(BasicKind),
     /// Plugin-defined menu logic.
     Custom(Box<dyn MenuKind>),
 }

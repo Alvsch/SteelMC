@@ -76,6 +76,19 @@ pub enum Click {
     QuickCraft(QuickCraft),
 }
 
+impl Click {
+    /// Returns the slot index that was clicked
+    #[must_use]
+    pub const fn slot(&self) -> Option<usize> {
+        match self {
+            Click::Pickup { slot, button: _ }
+            | Click::QuickMove { slot }
+            | Click::Clone { slot } => Some(*slot),
+            _ => None,
+        }
+    }
+}
+
 /// A mouse button, decoded from the raw `button` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseButton {
