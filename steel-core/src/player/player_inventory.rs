@@ -21,12 +21,11 @@ use text_components::TextComponent;
 use crate::{
     entity::Entity,
     inventory::{
-        Click,
+        click::Click,
         container::Container,
         equipment::{EntityEquipment, EquipmentSlot},
-        inventory_menu::INVENTORY_MENU_CONTAINER_ID,
         lock::{ContainerId, ContainerLockGuard},
-        menu::Menu,
+        menu::{Menu, kinds::INVENTORY_MENU_CONTAINER_ID},
         slots::Slot,
     },
     player::{Player, connection::NetworkConnection},

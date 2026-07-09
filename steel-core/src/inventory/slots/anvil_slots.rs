@@ -7,13 +7,14 @@ use steel_registry::{
     REGISTRY, TaggedRegistryExt, blocks::block_state_ext::BlockStateExt, item_stack::ItemStack,
     level_events, vanilla_block_tags::BlockTag, vanilla_blocks,
 };
-use steel_utils::{BlockPos, types::UpdateFlags};
+use steel_utils::{BlockPos, locks::Shared, types::UpdateFlags};
 
 use crate::{
     behavior::blocks::AnvilBlock,
     inventory::{
+        container::{ResultContainer, SimpleContainer},
         lock::{ContainerId, ContainerLockGuard},
-        slots::{ResultHandler, SyncResultContainer, SyncSimpleContainer},
+        slots::ResultHandler,
     },
     player::Player,
     world::World,
@@ -22,8 +23,8 @@ use crate::{
 /// Handler for the result slot inside of an anvil, it handles the logic of subtracting the xp and breaking the anvil
 #[derive(Clone)]
 pub struct AnvilResultHandler {
-    input_container: SyncSimpleContainer,
-    result_container: SyncResultContainer,
+    input_container: Shared<SimpleContainer>,
+    result_container: Shared<ResultContainer>,
     repair_item_count: Arc<AtomicI32>,
     level_cost: Arc<AtomicI32>,
     block_pos: BlockPos,
@@ -33,8 +34,8 @@ pub struct AnvilResultHandler {
 impl AnvilResultHandler {
     /// Creates a new `AnvilResultHandler`
     pub const fn new(
-        input_container: SyncSimpleContainer,
-        result_container: SyncResultContainer,
+        input_container: Shared<SimpleContainer>,
+        result_container: Shared<ResultContainer>,
         repair_item_count: Arc<AtomicI32>,
         level_cost: Arc<AtomicI32>,
         block_pos: BlockPos,

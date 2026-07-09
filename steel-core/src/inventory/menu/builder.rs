@@ -35,23 +35,27 @@
 //! let menu = builder.build(AnvilKind { /* per-menu state */ });
 //! ```
 
-use std::mem;
-use std::ops::Range;
+use std::range::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef};
+use steel_utils::locks::{Shared, SyncMutex};
 
+use crate::inventory::container::SimpleContainer;
+use crate::inventory::menu::Menu;
+use crate::inventory::menu::behavior::MenuBehavior;
+use crate::inventory::menu::kind::MenuKindType;
+use crate::inventory::menu::layout::MenuLayout;
 use crate::inventory::{
-    SyncPlayerInv,
     lock::{ContainerLockGuard, ContainerRef},
-    menu::{Menu, MenuBehavior, MenuKindType},
     slots::{
-        MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot, ResultHandler, ResultSlot, Slot,
-        SlotType, add_standard_inventory_slots,
+        MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot, ResultHandler, ResultSlot, SlotType,
+        add_standard_inventory_slots,
     },
 };
 use crate::player::Player;
+use crate::player::player_inventory::PlayerInventory;
 
 /// Identity of one built menu.
 ///
@@ -92,7 +96,8 @@ impl Section {
     /// fabricated out-of-range section from reaching [`MenuBuilder::route`] /
     /// [`MenuBuilder::drain`] and panicking during click handling.
     #[must_use]
-    pub(crate) const fn new(menu: MenuInstanceId, range: Range<usize>) -> Self {
+    pub(crate) fn new(menu: MenuInstanceId, range: impl Into<Range<usize>>) -> Self {
+        let range = range.into();
         Self {
             menu,
             start: range.start,
@@ -132,8 +137,8 @@ impl Section {
 
     /// The section as a `Range`, suitable for indexing and iteration.
     #[must_use]
-    pub const fn range(self) -> Range<usize> {
-        self.start..self.end
+    pub fn range(self) -> Range<usize> {
+        Range::from(self.start..self.end)
     }
 }
 
@@ -234,10 +239,10 @@ pub enum FillDirection {
 
 /// A declarative shift-click route: take from `from`, then try each target
 /// range in order, stopping at the first that accepts anything.
-struct Route {
-    from: Range<usize>,
-    targets: Vec<Range<usize>>,
-    direction: FillDirection,
+pub(crate) struct Route {
+    pub(crate) from: Range<usize>,
+    pub(crate) targets: Vec<Range<usize>>,
+    pub(crate) direction: FillDirection,
 }
 
 /// Builds the slots, containers, data slots and routing for a menu.
@@ -287,20 +292,32 @@ impl MenuBuilder {
         self.section_from(start)
     }
 
-    /// Adds `count` predicate-restricted slots backed by `container` at indices
-    /// `0..count`.
+    /// Adds a restricted section to the `Menu`. The closures `may_place` and `may_pickup`
+    /// are shared using an Arc across all slots in the section.
     ///
-    /// `may_place` decides which items the slots accept (e.g. only damageable
-    /// items for a repair input). `may_pickup` optionally gates whether the
-    /// player can take the current item out (pass `None` to always allow it);
-    /// it receives the lock guard, the player, and the item being removed.
+    /// # Example
+    /// ```rust
+    /// use steel_registry::vanilla_items;
+    /// use steel_registry::item_stack::ItemStack;
+    /// use steel_registry::vanilla_menu_types;
+    /// use steel_core::inventory::prelude::*;
+    /// use steel_core::inventory::container::SimpleContainer;
+    /// use steel_core::inventory::menu::kinds::BasicKind;
+    /// use steel_core::player::Player;
+    /// use steel_utils::locks::SyncMutex;
+    /// use std::sync::Arc;
     ///
-    /// Both predicates are shared across every slot in the section via [`Arc`],
-    /// so the closures are stored once regardless of `count`. Pass bare
-    /// closures — they are boxed internally. The slots use the default max
-    /// stack size of 64.
+    /// let container_id = 0;
     ///
-    /// Returns a [`Section`] handle over the slots that were added.
+    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+    ///
+    /// let items = vec![ItemStack::new(&vanilla_items::ITEMS.gray_stained_glass_pane); 9];
+    ///
+    /// let container = SimpleContainer::from_items(items).into_shared();
+    /// let display_section = b.restricted_section(container.clone(), 9, |_item_stack| true, Some(|_: &ContainerLockGuard, _: &Player, _: &ItemStack| false));
+    ///
+    /// b.build(MenuKindType::Basic(BasicKind {}));
+    /// ```
     pub fn restricted_section(
         &mut self,
         container: impl Into<ContainerRef>,
@@ -327,11 +344,60 @@ impl MenuBuilder {
         self.section_from(start)
     }
 
+    /// Adds a display section containing the specified items. No items can be placed or taken out of these slots,
+    /// making it ideal for click menus. Clicks on these slots are always rejected, and can then properly be handled
+    /// in the `MenuKind::on_slot_clicked`.
+    ///
+    /// This is equivalent to a restricted section with both closures always returning false.
+    ///
+    /// # Example
+    /// ```rust
+    /// use steel_registry::vanilla_items;
+    /// use steel_registry::item_stack::ItemStack;
+    /// use steel_registry::vanilla_menu_types;
+    /// use steel_core::inventory::prelude::*;
+    /// use steel_core::inventory::menu::kinds::BasicKind;
+    ///
+    /// let container_id = 0;
+    ///
+    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);;
+    /// let items = vec![ItemStack::new(&vanilla_items::ITEMS.gray_stained_glass_pane); 9];
+    /// let display_section = b.display_section(items);
+    ///
+    /// b.build(MenuKindType::Basic(BasicKind {}));
+    /// ```
+    pub fn display_section(&mut self, items: Vec<ItemStack>) -> (Section, Shared<SimpleContainer>) {
+        let count = items.len();
+        let container = Arc::new(SyncMutex::new(SimpleContainer::from_items(items)));
+
+        let may_place: MayPlaceFn = Arc::new(|_| false);
+        let may_pickup: Option<MayPickupFn> = Some(Arc::new(
+            |_: &ContainerLockGuard, _: &Player, _: &ItemStack| false,
+        ));
+
+        let start = self.slots.len();
+        for index in 0..count {
+            self.slots.push(SlotType::Restricted(RestrictedSlot::new(
+                container.clone(),
+                index,
+                may_place.clone(),
+                may_pickup.clone(),
+                64,
+            )));
+        }
+
+        self.register_container(container.clone());
+        (self.section_from(start), container)
+    }
+
     /// Adds the player's 36 inventory slots (main inventory then hotbar).
     ///
     /// Returns handles to the combined range as well as the main inventory and
     /// hotbar sub-ranges, which routing usually needs separately.
-    pub fn player_inventory(&mut self, inventory: &SyncPlayerInv) -> PlayerInventorySections {
+    pub fn player_inventory(
+        &mut self,
+        inventory: &Shared<PlayerInventory>,
+    ) -> PlayerInventorySections {
         let start = self.slots.len();
         add_standard_inventory_slots(&mut self.slots, inventory);
         self.register_container(ContainerRef::PlayerInventory(inventory.clone()));
@@ -426,6 +492,34 @@ impl MenuBuilder {
     /// # Panics
     /// In debug builds, panics if any section was minted by a different
     /// [`MenuBuilder`].
+    ///
+    /// # Example
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use steel_registry::{item_stack::ItemStack, vanilla_items, vanilla_menu_types};
+    /// use steel_utils::locks::SyncMutex;
+    ///
+    /// use steel_core::inventory::prelude::*;
+    /// use steel_core::inventory::menu::kinds::BasicKind;
+    /// use steel_core::inventory::container::SimpleContainer;
+    ///
+    /// let container_id = 0;
+    ///
+    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X2, container_id);
+    ///
+    /// let items = vec![ItemStack::empty(); 9];
+    /// let upper_container = SimpleContainer::from_items(items).into_shared();
+    /// let upper_container_ref = ContainerRef::SimpleContainer(upper_container);
+    ///
+    /// let items = vec![ItemStack::new(&vanilla_items::ITEMS.barrier); 9];
+    ///
+    /// let restricted_section = b.display_section(items);
+    ///
+    /// let section = b.section(upper_container_ref, 9);
+    /// b.drain([section]); // only section gets drained when the menu is closed
+    /// b.build(MenuKindType::Basic(BasicKind {}));
+    /// ```
     pub fn drain(&mut self, sections: impl IntoIterator<Item = Section>) -> &mut Self {
         let ranges: Vec<_> = sections.into_iter().map(|s| self.owned(s)).collect();
         self.drain_sections.extend(ranges);
@@ -455,10 +549,11 @@ impl MenuBuilder {
     }
 
     /// Records a container to lock, ignoring it if an equal one is already present.
-    fn register_container(&mut self, container: ContainerRef) {
-        let id = container.container_id();
+    fn register_container(&mut self, container: impl Into<ContainerRef>) {
+        let container_ref = container.into();
+        let id = container_ref.container_id();
         if !self.container_refs.iter().any(|c| c.container_id() == id) {
-            self.container_refs.push(container);
+            self.container_refs.push(container_ref);
         }
     }
 
@@ -473,130 +568,7 @@ impl MenuBuilder {
     }
 
     /// Returns a section spanning `start..self.slots.len()`.
-    const fn section_from(&self, start: usize) -> Section {
+    fn section_from(&self, start: usize) -> Section {
         Section::new(self.instance, start..self.slots.len())
-    }
-}
-
-/// The static layout of a built menu: named section ranges and the shift-click
-/// route table. Held alongside [`MenuBehavior`] so a menu can drive a generic
-/// [`quick_move`](MenuLayout::quick_move) instead of writing one by hand.
-pub(crate) struct MenuLayout {
-    routes: Vec<Route>,
-    drain_sections: Vec<Range<usize>>,
-}
-
-impl MenuLayout {
-    /// Returns every item in the [`drain`](MenuBuilder::drain) sections to the
-    /// player, emptying those slots. Call from `removed` so input grids hand
-    /// their contents back on close instead of deleting them.
-    ///
-    /// When `return_to_inventory` is false (a dead or disconnected player) the
-    /// items are dropped into the world instead, mirroring vanilla's
-    /// `clearContainer` guard.
-    pub fn return_drained_items(
-        &self,
-        behavior: &MenuBehavior,
-        player: &Player,
-        return_to_inventory: bool,
-    ) {
-        if self.drain_sections.is_empty() {
-            return;
-        }
-
-        let mut guard = behavior.lock_all_containers();
-        for range in &self.drain_sections {
-            for slot_index in range.clone() {
-                let item = mem::take(behavior.slots[slot_index].get_item_mut(&mut guard));
-                if item.is_empty() {
-                    continue;
-                }
-                if return_to_inventory {
-                    player.add_item_or_drop_with_guard(&mut guard, item);
-                } else {
-                    player.drop_item(item, false, false);
-                }
-            }
-        }
-    }
-
-    /// Performs a generic shift-click for `slot_index` using the route table.
-    ///
-    /// This reproduces the hand-written `quick_move_stack` shape: find the route
-    /// whose source contains the clicked slot, move the stack into the first
-    /// target that accepts it, write the remainder back, and — for fake result
-    /// slots — fire `on_take` (returning any crafting remainder to the player).
-    ///
-    /// Returns the item that was originally in the slot, or empty if nothing
-    /// moved, matching [`Menu::quick_move_stack`](crate::inventory::menu::Menu::quick_move_stack).
-    pub fn quick_move(
-        &self,
-        behavior: &MenuBehavior,
-        guard: &mut ContainerLockGuard,
-        slot_index: usize,
-        player: &Player,
-    ) -> ItemStack {
-        let Some(route) = self.routes.iter().find(|r| r.from.contains(&slot_index)) else {
-            return ItemStack::empty();
-        };
-
-        let clicked = behavior.slots[slot_index].get_item(guard).clone();
-        if clicked.is_empty() {
-            return ItemStack::empty();
-        }
-
-        // Reject stale pickups — e.g. a result slot whose recipe no longer
-        // matches the inputs. Normal slots always allow it.
-        if !behavior.slots[slot_index].may_pickup(guard, player) {
-            return ItemStack::empty();
-        }
-
-        let mut remaining = clicked.clone();
-        let moved = route.targets.iter().any(|target| {
-            behavior.move_item_stack_to(
-                guard,
-                &mut remaining,
-                target.start,
-                target.end,
-                route.direction,
-            )
-        });
-        if !moved {
-            return ItemStack::empty();
-        }
-
-        let slot = &behavior.slots[slot_index];
-        if remaining.is_empty() {
-            slot.set_by_player(guard, ItemStack::empty(), &clicked);
-        } else {
-            // Write the un-moved remainder back to the source. Fake/result slots
-            // don't store items (their contents are recomputed), so only touch
-            // real slots — otherwise the moved portion would be duplicated.
-            if !slot.is_fake() {
-                slot.set_item(guard, remaining.clone());
-            }
-            slot.set_changed(guard);
-        }
-
-        // Nothing actually left the slot (e.g. the target was full).
-        if remaining.count == clicked.count {
-            return ItemStack::empty();
-        }
-
-        // Result slots need their take callback to fire (recipe consumption,
-        // experience, etc.); the remainder is returned to the player.
-        if slot.is_fake() {
-            let taken = clicked.copy_with_count(clicked.count - remaining.count);
-            if let Some(leftover) = slot.on_take(guard, &taken, player) {
-                player.add_item_or_drop_with_guard(guard, leftover);
-            }
-            // Output that didn't fit in the inventory is dropped, matching
-            // vanilla's result-slot shift-click (`player.drop(stack, false)`).
-            if !remaining.is_empty() {
-                player.drop_item(remaining.clone(), false, true);
-            }
-        }
-
-        clicked
     }
 }

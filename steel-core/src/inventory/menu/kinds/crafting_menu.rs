@@ -8,23 +8,18 @@
 
 use std::sync::Arc;
 
+use crate::inventory::container::CraftingContainer;
+use crate::inventory::container::ResultContainer;
+use crate::inventory::prelude::*;
+use crate::inventory::slots::CraftingHandler;
+use crate::player::player_inventory::PlayerInventory;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_menu_types;
 use steel_utils::BlockPos;
-use steel_utils::locks::SyncMutex;
-
-use crate::inventory::slots::slot::SyncResultContainer;
-use crate::inventory::slots::{CraftingHandler, ResultHandler};
-use crate::inventory::{
-    FillDirection, MenuBuilder, SyncPlayerInv,
-    container::Container,
-    crafting::{CraftingContainer, ResultContainer},
-    lock::{ContainerLockGuard, ContainerRef},
-    menu::{Menu, MenuBehavior, MenuKind},
-};
-use crate::player::Player;
+use steel_utils::locks::IntoShared;
+use steel_utils::locks::Shared;
 
 /// Builds the crafting table menu with a 3x3 crafting grid.
 ///
@@ -35,10 +30,10 @@ use crate::player::Player;
 /// * `container_id` - The container ID for this menu (1-100)
 /// * `block_pos` - The position of the crafting table block
 #[must_use]
-pub fn crafting(inventory: SyncPlayerInv, container_id: u8, block_pos: BlockPos) -> Menu {
+pub fn crafting(inventory: Shared<PlayerInventory>, container_id: u8, block_pos: BlockPos) -> Menu {
     // Create the crafting containers
-    let crafting_container = Arc::new(SyncMutex::new(CraftingContainer::new(3, 3)));
-    let result_container: SyncResultContainer = Arc::new(SyncMutex::new(ResultContainer::new()));
+    let crafting_container = CraftingContainer::new(3, 3).into_shared();
+    let result_container = ResultContainer::new().into_shared();
 
     let handler = CraftingHandler::new(crafting_container.clone(), result_container.clone(), 3);
 
@@ -76,7 +71,7 @@ pub fn crafting(inventory: SyncPlayerInv, container_id: u8, block_pos: BlockPos)
 /// close), the table position (validity), and the recipe handler.
 pub struct CraftingKind {
     /// The crafting result container.
-    result_container: SyncResultContainer,
+    result_container: Shared<ResultContainer>,
     /// The position of the crafting table block.
     block_pos: BlockPos,
     handler: CraftingHandler,

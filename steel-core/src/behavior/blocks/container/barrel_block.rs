@@ -16,9 +16,9 @@ use crate::behavior::InventoryAccess;
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
 use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
-use crate::inventory::chest_menu::chest;
 use crate::inventory::container::calculate_redstone_signal_from_container;
 use crate::inventory::lock::ContainerRef;
+use crate::inventory::menu::kinds::chest;
 use crate::player::Player;
 use crate::world::World;
 

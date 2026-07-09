@@ -1,14 +1,13 @@
 use steel_registry::item_stack::ItemStack;
+use steel_utils::locks::Shared;
 
+use crate::inventory::container::{CraftingContainer, ResultContainer};
 use crate::{
     inventory::{
         container::Container,
         lock::{ContainerId, ContainerLockGuard},
         recipe_manager,
-        slots::{
-            result_handler::ResultHandler,
-            slot::{SyncCraftingContainer, SyncResultContainer},
-        },
+        slots::result_handler::ResultHandler,
     },
     player::Player,
 };
@@ -16,16 +15,16 @@ use crate::{
 /// A Recipe Handler for Crafting Recipes
 #[derive(Clone)]
 pub struct CraftingHandler {
-    crafting_container: SyncCraftingContainer,
-    result_container: SyncResultContainer,
+    crafting_container: Shared<CraftingContainer>,
+    result_container: Shared<ResultContainer>,
     grid_size: usize,
 }
 
 impl CraftingHandler {
     /// Creates a new Crafting Recipe Handler
     pub const fn new(
-        crafting_container: SyncCraftingContainer,
-        result_container: SyncResultContainer,
+        crafting_container: Shared<CraftingContainer>,
+        result_container: Shared<ResultContainer>,
         grid_size: usize,
     ) -> Self {
         Self {

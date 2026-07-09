@@ -10,26 +10,15 @@ use std::sync::Arc;
 
 use enum_dispatch::enum_dispatch;
 use steel_registry::item_stack::ItemStack;
-use steel_utils::locks::SyncMutex;
+use steel_utils::locks::Shared;
 
-use crate::inventory::SyncPlayerInv;
-use crate::inventory::crafting::{CraftingContainer, ResultContainer};
 use crate::inventory::lock::{ContainerId, ContainerLockGuard};
-use crate::inventory::simple_menu::SimpleContainer;
 use crate::inventory::slots::armor_slot::ArmorSlot;
 use crate::inventory::slots::normal_slot::NormalSlot;
 use crate::inventory::slots::restricted_slot::RestrictedSlot;
 use crate::inventory::slots::result_slot::ResultSlot;
 use crate::player::Player;
-
-/// A synchronized crafting container.
-pub type SyncCraftingContainer = Arc<SyncMutex<CraftingContainer>>;
-
-/// A synchronized result container.
-pub type SyncResultContainer = Arc<SyncMutex<ResultContainer>>;
-
-/// A synchronized simple container.
-pub type SyncSimpleContainer = Arc<SyncMutex<SimpleContainer>>;
+use crate::player::player_inventory::PlayerInventory;
 
 /// A slot is a view into a single position in a container.
 /// Slots require a `ContainerLockGuard` to access items, ensuring proper locking.
@@ -338,7 +327,7 @@ impl SlotType {
 /// # Arguments
 /// * `slots` - The slot vector to append to
 /// * `inventory` - The player's inventory
-pub fn add_hotbar_slots(slots: &mut Vec<SlotType>, inventory: &SyncPlayerInv) {
+pub fn add_hotbar_slots(slots: &mut Vec<SlotType>, inventory: &Shared<PlayerInventory>) {
     for i in 0..9 {
         slots.push(SlotType::Normal(NormalSlot::new(inventory.clone(), i)));
     }
@@ -352,7 +341,7 @@ pub fn add_hotbar_slots(slots: &mut Vec<SlotType>, inventory: &SyncPlayerInv) {
 /// # Arguments
 /// * `slots` - The slot vector to append to
 /// * `inventory` - The player's inventory
-pub fn add_inventory_slots(slots: &mut Vec<SlotType>, inventory: &SyncPlayerInv) {
+pub fn add_inventory_slots(slots: &mut Vec<SlotType>, inventory: &Shared<PlayerInventory>) {
     for i in 9..36 {
         slots.push(SlotType::Normal(NormalSlot::new(inventory.clone(), i)));
     }
@@ -370,7 +359,10 @@ pub fn add_inventory_slots(slots: &mut Vec<SlotType>, inventory: &SyncPlayerInv)
 /// # Arguments
 /// * `slots` - The slot vector to append to
 /// * `inventory` - The player's inventory
-pub fn add_standard_inventory_slots(slots: &mut Vec<SlotType>, inventory: &SyncPlayerInv) {
+pub fn add_standard_inventory_slots(
+    slots: &mut Vec<SlotType>,
+    inventory: &Shared<PlayerInventory>,
+) {
     add_inventory_slots(slots, inventory);
     add_hotbar_slots(slots, inventory);
 }

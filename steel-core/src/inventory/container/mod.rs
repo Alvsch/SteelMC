@@ -3,6 +3,14 @@
 //! Containers are the base abstraction for anything that can hold items,
 //! including player inventories, chests, barrels, furnaces, etc.
 
+mod crafting;
+mod result;
+mod simple;
+
+pub use crafting::CraftingContainer;
+pub use result::ResultContainer;
+pub use simple::SimpleContainer;
+
 use std::mem;
 use std::ptr;
 
@@ -239,7 +247,7 @@ pub trait Container {
 /// # Panics
 ///
 /// Panics if any index is out of bounds or if any two indices are equal.
-pub fn with_indices<const N: usize>(
+fn with_indices<const N: usize>(
     container: &mut (impl Container + ?Sized),
     indices: [usize; N],
 ) -> [&mut ItemStack; N] {

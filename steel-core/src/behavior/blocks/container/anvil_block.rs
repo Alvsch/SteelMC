@@ -11,7 +11,7 @@ use text_components::TextComponent;
 
 use crate::{
     behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess},
-    inventory::anvil_menu::anvil,
+    inventory::menu::kinds::anvil,
     player::Player,
     world::World,
 };

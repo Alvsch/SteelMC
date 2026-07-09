@@ -8,12 +8,8 @@
 use steel_registry::menu_type::MenuTypeRef;
 use steel_registry::vanilla_menu_types;
 
-use crate::inventory::{
-    FillDirection, MenuBuilder, SyncPlayerInv,
-    lock::ContainerRef,
-    menu::{Menu, MenuBehavior, MenuKind},
-};
-use crate::player::Player;
+use crate::inventory::prelude::*;
+use crate::player::player_inventory::PlayerInventory;
 
 /// Number of slots per row in a chest menu.
 pub const SLOTS_PER_ROW: usize = 9;
@@ -28,7 +24,7 @@ pub const SLOTS_PER_ROW: usize = 9;
 /// Panics if `rows` is 0 or greater than 6.
 #[must_use]
 pub fn chest(
-    inventory: SyncPlayerInv,
+    inventory: Shared<PlayerInventory>,
     container_id: u8,
     container: ContainerRef,
     rows: usize,

@@ -1,5 +1,3 @@
-//! A Simple Container
-
 use steel_registry::item_stack::ItemStack;
 
 use crate::inventory::container::Container;

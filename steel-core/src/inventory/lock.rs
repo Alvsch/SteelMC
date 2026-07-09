@@ -10,23 +10,17 @@ use rustc_hash::FxHashMap;
 use std::borrow::Borrow;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use steel_utils::locks::Shared;
 use steel_utils::locks::SyncMutex;
 
-use crate::inventory::simple_menu::SimpleContainer;
+use crate::inventory::container::CraftingContainer;
+use crate::inventory::container::ResultContainer;
+use crate::inventory::container::SimpleContainer;
 use crate::{
     block_entity::{BlockEntity, SharedBlockEntity},
-    inventory::{
-        container::Container,
-        crafting::{CraftingContainer, ResultContainer},
-    },
+    inventory::container::Container,
     player::player_inventory::PlayerInventory,
 };
-
-/// Thread-safe reference to a player inventory.
-pub type SyncPlayerInv = Arc<SyncMutex<PlayerInventory>>;
-
-/// Thread-safe reference to a generic container implementing the Container trait.
-pub type GenericContainer = Arc<SyncMutex<dyn Container + Send + Sync>>;
 
 /// A locked container guard that provides access to the underlying container.
 ///
@@ -90,26 +84,20 @@ impl DerefMut for LockedContainer {
 #[derive(Clone)]
 pub enum ContainerRef {
     /// Reference to a player inventory.
-    PlayerInventory(SyncPlayerInv),
+    PlayerInventory(Shared<PlayerInventory>),
     /// Reference to a crafting grid container.
-    CraftingContainer(Arc<SyncMutex<CraftingContainer>>),
+    CraftingContainer(Shared<CraftingContainer>),
     /// Reference to a crafting result container.
-    ResultContainer(Arc<SyncMutex<ResultContainer>>),
+    ResultContainer(Shared<ResultContainer>),
     /// Reference to a generic container.
-    Other(GenericContainer),
+    Other(Shared<dyn Container + Send + Sync>),
     /// Reference to a block entity that implements Container.
     ///
     /// Use [`ContainerRef::from_block_entity`] to create this variant,
     /// which validates that the block entity actually implements Container.
-    BlockEntity(SharedBlockEntity),
+    BlockEntity(Shared<dyn BlockEntity>),
     /// A Simple Container
-    SimpleContainer(Arc<SyncMutex<SimpleContainer>>),
-}
-
-impl From<SyncPlayerInv> for ContainerRef {
-    fn from(value: SyncPlayerInv) -> Self {
-        Self::PlayerInventory(value)
-    }
+    SimpleContainer(Shared<SimpleContainer>),
 }
 
 impl ContainerRef {
@@ -160,6 +148,42 @@ impl ContainerRef {
                 LockedContainer::SimpleContainer(SyncMutex::lock_arc(arc))
             }
         }
+    }
+}
+
+impl From<Shared<PlayerInventory>> for ContainerRef {
+    fn from(container: Shared<PlayerInventory>) -> Self {
+        Self::PlayerInventory(container)
+    }
+}
+
+impl From<Shared<CraftingContainer>> for ContainerRef {
+    fn from(container: Shared<CraftingContainer>) -> Self {
+        Self::CraftingContainer(container)
+    }
+}
+
+impl From<Shared<ResultContainer>> for ContainerRef {
+    fn from(container: Shared<ResultContainer>) -> Self {
+        Self::ResultContainer(container)
+    }
+}
+
+impl From<Shared<dyn Container + Send + Sync>> for ContainerRef {
+    fn from(container: Shared<dyn Container + Send + Sync>) -> Self {
+        Self::Other(container)
+    }
+}
+
+impl From<Shared<dyn BlockEntity>> for ContainerRef {
+    fn from(container: Shared<dyn BlockEntity>) -> Self {
+        Self::BlockEntity(container)
+    }
+}
+
+impl From<Shared<SimpleContainer>> for ContainerRef {
+    fn from(container: Shared<SimpleContainer>) -> Self {
+        Self::SimpleContainer(container)
     }
 }
 
@@ -393,8 +417,8 @@ impl ContainerId {
     }
 }
 
-impl From<&SyncPlayerInv> for ContainerId {
-    fn from(value: &SyncPlayerInv) -> Self {
+impl From<&Shared<PlayerInventory>> for ContainerId {
+    fn from(value: &Shared<PlayerInventory>) -> Self {
         Self::from_arc(value)
     }
 }

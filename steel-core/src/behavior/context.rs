@@ -6,11 +6,12 @@ use steel_registry::REGISTRY;
 use steel_registry::blocks::properties::Direction;
 use steel_registry::item_stack::ItemStack;
 use steel_utils::BlockPos;
+use steel_utils::locks::Shared;
 use steel_utils::types::InteractionHand;
 
 use crate::entity::Entity;
 use crate::fluid::FluidStateExt;
-use crate::inventory::lock::{ContainerLockGuard, ContainerRef, SyncPlayerInv};
+use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::player::Player;
 use crate::player::player_inventory::PlayerInventory;
 use crate::world::World;
@@ -178,13 +179,13 @@ impl BlockPlaceContext<'_> {
 /// methods to keep lock scopes short and avoid carrying an inventory guard
 /// through block behavior, world mutation, or menu opening.
 pub struct InventoryAccess {
-    inventory: SyncPlayerInv,
+    inventory: Shared<PlayerInventory>,
     hand: InteractionHand,
 }
 
 impl InventoryAccess {
     /// Creates a new `InventoryAccess` instance.
-    pub const fn new(inventory: SyncPlayerInv, hand: InteractionHand) -> Self {
+    pub const fn new(inventory: Shared<PlayerInventory>, hand: InteractionHand) -> Self {
         Self { inventory, hand }
     }
 
@@ -237,7 +238,7 @@ impl<'a> UseOnContext<'a> {
         hand: InteractionHand,
         hit_result: BlockHitResult,
         world: &'a Arc<World>,
-        inventory: SyncPlayerInv,
+        inventory: Shared<PlayerInventory>,
     ) -> Self {
         Self {
             player,
@@ -315,7 +316,7 @@ impl<'a> UseItemContext<'a> {
         player: &'a Player,
         hand: InteractionHand,
         world: &'a Arc<World>,
-        inventory: SyncPlayerInv,
+        inventory: Shared<PlayerInventory>,
     ) -> Self {
         Self {
             player,

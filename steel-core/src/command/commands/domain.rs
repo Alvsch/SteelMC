@@ -4,15 +4,12 @@ use std::borrow::ToOwned;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::inventory::prelude::*;
+
 use crate::command::arguments::domain::DomainArgument;
 use crate::command::commands::{CommandHandlerBuilder, CommandHandlerDyn, argument};
 use crate::command::context::CommandContext;
 use crate::command::error::CommandError;
-use crate::inventory::FillDirection::{self};
-use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
-use crate::inventory::menu::MenuBehavior;
-use crate::inventory::simple_menu::SimpleContainer;
-use crate::inventory::{Click, ClickOutcome, MenuBuilder, MenuKind, MenuKindType, Section};
 use crate::player::Player;
 use crate::portal::WorldChangeRequest;
 use crate::server::Server;
@@ -116,10 +113,9 @@ pub fn command_handler() -> impl CommandHandlerDyn {
                 }
 
                 let content = Arc::new(SyncMutex::new(SimpleContainer::from_items(items)));
-                let content_ref = ContainerRef::SimpleContainer(content.clone());
 
                 let content_section = b.restricted_section(
-                    content_ref,
+                    content.clone(),
                     9 * 6,
                     |_| false,
                     Some(|_: &ContainerLockGuard, _: &Player, _: &ItemStack| false),
@@ -187,21 +183,15 @@ impl MenuKind for DomainMenuKind {
         click: Click,
         player: &Player,
     ) -> ClickOutcome {
-        #[expect(clippy::manual_let_else, reason = "just doesnt look good")]
-        let index = match click {
-            Click::Pickup { slot, button: _ }
-            | Click::QuickMove { slot }
-            | Click::Clone { slot } => slot,
-            _ => {
-                return ClickOutcome::Fallthrough;
-            }
+        let Some(slot) = click.slot() else {
+            return ClickOutcome::Fallthrough;
         };
 
-        if !self.restricted_section.contains(index) {
+        if !self.restricted_section.contains(slot) {
             return ClickOutcome::Fallthrough;
         }
 
-        let Some((_, world)) = self.map.get_key_value(&index) else {
+        let Some((_, world)) = self.map.get_key_value(&slot) else {
             return ClickOutcome::Consume;
         };
 

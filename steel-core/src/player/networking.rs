@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info_span;
 
 use crate::command::sender::CommandSender;
-use crate::inventory::MenuKindType;
+use crate::inventory::menu::MenuKindType;
 use crate::player::Player;
 use crate::player::connection::NetworkConnection;
 use crate::server::Server;

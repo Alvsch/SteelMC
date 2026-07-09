@@ -3,19 +3,19 @@ use std::sync::Arc;
 use steel_registry::{
     equipment::EquipmentSlot, item_stack::ItemStack, vanilla_enchantments::BINDING_CURSE,
 };
+use steel_utils::locks::Shared;
 
 use crate::{
     inventory::{
-        SyncPlayerInv,
         lock::{ContainerId, ContainerLockGuard, ContainerRef},
         slots::slot::Slot,
     },
-    player::Player,
+    player::{Player, player_inventory::PlayerInventory},
 };
 
 /// An armor slot that only accepts items equippable in the corresponding slot.
 pub struct ArmorSlot {
-    container: SyncPlayerInv,
+    container: Shared<PlayerInventory>,
     index: usize,
     /// The equipment slot this armor slot accepts.
     slot: EquipmentSlot,
@@ -23,7 +23,11 @@ pub struct ArmorSlot {
 
 impl ArmorSlot {
     /// Creates a new armor slot.
-    pub const fn new(container: SyncPlayerInv, index: usize, slot: EquipmentSlot) -> Self {
+    pub const fn new(
+        container: Shared<PlayerInventory>,
+        index: usize,
+        slot: EquipmentSlot,
+    ) -> Self {
         Self {
             container,
             index,

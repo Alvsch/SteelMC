@@ -79,7 +79,7 @@ use steel_registry::{
     level_events, sound_events, vanilla_attributes, vanilla_damage_type_tags, vanilla_entities,
     vanilla_particle_types,
 };
-use steel_utils::entity_events::EntityStatus;
+use steel_utils::{entity_events::EntityStatus, locks::Shared};
 use uuid::Uuid;
 
 use arc_swap::ArcSwap;
@@ -90,8 +90,6 @@ use text_components::resolving::TextResolutor;
 use text_components::translation::TranslatedMessage;
 use text_components::{content::Resolvable, custom::CustomData};
 
-use crate::chunk::chunk_request::{ChunkRequestHandle, ChunkRequestState};
-use crate::config::RuntimeConfig;
 use crate::enchantment_helper;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
@@ -100,7 +98,7 @@ use crate::entity::{
     RemovalReason, SharedEntity, equipment_items_to_packet_items, start_riding_entities,
 };
 use crate::fluid::get_fluid_state;
-use crate::inventory::{SyncPlayerInv, equipment::EquipmentSlot};
+use crate::inventory::equipment::EquipmentSlot;
 use crate::level_data::RespawnData;
 use crate::physics::MoveResult;
 use crate::player::experience::Experience;
@@ -111,6 +109,11 @@ use crate::server::{
     jobs::{JobPoll, ServerJob, ServerJobContext},
 };
 use crate::world::player_spawn_finder::{PlayerSpawnSearch, PlayerSpawnSearchPoll};
+use crate::{
+    chunk::chunk_request::{ChunkRequestHandle, ChunkRequestState},
+    inventory::menu::Menu,
+};
+use crate::{config::RuntimeConfig, inventory::menu::kinds::inventory_menu};
 use steel_registry::vanilla_damage_types;
 
 use steel_protocol::packets::{
@@ -121,7 +124,7 @@ use steel_registry::item_stack::ItemStack;
 
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, Identifier};
 
-use crate::inventory::{Menu, container::Container, inventory_menu::inventory_menu};
+use crate::inventory::container::Container;
 
 /// Re-export `PreviousMessage` as `PreviousMessageEntry` for use in `signature_cache`
 pub type PreviousMessageEntry = PreviousMessage;
@@ -237,7 +240,7 @@ pub struct Player {
     game_modes: SyncMutex<PlayerGameModeState>,
 
     /// The player's inventory container (shared with `inventory_menu`).
-    pub inventory: SyncPlayerInv,
+    pub inventory: Shared<PlayerInventory>,
 
     /// Last main-hand stack used for vanilla attack-strength reset checks.
     last_item_in_main_hand: SyncMutex<ItemStack>,

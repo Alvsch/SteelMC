@@ -11,21 +11,13 @@
 use std::sync::Arc;
 
 use steel_registry::item_stack::ItemStack;
-use steel_utils::locks::SyncMutex;
+use steel_utils::locks::{IntoShared, Shared};
 
-use crate::inventory::{
-    FillDirection, MenuBuilder, Section, SyncPlayerInv,
-    container::Container,
-    crafting::{CraftingContainer, ResultContainer},
-    equipment::{EquipmentSlot, EquipmentSlotType},
-    lock::{ContainerLockGuard, ContainerRef},
-    menu::{Menu, MenuBehavior, MenuKind},
-    slots::{
-        ArmorSlot, CraftingHandler, NormalSlot, ResultHandler,
-        slot::{Slot, SlotType, SyncResultContainer},
-    },
-};
+use crate::inventory::container::{CraftingContainer, ResultContainer};
+use crate::inventory::prelude::*;
+use crate::inventory::slots::{ArmorSlot, CraftingHandler, NormalSlot, Slot as _};
 use crate::player::Player;
+use crate::player::player_inventory::PlayerInventory;
 
 /// Container ID for the player inventory (always 0).
 pub const INVENTORY_MENU_CONTAINER_ID: u8 = 0;
@@ -38,10 +30,10 @@ pub const INVENTORY_MENU_CONTAINER_ID: u8 = 0;
 /// - Slots 36-39: Armor (feet, legs, chest, head)
 /// - Slot 40: Offhand
 #[must_use]
-pub fn inventory_menu(inventory: SyncPlayerInv) -> Menu {
+pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
     // Create the crafting containers
-    let crafting_container = Arc::new(SyncMutex::new(CraftingContainer::new(2, 2)));
-    let result_container: SyncResultContainer = Arc::new(SyncMutex::new(ResultContainer::new()));
+    let crafting_container = CraftingContainer::new(2, 2).into_shared();
+    let result_container = ResultContainer::new().into_shared();
 
     let handler = CraftingHandler::new(crafting_container.clone(), result_container.clone(), 2);
 
@@ -94,7 +86,7 @@ pub fn inventory_menu(inventory: SyncPlayerInv) -> Menu {
 /// result container, and the section handles its custom shift-click needs.
 pub struct InventoryKind {
     /// The crafting result container.
-    result_container: SyncResultContainer,
+    result_container: Shared<ResultContainer>,
     handler: CraftingHandler,
     /// The 2x2 crafting grid (slots 1-4).
     grid: Section,

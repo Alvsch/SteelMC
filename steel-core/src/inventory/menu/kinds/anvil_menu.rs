@@ -14,61 +14,39 @@ use steel_registry::{
     item_stack::ItemStack,
     vanilla_items, vanilla_menu_types,
 };
-use steel_utils::{BlockPos, locks::SyncMutex};
+use steel_utils::{
+    BlockPos,
+    locks::{IntoShared, Shared, SyncMutex},
+};
 use text_components::TextComponent;
 
 use crate::{
     inventory::{
-        DataSlot, FillDirection, MenuBuilder, SyncPlayerInv,
-        container::Container,
-        crafting::ResultContainer,
-        lock::{ContainerId, ContainerLockGuard, ContainerRef},
-        menu::{Menu, MenuBehavior, MenuKind},
-        simple_menu::SimpleContainer,
-        slots::{AnvilResultHandler, SyncResultContainer},
+        container::{ResultContainer, SimpleContainer},
+        prelude::*,
+        slots::AnvilResultHandler,
     },
-    player::Player,
+    player::player_inventory::PlayerInventory,
     world::World,
 };
-
-/// Slot indices for the anvil menu.
-pub mod slots {
-    /// Slot index for the first input item (slot 0).
-    pub const FIRST_INPUT_SLOT: usize = 0;
-    /// Slot index for the second input item (slot 1).
-    pub const SECOND_INPUT_SLOT: usize = 1;
-    /// Slot index for the result (slot 2).
-    pub const RESULT_SLOT: usize = 2;
-    /// Start of main inventory (slot 3).
-    pub const INV_SLOT_START: usize = 3;
-    /// End of main inventory (slot 30, exclusive).
-    pub const INV_SLOT_END: usize = 30;
-    /// Start of hotbar (slot 30).
-    pub const HOTBAR_SLOT_START: usize = 30;
-    /// End of hotbar (slot 39, exclusive).
-    pub const HOTBAR_SLOT_END: usize = 39;
-    /// Total number of slots in the anvil menu.
-    pub const TOTAL_SLOTS: usize = 39;
-}
 
 /// Builds the anvil menu.
 #[must_use]
 pub fn anvil(
-    inventory: SyncPlayerInv,
+    inventory: Shared<PlayerInventory>,
     container_id: u8,
     pos: BlockPos,
     world: &Arc<World>,
 ) -> Menu {
-    let input_container = Arc::new(SyncMutex::new(SimpleContainer::new(2)));
-    let container_ref = ContainerRef::SimpleContainer(input_container.clone());
+    let input_container = SimpleContainer::new(2).into_shared();
     let repair_item_count = Arc::new(AtomicI32::new(0));
     let level_cost = Arc::new(AtomicI32::new(0));
 
-    let result_container: SyncResultContainer = Arc::new(SyncMutex::new(ResultContainer::new()));
+    let result_container = ResultContainer::new().into_shared();
 
     let mut builder = MenuBuilder::new(&vanilla_menu_types::ANVIL, container_id);
 
-    let input = builder.section(container_ref, 2);
+    let input = builder.section(input_container.clone(), 2);
     let result = builder.result_slot(
         Arc::new(AnvilResultHandler::new(
             input_container.clone(),
@@ -110,9 +88,9 @@ pub fn anvil(
 /// cost (shared with the result handler), and the current rename text.
 pub struct AnvilKind {
     /// The input container (two slots).
-    input_container: Arc<SyncMutex<SimpleContainer>>,
+    input_container: Shared<SimpleContainer>,
     /// The result container (single virtual slot).
-    result_container: SyncResultContainer,
+    result_container: Shared<ResultContainer>,
     /// The position of the anvil block.
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,

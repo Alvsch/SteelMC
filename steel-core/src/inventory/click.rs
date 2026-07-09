@@ -11,8 +11,9 @@
 //! instead of re-validating raw integers.
 
 use steel_protocol::packets::game::ClickType;
+use steel_registry::item_stack::ItemStack;
 
-use crate::inventory::FillDirection;
+use crate::inventory::menu::FillDirection;
 
 /// Raw slot value sent when the player clicks outside the window.
 pub const SLOT_CLICKED_OUTSIDE: i16 = -999;
@@ -164,16 +165,40 @@ pub enum DragKind {
 }
 
 impl DragKind {
-    /// The legacy `quickcraft_type` value this kind stores in the menu's drag
-    /// state (see the `QUICKCRAFT_TYPE_*` constants in
-    /// [`menu`](crate::inventory::menu)).
-    pub(crate) const fn quickcraft_type(self) -> i32 {
+    /// How many items this drag places into a single slot when distributing
+    /// `carried` over `slot_count` slots.
+    #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "stack counts are far below f32 precision limits; matches vanilla's int division"
+    )]
+    pub fn place_count(self, slot_count: usize, carried: &ItemStack) -> i32 {
         match self {
-            Self::Left => 0,
+            Self::Left => (carried.count as f32 / slot_count as f32).floor() as i32,
             Self::Right => 1,
-            Self::Clone => 2,
+            Self::Clone => carried.max_stack_size(),
         }
     }
+}
+
+/// Checks if an item can be quick-placed into a slot.
+/// If `ignore_size` is true, doesn't check if the combined count would exceed max stack size.
+#[must_use]
+pub fn can_item_quick_replace(
+    slot_item: &ItemStack,
+    carried: &ItemStack,
+    ignore_size: bool,
+) -> bool {
+    let slot_is_empty = slot_item.is_empty();
+    if slot_is_empty {
+        return true;
+    }
+    if !ItemStack::is_same_item_same_components(carried, slot_item) {
+        return false;
+    }
+    let combined = slot_item.count + if ignore_size { 0 } else { carried.count };
+    combined <= carried.max_stack_size()
 }
 
 impl Click {

@@ -12,7 +12,7 @@ use text_components::TextComponent;
 use crate::behavior::InventoryAccess;
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
-use crate::inventory::crafting_menu::crafting;
+use crate::inventory::menu::kinds::crafting;
 use crate::player::Player;
 use crate::world::World;
 
