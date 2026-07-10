@@ -1,38 +1,27 @@
 //! A declarative builder for assembling [`MenuBehavior`]s.
 //!
-//! Concrete menus (chest, anvil, crafting, …) all repeat the same four chunks:
-//! build a `Vec<SlotType>` by hand, maintain a parallel list of `ContainerRef`s
-//! that must match exactly what the slots touch, hand-count slot index ranges in
-//! a `mod slots`, and write `quick_move_stack` as range arithmetic over those
-//! indices.
+//! ```rust
+//! use steel_registry::{vanilla_items, vanilla_menu_types};
+//! use steel_core::{inventory::menu::kinds::BasicKind, player::player_inventory::PlayerInventory};
 //!
-//! [`MenuBuilder`] collapses all of that into one place:
+//! use steel_core::inventory::prelude::*;
 //!
-//! - Slots are added in **sections**; each call hands back a [`Section`]
-//!   handle (a cheap `Copy` range) so you never hand-count indices again.
-//! - The set of containers to lock is **derived** from the sections, so it can
-//!   never drift out of sync with the slots.
-//! - [`data_slot`](MenuBuilder::data_slot) returns a typed [`DataSlot`] handle,
-//!   replacing "remember that data slot 0 is the level cost".
-//! - Shift-click behavior is described declaratively with
-//!   [`route`](MenuBuilder::route); the resulting route table drives a generic
-//!   quick-move (`MenuLayout::quick_move`) that does what every hand-written
-//!   `quick_move_stack` currently does.
+//! fn example(container_id: u8, inventory: Shared<PlayerInventory>) -> Menu {
+//!     let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
 //!
-//! ```ignore
-//! let mut builder = MenuBuilder::new(&vanilla_menu_types::ANVIL, container_id);
-//! let inputs = builder.section(input_container, 2);
-//! let result = builder.result_slot(anvil_handler, result_container);
-//! let player = builder.player_inventory(&inventory);
-//! let level_cost = builder.data_slot(0);
+//!     let items = vec![ItemStack::new(&vanilla_items::ITEMS.flint_and_steel); 9];
+//!     let container = SimpleContainer::from_items(items).into_shared();
 //!
-//! builder.route(result, [player.all], FillDirection::Backward);
-//! builder.route(inputs, [player.all], FillDirection::Forward);
-//! builder.route(player.main, [inputs, player.hotbar], FillDirection::Forward);
-//! builder.route(player.hotbar, [inputs, player.main], FillDirection::Forward);
-//! builder.drain([inputs]);
+//!     let section = builder.section(container, 9);
 //!
-//! let menu = builder.build(AnvilKind { /* per-menu state */ });
+//!     let player = builder.player_inventory(&inventory);
+//!     let level_cost = builder.data_slot(0);
+//!
+//!     builder.route(section, [player.all()], FillDirection::Backward);
+//!     builder.route(player.all(), [section], FillDirection::Forward);
+//!
+//!     builder.build(MenuKindType::Basic(BasicKind {}))
+//! }
 //! ```
 
 use std::range::Range;
@@ -59,15 +48,13 @@ use crate::player::player_inventory::PlayerInventory;
 
 /// Identity of one built menu.
 ///
-/// Stamped onto every [`Section`] and [`DataSlot`] a [`MenuBuilder`] mints, so
-/// a handle can never silently act on a different menu's slots: the consuming
-/// sites ([`MenuBuilder::route`], [`MenuBuilder::drain`], [`DataSlot::get`] /
-/// [`DataSlot::set`]) verify the stamp in debug builds.
+/// Given to every [`Section`] and [`DataSlot`] a [`MenuBuilder`] creates, so
+/// a handle can never act on a [`Menu`] it wasn't made for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MenuInstanceId(u64);
 
 impl MenuInstanceId {
-    /// Mints a process-unique id (one per menu built, not per click).
+    /// Creates a new unique `MenuInstanceId`
     fn next() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
@@ -76,80 +63,68 @@ impl MenuInstanceId {
 
 /// A handle to a contiguous range of slots added to a [`MenuBuilder`].
 ///
-/// Sections are `Copy` and carry only a `start..end` range plus the identity
-/// of the menu that minted them, so passing them around (e.g. into
-/// [`MenuBuilder::route`]) is free. Two sections covering the same range in
-/// different menus compare unequal.
+/// Sections contain the id of the [`Menu`] they were made for and can only be
+/// created by a builder. Two Sections cannot cover the same range for the same
+/// [`Menu`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Section {
+    #[cfg(debug_assertions)]
     menu: MenuInstanceId,
-    start: usize,
-    end: usize,
+    range: Range<usize>,
 }
 
 impl Section {
-    /// Creates a section over an explicit slot range, stamped with the menu it
-    /// belongs to.
-    ///
-    /// Crate-internal: sections are only meaningful as handles minted by a
-    /// [`MenuBuilder`] over its own slots. Restricting construction keeps a
-    /// fabricated out-of-range section from reaching [`MenuBuilder::route`] /
-    /// [`MenuBuilder::drain`] and panicking during click handling.
-    #[must_use]
     pub(crate) fn new(menu: MenuInstanceId, range: impl Into<Range<usize>>) -> Self {
-        let range = range.into();
         Self {
+            #[cfg(debug_assertions)]
             menu,
-            start: range.start,
-            end: range.end,
+            range: range.into(),
         }
     }
 
-    /// The index of the first slot in this section.
+    /// The start of the section.
     #[must_use]
     pub const fn start(self) -> usize {
-        self.start
+        self.range.start
     }
 
-    /// The index one past the last slot in this section.
+    /// The end of the section.
     #[must_use]
     pub const fn end(self) -> usize {
-        self.end
+        self.range.end
     }
 
-    /// The number of slots in this section.
+    /// The length of the section.
     #[must_use]
     pub const fn len(self) -> usize {
-        self.end - self.start
+        self.range.end - self.range.start
     }
 
-    /// Returns `true` if this section contains no slots.
+    /// Whether the section is empty (start == end).
     #[must_use]
     pub const fn is_empty(self) -> bool {
-        self.start == self.end
+        self.range.start == self.range.end
     }
 
-    /// Returns `true` if `slot_index` falls within this section.
+    /// Whether the section contains an index.
     #[must_use]
     pub const fn contains(self, slot_index: usize) -> bool {
-        slot_index >= self.start && slot_index < self.end
+        slot_index >= self.range.start && slot_index < self.range.end
     }
 
-    /// The section as a `Range`, suitable for indexing and iteration.
+    /// A copy of the internal range.
     #[must_use]
-    pub fn range(self) -> Range<usize> {
-        Range::from(self.start..self.end)
+    pub const fn range(self) -> Range<usize> {
+        self.range
     }
 }
 
-/// The sections produced by [`MenuBuilder::player_inventory`].
+/// The sections that cover the player's inventory.
 ///
-/// Vanilla shift-click routing treats the main inventory and the hotbar as
-/// separate targets (filling one before falling back to the other), so both are
-/// exposed alongside the combined [`all`](PlayerInventorySections::all) range.
+/// Exclusively produced by [`MenuBuilder::player_inventory`].
 #[derive(Clone, Copy, Debug)]
 pub struct PlayerInventorySections {
-    /// All 36 player slots (main inventory followed by hotbar).
+    /// All 36 player slots (main and hotbar).
     all: Section,
     /// The 27 main inventory slots.
     main: Section,
@@ -158,16 +133,18 @@ pub struct PlayerInventorySections {
 }
 
 impl PlayerInventorySections {
-    /// All 36 player slots (main inventory followed by hotbar).
+    /// All 36 player slots (main and hotbar).
     #[must_use]
     pub const fn all(&self) -> Section {
         self.all
     }
+
     /// The 27 main inventory slots.
     #[must_use]
     pub const fn main(&self) -> Section {
         self.main
     }
+
     /// The 9 hotbar slots.
     #[must_use]
     pub const fn hotbar(&self) -> Section {
@@ -175,12 +152,11 @@ impl PlayerInventorySections {
     }
 }
 
-/// A typed handle to a data slot (furnace progress, anvil level cost, …).
-///
-/// Obtained from [`MenuBuilder::data_slot`]; read and write it through the menu
-/// behavior instead of remembering a bare index.
+/// A data slot handle created by the [`MenuBuilder::data_slot`], to use for easy access
+/// instead of a bare index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DataSlot {
+    #[cfg(debug_assertions)]
     menu: MenuInstanceId,
     index: usize,
 }
@@ -193,6 +169,7 @@ impl DataSlot {
     /// the [`MenuBuilder`] that minted this handle.
     #[must_use]
     pub fn get(self, behavior: &MenuBehavior) -> i16 {
+        #[cfg(debug_assertions)]
         debug_assert_eq!(
             self.menu,
             behavior.instance(),
@@ -209,6 +186,7 @@ impl DataSlot {
     /// In debug builds, panics if `behavior` belongs to a different menu than
     /// the [`MenuBuilder`] that minted this handle.
     pub fn set(self, behavior: &mut MenuBehavior, value: i16) {
+        #[cfg(debug_assertions)]
         debug_assert_eq!(
             self.menu,
             behavior.instance(),
@@ -227,8 +205,7 @@ impl DataSlot {
 /// The direction in which a slot range is walked when distributing items.
 ///
 /// Vanilla fills backwards when moving into the player inventory so existing
-/// hotbar stacks top up first; the same enum steers double-click pickup-all
-/// collection order.
+/// hotbar stacks top up first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FillDirection {
     /// Walk from the first slot of the range to the last.
@@ -362,13 +339,13 @@ impl MenuBuilder {
     ///
     /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);;
     /// let items = vec![ItemStack::new(&vanilla_items::ITEMS.gray_stained_glass_pane); 9];
-    /// let display_section = b.display_section(items);
+    /// let container = SimpleContainer::from_items(items).into_shared();
+    /// let display_section = b.display_section(container, 9);
     ///
     /// b.build(MenuKindType::Basic(BasicKind {}));
     /// ```
-    pub fn display_section(&mut self, items: Vec<ItemStack>) -> (Section, Shared<SimpleContainer>) {
-        let count = items.len();
-        let container = Arc::new(SyncMutex::new(SimpleContainer::from_items(items)));
+    pub fn display_section(&mut self, container: impl Into<ContainerRef>, count: usize) -> Section {
+        let container = container.into();
 
         let may_place: MayPlaceFn = Arc::new(|_| false);
         let may_pickup: Option<MayPickupFn> = Some(Arc::new(
@@ -387,7 +364,7 @@ impl MenuBuilder {
         }
 
         self.register_container(container.clone());
-        (self.section_from(start), container)
+        self.section_from(start)
     }
 
     /// Adds the player's 36 inventory slots (main inventory then hotbar).
@@ -450,6 +427,7 @@ impl MenuBuilder {
         let index = self.data_slots.len();
         self.data_slots.push(initial);
         DataSlot {
+            #[cfg(debug_assertions)]
             menu: self.instance,
             index,
         }
@@ -510,13 +488,13 @@ impl MenuBuilder {
     ///
     /// let items = vec![ItemStack::empty(); 9];
     /// let upper_container = SimpleContainer::from_items(items).into_shared();
-    /// let upper_container_ref = ContainerRef::SimpleContainer(upper_container);
     ///
     /// let items = vec![ItemStack::new(&vanilla_items::ITEMS.barrier); 9];
+    /// let lower_container = SimpleContainer::from_items(items).into_shared();
     ///
-    /// let restricted_section = b.display_section(items);
+    /// let restricted_section = b.display_section(lower_container, 9);
     ///
-    /// let section = b.section(upper_container_ref, 9);
+    /// let section = b.section(upper_container, 9);
     /// b.drain([section]); // only section gets drained when the menu is closed
     /// b.build(MenuKindType::Basic(BasicKind {}));
     /// ```
@@ -560,6 +538,7 @@ impl MenuBuilder {
     /// Verifies (in debug builds) that `section` was minted by this builder,
     /// returning its raw slot range.
     fn owned(&self, section: Section) -> Range<usize> {
+        #[cfg(debug_assertions)]
         debug_assert_eq!(
             section.menu, self.instance,
             "Section was minted by a different MenuBuilder"
