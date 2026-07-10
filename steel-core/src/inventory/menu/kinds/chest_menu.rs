@@ -38,7 +38,6 @@ pub fn chest(
     let chest = builder.section(container.clone(), rows * SLOTS_PER_ROW);
     let player = builder.player_inventory(&inventory);
 
-    // Vanilla ChestMenu treats the player inventory as one block both ways.
     builder.route(chest, [player.all()], FillDirection::Backward);
     builder.route(player.all(), [chest], FillDirection::Forward);
 

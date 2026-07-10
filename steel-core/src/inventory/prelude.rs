@@ -5,8 +5,8 @@ pub use crate::inventory::{
     equipment::{EntityEquipment, EquipmentSlot, EquipmentSlotType},
     lock::{ContainerId, ContainerLockGuard, ContainerRef},
     menu::{
-        DataSlot, FillDirection, Menu, MenuBehavior, MenuBuilder, MenuKind, MenuKindType,
-        PlayerInventorySections, RemoteSlot, Section,
+        ContainerSlots, DataSlot, FillDirection, Menu, MenuBehavior, MenuBuilder, MenuKind,
+        MenuKindType, PlayerInventorySections, RemoteSlot, Section, SectionSource,
     },
     slots::{ResultHandler, SlotType},
 };

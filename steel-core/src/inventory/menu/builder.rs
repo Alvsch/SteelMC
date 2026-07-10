@@ -25,19 +25,19 @@
 //! ```
 
 use std::range::Range;
+use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef};
-use steel_utils::locks::{Shared, SyncMutex};
+use steel_utils::locks::Shared;
 
-use crate::inventory::container::SimpleContainer;
 use crate::inventory::menu::Menu;
 use crate::inventory::menu::behavior::MenuBehavior;
 use crate::inventory::menu::kind::MenuKindType;
 use crate::inventory::menu::layout::MenuLayout;
 use crate::inventory::{
-    lock::{ContainerLockGuard, ContainerRef},
+    lock::{ContainerId, ContainerLockGuard, ContainerRef},
     slots::{
         MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot, ResultHandler, ResultSlot, SlotType,
         add_standard_inventory_slots,
@@ -202,6 +202,53 @@ impl DataSlot {
     }
 }
 
+/// The not-yet-carved slots of a container being split across multiple
+/// sections.
+///
+/// Created only by [`MenuBuilder::split`]. Every section created from this handle
+/// consumes the next `count` container slots.
+pub struct ContainerSlots {
+    /// The container being split.
+    container: ContainerRef,
+    /// The next container slot not yet covered by a section.
+    next: usize,
+    /// The container's size when [`MenuBuilder::split`] was called, used to
+    /// catch sections that take more slots than the container has.
+    #[cfg(debug_assertions)]
+    size: usize,
+}
+
+/// A supplier for ranges of slots in a [`ContainerRef`]. Allowing either making
+/// the whole Container a [`Section`] or splitting one Container into multiple Sections.
+pub trait SectionSource {
+    /// Consumes the next `count` slots of the slot range.
+    fn take(self, count: usize) -> (ContainerRef, Range<usize>);
+}
+
+impl<T: Into<ContainerRef>> SectionSource for T {
+    fn take(self, count: usize) -> (ContainerRef, Range<usize>) {
+        (self.into(), (0..count).into())
+    }
+}
+
+impl SectionSource for &mut ContainerSlots {
+    /// # Panics
+    /// In debug builds if taking `count` slots overflows the actual size of the container.
+    fn take(self, count: usize) -> (ContainerRef, Range<usize>) {
+        let start = self.next;
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            start + count <= self.size,
+            "section takes container slots {}..{}, but the container only has {} slots",
+            start,
+            start + count,
+            self.size
+        );
+        self.next = start + count;
+        (self.container.clone(), (start..start + count).into())
+    }
+}
+
 /// The direction in which a slot range is walked when distributing items.
 ///
 /// Vanilla fills backwards when moving into the player inventory so existing
@@ -214,15 +261,14 @@ pub enum FillDirection {
     Backward,
 }
 
-/// A declarative shift-click route: take from `from`, then try each target
-/// range in order, stopping at the first that accepts anything.
+/// A shift clicking Route that goes from a single Range to a Vec of Ranges.
 pub(crate) struct Route {
     pub(crate) from: Range<usize>,
     pub(crate) targets: Vec<Range<usize>>,
     pub(crate) direction: FillDirection,
 }
 
-/// Builds the slots, containers, data slots and routing for a menu.
+/// Builds a Menu.
 ///
 /// See the [module documentation](self) for an overview.
 pub struct MenuBuilder {
@@ -234,13 +280,17 @@ pub struct MenuBuilder {
     data_slots: Vec<i16>,
     routes: Vec<Route>,
     drain_sections: Vec<Range<usize>>,
+    /// Container-local slot ranges already covered by a section, used to catch
+    /// two sections mapping onto the same container slots.
+    #[cfg(debug_assertions)]
+    claimed: Vec<(ContainerId, Range<usize>)>,
 }
 
 impl MenuBuilder {
     /// Creates a new builder for a menu of the given type and container id.
     ///
     /// Pass `None` for the player's own inventory menu, or a menu type
-    /// (e.g. `&vanilla_menu_types::ANVIL`) for any other window.
+    /// (`&vanilla_menu_types::ANVIL`, ...).
     #[must_use]
     pub fn new(menu_type: impl Into<Option<MenuTypeRef>>, container_id: u8) -> Self {
         Self {
@@ -252,16 +302,69 @@ impl MenuBuilder {
             data_slots: Vec::new(),
             routes: Vec::new(),
             drain_sections: Vec::new(),
+            #[cfg(debug_assertions)]
+            claimed: Vec::new(),
         }
     }
 
-    /// Adds `count` plain slots backed by `container` at indices `0..count`.
+    /// Starts splitting a `Container` into multiple sections.
+    ///
+    /// Use this when you are locked to storing items in one `Container`
+    /// and need to split them into different [Section]s.
+    ///
+    /// # Example
+    /// ```rust
+    /// use steel_registry::vanilla_menu_types;
+    /// use steel_core::inventory::prelude::*;
+    /// use steel_core::inventory::menu::kinds::BasicKind;
+    ///
+    /// let mut b = MenuBuilder::new(&vanilla_menu_types::BREWING_STAND, 0);
+    ///
+    /// let mut stand = b.split(SimpleContainer::new(5).into_shared());
+    /// let bottles = b.section(&mut stand, 3); // slots 0..3
+    /// let ingredient = b.section(&mut stand, 1); // slot 3
+    /// let fuel = b.section(&mut stand, 1); // slot 4
+    ///
+    /// b.build(MenuKindType::Basic(BasicKind {}));
+    /// ```
+    ///
+    /// # Panics
+    /// In debug builds, panics if the sections carved from the returned handle
+    /// take more slots than the container has.
+    #[must_use]
+    pub fn split(&mut self, container: impl Into<ContainerRef>) -> ContainerSlots {
+        let container = container.into();
+        #[cfg(debug_assertions)]
+        let size = ContainerLockGuard::lock_all(slice::from_ref(&container))
+            .get(container.container_id())
+            .expect("container was just locked")
+            .get_container_size();
+        self.register_container(container.clone());
+        ContainerSlots {
+            container,
+            next: 0,
+            #[cfg(debug_assertions)]
+            size,
+        }
+    }
+
+    /// Adds `count` plain slots backed by `source`.
+    ///
+    /// Pass a container directly to cover its slots `0..count`, or a
+    /// [`ContainerSlots`] handle from [`MenuBuilder::split`] to cover the next
+    /// `count` slots of a container shared between several sections.
     ///
     /// Returns a [`Section`] handle over the slots that were added.
-    pub fn section(&mut self, container: impl Into<ContainerRef>, count: usize) -> Section {
-        let container = container.into();
+    ///
+    /// # Panics
+    /// In debug builds, panics if the covered container slots overlap another
+    /// section of this menu.
+    pub fn section(&mut self, source: impl SectionSource, count: usize) -> Section {
+        let (container, range) = source.take(count);
+        #[cfg(debug_assertions)]
+        self.claim(&container, range);
         let start = self.slots.len();
-        for index in 0..count {
+        for index in range {
             self.slots
                 .push(SlotType::Normal(NormalSlot::new(container.clone(), index)));
         }
@@ -297,18 +400,20 @@ impl MenuBuilder {
     /// ```
     pub fn restricted_section(
         &mut self,
-        container: impl Into<ContainerRef>,
+        source: impl SectionSource,
         count: usize,
         may_place: impl Fn(&ItemStack) -> bool + Send + Sync + 'static,
         may_pickup: Option<
             impl Fn(&ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync + 'static,
         >,
     ) -> Section {
-        let container = container.into();
+        let (container, range) = source.take(count);
+        #[cfg(debug_assertions)]
+        self.claim(&container, range);
         let start = self.slots.len();
         let may_place: MayPlaceFn = Arc::new(may_place);
         let may_pickup = may_pickup.map(|it| -> MayPickupFn { Arc::new(it) });
-        for index in 0..count {
+        for index in range {
             self.slots.push(SlotType::Restricted(RestrictedSlot::new(
                 container.clone(),
                 index,
@@ -344,8 +449,10 @@ impl MenuBuilder {
     ///
     /// b.build(MenuKindType::Basic(BasicKind {}));
     /// ```
-    pub fn display_section(&mut self, container: impl Into<ContainerRef>, count: usize) -> Section {
-        let container = container.into();
+    pub fn display_section(&mut self, source: impl SectionSource, count: usize) -> Section {
+        let (container, range) = source.take(count);
+        #[cfg(debug_assertions)]
+        self.claim(&container, range);
 
         let may_place: MayPlaceFn = Arc::new(|_| false);
         let may_pickup: Option<MayPickupFn> = Some(Arc::new(
@@ -353,7 +460,7 @@ impl MenuBuilder {
         ));
 
         let start = self.slots.len();
-        for index in 0..count {
+        for index in range {
             self.slots.push(SlotType::Restricted(RestrictedSlot::new(
                 container.clone(),
                 index,
@@ -363,14 +470,11 @@ impl MenuBuilder {
             )));
         }
 
-        self.register_container(container.clone());
+        self.register_container(container);
         self.section_from(start)
     }
 
     /// Adds the player's 36 inventory slots (main inventory then hotbar).
-    ///
-    /// Returns handles to the combined range as well as the main inventory and
-    /// hotbar sub-ranges, which routing usually needs separately.
     pub fn player_inventory(
         &mut self,
         inventory: &Shared<PlayerInventory>,
@@ -387,8 +491,7 @@ impl MenuBuilder {
 
     /// Adds a single fake result slot driven by `handler`.
     ///
-    /// The result is read from / written to `container` (typically a
-    /// [`ResultContainer`](crate::inventory::crafting::ResultContainer)).
+    /// See [`crate::inventory::container::ResultContainer`].
     pub fn result_slot(
         &mut self,
         handler: Arc<dyn ResultHandler + Send + Sync>,
@@ -404,11 +507,7 @@ impl MenuBuilder {
         self.section_from(start)
     }
 
-    /// Adds arbitrary pre-built slots as a named section.
-    ///
-    /// Use this for slot kinds the convenience methods don't cover (armor,
-    /// restricted, plugin-defined custom slots). `containers` must list every
-    /// container the slots touch so it can be locked.
+    /// Adds arbitrary or custom slots.
     pub fn custom_section(
         &mut self,
         slots: impl IntoIterator<Item = SlotType>,
@@ -435,15 +534,12 @@ impl MenuBuilder {
 
     /// Declares a shift-click route from one section into others.
     ///
-    /// When a slot in `from` is shift-clicked, the generic quick-move walks
-    /// `targets` in order and stops at the first that accepts any items. Pass
-    /// [`FillDirection::Backward`] to fill the targets from the end (vanilla
-    /// does this when moving into the player inventory so existing stacks top
-    /// up first).
+    /// Most commonly:
+    /// `player_inventory` -> `container` is [`FillDirection::Forward`]
+    /// `container` -> `player_inventory` is [`FillDirection::Backward`]
     ///
     /// # Panics
-    /// In debug builds, panics if any section was minted by a different
-    /// [`MenuBuilder`].
+    /// In debug builds, if any section was created by a different [`MenuBuilder`].
     pub fn route(
         &mut self,
         from: Section,
@@ -460,16 +556,10 @@ impl MenuBuilder {
         self
     }
 
-    /// Marks `sections` to be emptied back into the player on close.
-    ///
-    /// Input grids (crafting, anvil, …) must not swallow items when the window
-    /// closes; on close, `MenuLayout::return_drained_items` returns the listed slots'
-    /// contents to the player's inventory (dropping overflow). Only list real
-    /// input sections — fake/result slots are computed and would dupe items.
+    /// Marks `sections` to be emptied back into the player or dropped on the floor on close.
     ///
     /// # Panics
-    /// In debug builds, panics if any section was minted by a different
-    /// [`MenuBuilder`].
+    /// In debug builds, if any section was created by a different [`MenuBuilder`].
     ///
     /// # Example
     /// ```rust
@@ -495,7 +585,7 @@ impl MenuBuilder {
     /// let restricted_section = b.display_section(lower_container, 9);
     ///
     /// let section = b.section(upper_container, 9);
-    /// b.drain([section]); // only section gets drained when the menu is closed
+    /// b.drain([section]); // only 'section' gets drained when the menu is closed
     /// b.build(MenuKindType::Basic(BasicKind {}));
     /// ```
     pub fn drain(&mut self, sections: impl IntoIterator<Item = Section>) -> &mut Self {
@@ -504,8 +594,7 @@ impl MenuBuilder {
         self
     }
 
-    /// Consumes the builder, assembling the finished [`Menu`] around its
-    /// per-menu [`MenuKind`](crate::inventory::MenuKind).
+    /// Consumes the builder, creating the finished [`Menu`].
     #[must_use]
     pub fn build(self, kind: impl Into<MenuKindType>) -> Menu {
         let mut behavior = MenuBehavior::new(
@@ -526,7 +615,25 @@ impl MenuBuilder {
         Menu::from_parts(behavior, layout, kind.into())
     }
 
-    /// Records a container to lock, ignoring it if an equal one is already present.
+    /// Records (in debug builds) that a section covers the container-local
+    /// `range` of `container`
+    ///
+    /// # Panics
+    /// In debug builds, if the range was already covered by another `Range`
+    #[cfg(debug_assertions)]
+    fn claim(&mut self, container: &ContainerRef, range: Range<usize>) {
+        let id = container.container_id();
+        for (other_id, other) in &self.claimed {
+            debug_assert!(
+                *other_id != id || range.start >= other.end || other.start >= range.end,
+                "two sections cover overlapping slots ({other:?} and {range:?}) of the same \
+                 container; carve shared containers with MenuBuilder::split"
+            );
+        }
+        self.claimed.push((id, range));
+    }
+
+    /// Records a container to lock.
     fn register_container(&mut self, container: impl Into<ContainerRef>) {
         let container_ref = container.into();
         let id = container_ref.container_id();
@@ -535,8 +642,7 @@ impl MenuBuilder {
         }
     }
 
-    /// Verifies (in debug builds) that `section` was minted by this builder,
-    /// returning its raw slot range.
+    /// Verifies (in debug builds) that `section` was created by this builder.
     fn owned(&self, section: Section) -> Range<usize> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(

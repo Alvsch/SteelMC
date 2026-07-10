@@ -20,7 +20,6 @@ use steel_registry::data_components::vanilla_components::{
 };
 use steel_registry::item_stack::ItemStack;
 use steel_registry::{vanilla_dimension_types, vanilla_items, vanilla_menu_types};
-use steel_utils::locks::SyncMutex;
 use text_components::format::Color;
 use text_components::{Modifier, TextComponent};
 
@@ -112,14 +111,9 @@ pub fn command_handler() -> impl CommandHandlerDyn {
                     }
                 }
 
-                let content = Arc::new(SyncMutex::new(SimpleContainer::from_items(items)));
+                let container = SimpleContainer::from_items(items).into_shared();
 
-                let content_section = b.restricted_section(
-                    content.clone(),
-                    9 * 6,
-                    |_| false,
-                    Some(|_: &ContainerLockGuard, _: &Player, _: &ItemStack| false),
-                );
+                let content_section = b.display_section(container.clone(), 9 * 6);
 
                 let player_inv = b.player_inventory(&player.inventory);
 

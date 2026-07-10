@@ -7,7 +7,10 @@ pub mod kinds;
 mod layout;
 
 pub use behavior::{MenuBehavior, RemoteSlot};
-pub use builder::{DataSlot, FillDirection, MenuBuilder, PlayerInventorySections, Section};
+pub use builder::{
+    ContainerSlots, DataSlot, FillDirection, MenuBuilder, PlayerInventorySections, Section,
+    SectionSource,
+};
 pub use kind::{MenuKind, MenuKindType};
 pub(crate) use layout::MenuLayout;
 
