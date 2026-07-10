@@ -1,7 +1,4 @@
 //! Crafting containers and related types.
-//!
-//! This module provides the `CraftingContainer` for the crafting grid,
-//! `ResultContainer` for crafting output, and `CraftingInput` for recipe matching.
 
 use steel_registry::{
     item_stack::ItemStack,
@@ -12,9 +9,8 @@ use crate::inventory::container::Container;
 
 /// A container for crafting grid items.
 ///
-/// This container holds items in a crafting grid pattern (2x2 for player inventory,
-/// 3x3 for crafting table). It notifies a callback when the grid contents change,
-/// allowing the crafting result to be recalculated.
+/// Holds items in a crafting grid pattern (2x2 for player inventory,
+/// 3x3 for crafting table).
 pub struct CraftingContainer {
     width: usize,
     height: usize,

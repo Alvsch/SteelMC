@@ -491,7 +491,7 @@ impl MenuBuilder {
 
     /// Adds a single fake result slot driven by `handler`.
     ///
-    /// See [`crate::inventory::container::ResultContainer`].
+    /// See [`crate::inventory::container::ResultContainer`] and [`crate::inventory::slots::ResultHandler`].
     pub fn result_slot(
         &mut self,
         handler: Arc<dyn ResultHandler + Send + Sync>,
