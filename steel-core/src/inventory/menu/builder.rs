@@ -394,7 +394,7 @@ impl MenuBuilder {
     /// let items = vec![ItemStack::new(&vanilla_items::ITEMS.gray_stained_glass_pane); 9];
     ///
     /// let container = SimpleContainer::from_items(items).into_shared();
-    /// let display_section = b.restricted_section(container.clone(), 9, |_item_stack| true, Some(|_: &ContainerLockGuard, _: &Player, _: &ItemStack| false));
+    /// let display_section = b.restricted_section(container.clone(), 9, |_slot, _item_stack| true, Some(|_: usize, _: &ContainerLockGuard, _: &Player, _: &ItemStack| false));
     ///
     /// b.build(MenuKindType::Basic(BasicKind {}));
     /// ```
@@ -402,9 +402,9 @@ impl MenuBuilder {
         &mut self,
         source: impl SectionSource,
         count: usize,
-        may_place: impl Fn(&ItemStack) -> bool + Send + Sync + 'static,
+        may_place: impl Fn(usize, &ItemStack) -> bool + Send + Sync + 'static,
         may_pickup: Option<
-            impl Fn(&ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync + 'static,
+            impl Fn(usize, &ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync + 'static,
         >,
     ) -> Section {
         let (container, range) = source.take(count);
@@ -454,9 +454,9 @@ impl MenuBuilder {
         #[cfg(debug_assertions)]
         self.claim(&container, range);
 
-        let may_place: MayPlaceFn = Arc::new(|_| false);
+        let may_place: MayPlaceFn = Arc::new(|_, _| false);
         let may_pickup: Option<MayPickupFn> = Some(Arc::new(
-            |_: &ContainerLockGuard, _: &Player, _: &ItemStack| false,
+            |_: usize, _: &ContainerLockGuard, _: &Player, _: &ItemStack| false,
         ));
 
         let start = self.slots.len();

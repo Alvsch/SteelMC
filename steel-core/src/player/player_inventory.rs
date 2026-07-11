@@ -28,7 +28,7 @@ use crate::{
         menu::{Menu, kinds::INVENTORY_MENU_CONTAINER_ID},
         slots::Slot,
     },
-    player::{Player, connection::NetworkConnection},
+    player::Player,
     world::World,
 };
 
@@ -832,6 +832,7 @@ impl Player {
             // client already has the freshly-crafted result and skip syncing it
             // — leaving the slot blank until the next click forces a resend.
             if menu.behavior().slots.get(slot).is_some_and(Slot::is_fake) {
+                menu.behavior_mut().mark_remote_slot_unknown(slot);
                 continue;
             }
             menu.behavior_mut().set_remote_slot(slot, hash);
@@ -1158,14 +1159,9 @@ impl Player {
     /// Returns whether items from a closing menu (crafting grid, anvil inputs,
     /// cursor) should be placed back into the inventory instead of dropped into
     /// the world.
-    ///
-    /// Mirrors vanilla's `AbstractContainerMenu.clearContainer` / `removed`
-    /// guard (`player.isAlive() && !hasDisconnected()`): a dead or disconnected
-    /// player has the items dropped at their position instead, so they are not
-    /// resurrected into a respawned inventory or saved on a hard disconnect.
     #[must_use]
     pub fn returns_menu_items_to_inventory(&self) -> bool {
-        self.is_alive() && !self.connection.closed()
+        self.is_alive()
     }
 
     /// Tries to add an item to the player's inventory, dropping it if it doesn't fit.

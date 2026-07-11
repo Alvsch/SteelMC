@@ -499,6 +499,13 @@ impl MenuBehavior {
         }
     }
 
+    /// Forgets what the client has in `slot`, forcing a resync on the next broadcast.
+    pub fn mark_remote_slot_unknown(&mut self, slot: usize) {
+        if slot < self.remote_slots.len() {
+            self.remote_slots[slot] = RemoteSlot::Unknown;
+        }
+    }
+
     /// Handles a remote slot update from the client.
     /// This is called when the client sends us their perception of a slot.
     /// Based on Java's `AbstractContainerMenu::setRemoteSlotUnsafe`.
