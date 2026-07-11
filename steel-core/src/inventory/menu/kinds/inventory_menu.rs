@@ -54,10 +54,7 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
         (36, EquipmentSlot::Feet),
     ]
     .map(|(offset, eq)| SlotType::Armor(ArmorSlot::new(inventory.clone(), offset, eq)));
-    let armor = builder.custom_section(
-        armor_slots,
-        [ContainerRef::from(inventory.clone())],
-    );
+    let armor = builder.custom_section(armor_slots, [ContainerRef::from(inventory.clone())]);
     // Slots 9-44: main inventory + hotbar.
     let player = builder.player_inventory(&inventory);
     // Slot 45: offhand (inventory slot 40).
