@@ -40,9 +40,9 @@ pub fn crafting(inventory: Shared<PlayerInventory>, container_id: u8, block_pos:
     let mut builder = MenuBuilder::new(&vanilla_menu_types::CRAFTING, container_id);
     let result = builder.result_slot(
         Arc::new(handler.clone()),
-        ContainerRef::ResultContainer(result_container.clone()),
+        ContainerRef::from(result_container.clone()),
     );
-    let grid = builder.section(ContainerRef::CraftingContainer(crafting_container), 9);
+    let grid = builder.section(ContainerRef::from(crafting_container), 9);
     let player = builder.player_inventory(&inventory);
 
     // Vanilla CraftingMenu::quickMoveStack routing.

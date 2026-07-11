@@ -2,12 +2,18 @@ use core::slice;
 use std::mem;
 
 use steel_registry::item_stack::ItemStack;
+use steel_utils::{DowncastType, DowncastTypeKey};
 
 use crate::inventory::container::Container;
 
 /// A simple container for holding a single crafting result.
 pub struct ResultContainer {
     result: ItemStack,
+}
+
+// SAFETY: This key is owned by Steel and uniquely identifies `ResultContainer`.
+unsafe impl DowncastType for ResultContainer {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:container/result");
 }
 
 impl ResultContainer {

@@ -56,14 +56,14 @@ impl CraftingHandler {
 impl ResultHandler for CraftingHandler {
     fn update_result(&self, guard: &mut ContainerLockGuard) {
         let crafting = guard
-            .get_crafting_container(self.crafting_id())
+            .get_typed::<CraftingContainer>(self.crafting_id())
             .expect("crafting container not locked");
 
         let result_stack = recipe_manager::find_recipe(crafting, self.is_2x2())
             .map_or_else(ItemStack::empty, |r| r.assemble());
 
         let result_container = guard
-            .get_result_container_mut(self.result_id())
+            .get_typed_mut::<ResultContainer>(self.result_id())
             .expect("result container not locked");
         result_container.set_item(0, result_stack);
         result_container.set_changed();
@@ -78,14 +78,14 @@ impl ResultHandler for CraftingHandler {
 
         let remainders_and_positioned = {
             let crafting = guard
-                .get_crafting_container(self.crafting_id())
+                .get_typed::<CraftingContainer>(self.crafting_id())
                 .expect("crafting container not locked");
             recipe_manager::get_remaining_items(crafting, self.is_2x2())
         };
 
         let Some((remainders, positioned)) = remainders_and_positioned else {
             guard
-                .get_result_container_mut(self.result_id())
+                .get_typed_mut::<ResultContainer>(self.result_id())
                 .expect("result container not locked")
                 .set_item(0, ItemStack::empty());
             return None;
@@ -93,7 +93,7 @@ impl ResultHandler for CraftingHandler {
 
         {
             let crafting = guard
-                .get_crafting_container_mut(self.crafting_id())
+                .get_typed_mut::<CraftingContainer>(self.crafting_id())
                 .expect("crafting container not locked");
 
             let input = &positioned.input;
@@ -153,7 +153,7 @@ impl ResultHandler for CraftingHandler {
             return false;
         }
 
-        let Some(crafting) = guard.get_crafting_container(self.crafting_id()) else {
+        let Some(crafting) = guard.get_typed::<CraftingContainer>(self.crafting_id()) else {
             return false;
         };
 

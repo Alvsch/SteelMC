@@ -42,10 +42,10 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
     // Slot 0: crafting result.
     builder.result_slot(
         Arc::new(handler.clone()),
-        ContainerRef::ResultContainer(result_container.clone()),
+        ContainerRef::from(result_container.clone()),
     );
     // Slots 1-4: 2x2 crafting grid.
-    let grid = builder.section(ContainerRef::CraftingContainer(crafting_container), 4);
+    let grid = builder.section(ContainerRef::from(crafting_container), 4);
     // Slots 5-8: armor (head, chest, legs, feet → inventory slots 39, 38, 37, 36).
     let armor_slots = [
         (39, EquipmentSlot::Head),
@@ -56,14 +56,14 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
     .map(|(offset, eq)| SlotType::Armor(ArmorSlot::new(inventory.clone(), offset, eq)));
     let armor = builder.custom_section(
         armor_slots,
-        [ContainerRef::PlayerInventory(inventory.clone())],
+        [ContainerRef::from(inventory.clone())],
     );
     // Slots 9-44: main inventory + hotbar.
     let player = builder.player_inventory(&inventory);
     // Slot 45: offhand (inventory slot 40).
     let offhand = builder.custom_section(
         [SlotType::Normal(NormalSlot::new(inventory.clone(), 40))],
-        [ContainerRef::PlayerInventory(inventory)],
+        [ContainerRef::from(inventory)],
     );
 
     // No routes — quick_move is a custom override (armor/offhand auto-equip).

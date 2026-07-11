@@ -16,6 +16,7 @@ use std::ptr;
 
 use enum_dispatch::enum_dispatch;
 use steel_registry::item_stack::ItemStack;
+use steel_utils::ErasedType;
 
 use crate::player::Player;
 
@@ -26,8 +27,11 @@ pub const DEFAULT_DISTANCE_BUFFER: f32 = 4.0;
 /// I also use container interchangeably with inventory as they mean approximately the same thing.
 /// But inventory could also refer to the player's inventory.
 /// Example: [`crate::player::player_inventory::PlayerInventory`], [`crate::inventory::container::SimpleContainer`]
+///
+/// Concrete implementations must implement [`steel_utils::DowncastType`] with
+/// a unique, stable key so erased container references can recover their type.
 #[enum_dispatch]
-pub trait Container {
+pub trait Container: ErasedType + Send + Sync {
     /// Returns the items in this container
     fn items(&self) -> &[ItemStack];
     /// Returns mutable references to the items in this container.
@@ -318,6 +322,7 @@ pub fn calculate_redstone_signal_from_container(container: &dyn Container) -> i3
 #[cfg(test)]
 mod tests {
     use super::*;
+    use steel_utils::{DowncastType, DowncastTypeKey};
 
     struct TestContainer {
         items: Vec<ItemStack>,
@@ -329,6 +334,11 @@ mod tests {
                 items: (0..size).map(|_| ItemStack::empty()).collect(),
             }
         }
+    }
+
+    // SAFETY: This key uniquely identifies `TestContainer` within the unit-test process.
+    unsafe impl DowncastType for TestContainer {
+        const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:test/inventory/container");
     }
 
     impl Container for TestContainer {
@@ -396,7 +406,12 @@ mod tests {
     ///
     /// ```compile_fail
     /// use steel_core::inventory::container::{Container, with_indices};
+    /// use steel_utils::{DowncastType, DowncastTypeKey};
     /// # struct C { items: Vec<steel_registry::item_stack::ItemStack> }
+    /// # // SAFETY: This doctest owns both the key and concrete type.
+    /// # unsafe impl DowncastType for C {
+    /// #     const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:doctest/container/c");
+    /// # }
     /// # impl Container for C {
     /// #     fn get_container_size(&self) -> usize { self.items.len() }
     /// #     fn get_item(&self, s: usize) -> &steel_registry::item_stack::ItemStack { &self.items[s] }

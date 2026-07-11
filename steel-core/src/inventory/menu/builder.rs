@@ -481,7 +481,7 @@ impl MenuBuilder {
     ) -> PlayerInventorySections {
         let start = self.slots.len();
         add_standard_inventory_slots(&mut self.slots, inventory);
-        self.register_container(ContainerRef::PlayerInventory(inventory.clone()));
+        self.register_container(ContainerRef::from(inventory.clone()));
 
         let main = Section::new(self.instance, start..start + 27);
         let hotbar = Section::new(self.instance, start + 27..self.slots.len());

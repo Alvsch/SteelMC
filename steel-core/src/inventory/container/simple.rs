@@ -1,10 +1,16 @@
 use steel_registry::item_stack::ItemStack;
+use steel_utils::{DowncastType, DowncastTypeKey};
 
 use crate::inventory::container::Container;
 
 /// A Simple Container
 pub struct SimpleContainer {
     items: Vec<ItemStack>,
+}
+
+// SAFETY: This key is owned by Steel and uniquely identifies `SimpleContainer`.
+unsafe impl DowncastType for SimpleContainer {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:container/simple");
 }
 
 impl SimpleContainer {

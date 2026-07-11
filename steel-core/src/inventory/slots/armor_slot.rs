@@ -44,7 +44,7 @@ impl ArmorSlot {
     /// Returns a reference to the container.
     #[must_use]
     pub fn container_ref(&self) -> ContainerRef {
-        ContainerRef::PlayerInventory(Arc::clone(&self.container))
+        ContainerRef::from(Arc::clone(&self.container))
     }
 }
 

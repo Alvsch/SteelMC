@@ -42,7 +42,7 @@ use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::{Difficulty, InteractionHand};
 use steel_utils::{
-    BlockPos, BlockStateId, ChunkPos, Direction, Identifier, WorldAabb, axis::Axis,
+    BlockPos, BlockStateId, ChunkPos, Direction, ErasedType, Identifier, WorldAabb, axis::Axis,
     block_util::FoundRectangle,
 };
 use text_components::TextComponent;
@@ -771,6 +771,22 @@ pub(crate) use ticking::{
 };
 pub use tracker::{EntityChangeSenders, EntityTracker};
 
+#[cfg(test)]
+macro_rules! impl_test_downcast_type {
+    ($type:ty) => {
+        // SAFETY: A fully qualified test module path plus its local type name is
+        // unique within the test process.
+        unsafe impl steel_utils::DowncastType for $type {
+            const TYPE_KEY: steel_utils::DowncastTypeKey = steel_utils::DowncastTypeKey::new(
+                concat!("steel:test/", module_path!(), "/", stringify!($type)),
+            );
+        }
+    };
+}
+
+#[cfg(test)]
+pub(crate) use impl_test_downcast_type;
+
 /// Type alias for a shared entity reference.
 pub type SharedEntity = Arc<dyn Entity>;
 
@@ -1399,6 +1415,8 @@ impl<'a> EntityCapabilities<'a> {
 ///
 /// This trait provides the core functionality for entities.
 /// It's based on Minecraft's `Entity` class.
+/// Concrete implementations must also claim a unique [`steel_utils::DowncastTypeKey`]
+/// through [`steel_utils::DowncastType`].
 ///
 /// # Using `EntityBase`
 ///
@@ -1413,7 +1431,7 @@ impl<'a> EntityCapabilities<'a> {
 ///     // All other common methods use defaults from EntityBase!
 /// }
 /// ```
-pub trait Entity: EntityEventSource + Send + Sync {
+pub trait Entity: EntityEventSource + ErasedType + Send + Sync {
     /// Returns a reference to the entity's shared vanilla base fields.
     fn base(&self) -> &EntityBase;
 
@@ -7121,6 +7139,7 @@ mod tests {
         vanilla_blocks, vanilla_damage_types, vanilla_entities, vanilla_fluids, vanilla_items,
         vanilla_loot_tables, vanilla_mob_effects,
     };
+    use steel_utils::Downcast as _;
     use steel_utils::locks::SyncMutex;
     use steel_utils::types::InteractionHand;
     use steel_utils::{
@@ -7165,6 +7184,8 @@ mod tests {
         }
     }
 
+    crate::entity::impl_test_downcast_type!(PushableTestEntity);
+
     impl Entity for PushableTestEntity {
         fn base(&self) -> &EntityBase {
             &self.base
@@ -7208,6 +7229,8 @@ mod tests {
         }
     }
 
+    crate::entity::impl_test_downcast_type!(TypedTestEntity);
+
     impl Entity for TypedTestEntity {
         fn base(&self) -> &EntityBase {
             &self.base
@@ -7220,6 +7243,16 @@ mod tests {
         fn projectile_owner_uuid(&self) -> Option<Uuid> {
             self.projectile_owner_uuid
         }
+    }
+
+    #[test]
+    fn entity_downcast_uses_concrete_type_key_not_registry_type() {
+        let entity = TypedTestEntity::new(1, &vanilla_entities::ITEM);
+        let entity_ref: &dyn Entity = &entity;
+
+        assert!(entity_ref.is::<TypedTestEntity>());
+        assert!(entity_ref.downcast_ref::<TypedTestEntity>().is_some());
+        assert!(entity_ref.downcast_ref::<PushableTestEntity>().is_none());
     }
 
     struct LeashNotificationTestEntity {
@@ -7249,6 +7282,8 @@ mod tests {
             self.removed_notifications.lock().clone()
         }
     }
+
+    crate::entity::impl_test_downcast_type!(LeashNotificationTestEntity);
 
     impl Entity for LeashNotificationTestEntity {
         fn base(&self) -> &EntityBase {
@@ -7284,6 +7319,8 @@ mod tests {
             })
         }
     }
+
+    crate::entity::impl_test_downcast_type!(MultiPassengerTestEntity);
 
     impl Entity for MultiPassengerTestEntity {
         fn base(&self) -> &EntityBase {
@@ -7345,6 +7382,8 @@ mod tests {
             })
         }
     }
+
+    crate::entity::impl_test_downcast_type!(KnownMovementTestEntity);
 
     impl Entity for KnownMovementTestEntity {
         fn base(&self) -> &EntityBase {
@@ -7468,6 +7507,8 @@ mod tests {
         }
     }
 
+    crate::entity::impl_test_downcast_type!(LivingFluidTestEntity);
+
     impl Entity for LivingFluidTestEntity {
         fn base(&self) -> &EntityBase {
             &self.base
@@ -7579,6 +7620,8 @@ mod tests {
             })
         }
     }
+
+    crate::entity::impl_test_downcast_type!(ControlledVehicleTestEntity);
 
     impl Entity for ControlledVehicleTestEntity {
         fn base(&self) -> &EntityBase {

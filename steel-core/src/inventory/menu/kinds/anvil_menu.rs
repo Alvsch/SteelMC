@@ -56,7 +56,7 @@ pub fn anvil(
             pos,
             world.clone(),
         )),
-        ContainerRef::ResultContainer(result_container.clone()),
+        ContainerRef::from(result_container.clone()),
     );
 
     let player = builder.player_inventory(&inventory);

@@ -122,7 +122,7 @@ use steel_protocol::packets::{
 };
 use steel_registry::item_stack::ItemStack;
 
-use steel_utils::{BlockPos, BlockStateId, ChunkPos, Identifier};
+use steel_utils::{BlockPos, BlockStateId, ChunkPos, DowncastType, DowncastTypeKey, Identifier};
 
 use crate::inventory::container::Container;
 
@@ -299,6 +299,11 @@ pub struct Player {
     /// In-flight ender pearls thrown by this player, kept weakly so they persist
     /// with the player and re-spawn on login (vanilla `ServerPlayer.enderPearls`).
     ender_pearls: SyncMutex<Vec<Weak<dyn Entity>>>,
+}
+
+// SAFETY: This key is owned by Steel and uniquely identifies `Player`.
+unsafe impl DowncastType for Player {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:entity/player");
 }
 
 #[derive(Clone)]
