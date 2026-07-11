@@ -1,3 +1,8 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "build script must fail immediately on invalid extracted damage type data"
+)]
+
 use std::fs;
 
 use heck::ToShoutySnakeCase;
@@ -77,9 +82,8 @@ fn generate_death_message_type(death_message_type: DeathMessageTypeJson) -> Toke
 }
 
 pub(crate) fn build() -> TokenStream {
-    println!("cargo:rerun-if-changed=build_assets/builtin_datapacks/minecraft/damage_type/");
-
-    let damage_type_dir = "build_assets/builtin_datapacks/minecraft/damage_type";
+    let damage_type_dir = "../steel-utils/build_assets/builtin_datapacks/minecraft/damage_type";
+    println!("cargo:rerun-if-changed={damage_type_dir}");
     let mut damage_types = Vec::new();
 
     // Read all damage type JSON files
@@ -91,7 +95,7 @@ pub(crate) fn build() -> TokenStream {
             let damage_type_name = path.file_stem().unwrap().to_str().unwrap().to_string();
             let content = fs::read_to_string(&path).unwrap();
             let damage_type: DamageTypeJson = serde_json::from_str(&content)
-                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", damage_type_name, e));
+                .unwrap_or_else(|e| panic!("Failed to parse {damage_type_name}: {e}"));
 
             damage_types.push((damage_type_name, damage_type));
         }

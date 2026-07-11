@@ -256,7 +256,7 @@ fn generate_canyon_kind(cfg: &CanyonConfigJson) -> TokenStream {
 // ── Build entry point ───────────────────────────────────────────────────────
 
 pub(crate) fn build() -> TokenStream {
-    let dir = "build_assets/builtin_datapacks/minecraft/worldgen/configured_carver";
+    let dir = "../steel-utils/build_assets/builtin_datapacks/minecraft/worldgen/configured_carver";
     println!("cargo:rerun-if-changed={dir}");
 
     let mut entries: Vec<(String, TokenStream)> = Vec::new();
@@ -267,7 +267,7 @@ pub(crate) fn build() -> TokenStream {
         .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("json"))
         .collect();
     // Sort for deterministic output
-    files.sort_by_key(|e| e.file_name());
+    files.sort_by_key(std::fs::DirEntry::file_name);
 
     for entry in files {
         let path = entry.path();

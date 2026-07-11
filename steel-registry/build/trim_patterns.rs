@@ -1,3 +1,8 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "build script must fail immediately on invalid extracted trim pattern data"
+)]
+
 use std::fs;
 
 use crate::generator_functions::generate_identifier;
@@ -21,9 +26,8 @@ pub struct TextComponent {
 }
 
 pub(crate) fn build() -> TokenStream {
-    println!("cargo:rerun-if-changed=build_assets/builtin_datapacks/minecraft/trim_pattern/");
-
-    let trim_pattern_dir = "build_assets/builtin_datapacks/minecraft/trim_pattern";
+    let trim_pattern_dir = "../steel-utils/build_assets/builtin_datapacks/minecraft/trim_pattern";
+    println!("cargo:rerun-if-changed={trim_pattern_dir}");
     let mut trim_patterns = Vec::new();
 
     // Read all trim pattern JSON files
@@ -35,7 +39,7 @@ pub(crate) fn build() -> TokenStream {
             let trim_pattern_name = path.file_stem().unwrap().to_str().unwrap().to_string();
             let content = fs::read_to_string(&path).unwrap();
             let trim_pattern: TrimPatternJson = serde_json::from_str(&content)
-                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", trim_pattern_name, e));
+                .unwrap_or_else(|e| panic!("Failed to parse {trim_pattern_name}: {e}"));
 
             trim_patterns.push((trim_pattern_name, trim_pattern));
         }

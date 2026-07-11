@@ -5,8 +5,8 @@
 
 use glam::DVec3;
 use steel_protocol::packets::game::{
-    CMoveVehicle, CPlayerPosition, PlayerCommandAction, SAcceptTeleportation, SMovePlayer,
-    SMoveVehicle, SPlayerCommand, SPlayerInput,
+    CMoveVehicle, CPlayerPosition, PlayerCommandAction, RelativeMovement, SAcceptTeleportation,
+    SMovePlayer, SMoveVehicle, SPlayerCommand, SPlayerInput,
 };
 use steel_registry::game_rules::GameRuleValue;
 use steel_registry::vanilla_game_rules::{ELYTRA_MOVEMENT_CHECK, PLAYER_MOVEMENT_CHECK};
@@ -52,7 +52,7 @@ pub fn clamp_vertical(value: f64) -> f64 {
 }
 
 #[must_use]
-fn wrap_degrees(mut degrees: f32) -> f32 {
+pub(crate) fn wrap_degrees(mut degrees: f32) -> f32 {
     degrees %= 360.0;
     if degrees >= 180.0 {
         degrees -= 360.0;
@@ -126,7 +126,7 @@ impl Player {
             drop(tp);
 
             let (yaw, pitch) = self.rotation();
-            if let Err(error) = self.teleport(pos.x, pos.y, pos.z, yaw, pitch) {
+            if let Err(error) = self.teleport(pos, yaw, pitch) {
                 log::warn!(
                     "Failed to resend pending teleport for player {}: {error}",
                     self.id()
@@ -204,6 +204,13 @@ impl Player {
             self.disconnect(translations::MULTIPLAYER_DISCONNECT_INVALID_PLAYER_MOVEMENT.msg());
             return;
         }
+        if self.has_won_game() {
+            return;
+        }
+
+        if self.is_world_change_pending() {
+            return;
+        }
 
         let current_rotation = self.rotation();
         let target_yaw = wrap_degrees(packet.get_y_rot(current_rotation.0));
@@ -255,13 +262,7 @@ impl Player {
             let moved_dist_sq = dx * dx + dy * dy + dz * dz;
 
             if moved_dist_sq > 1.0 {
-                if let Err(error) = self.teleport(
-                    start_pos.x,
-                    start_pos.y,
-                    start_pos.z,
-                    target_yaw,
-                    target_pitch,
-                ) {
+                if let Err(error) = self.teleport(start_pos, target_yaw, target_pitch) {
                     log::warn!(
                         "Failed to correct sleeping player {} movement: {error}",
                         self.id()
@@ -295,13 +296,9 @@ impl Player {
                 } * f64::from(delta_packets);
 
                 if moved_dist_sq - self.velocity().length_squared() > threshold {
-                    if let Err(error) = self.teleport(
-                        start_pos.x,
-                        start_pos.y,
-                        start_pos.z,
-                        current_rotation.0,
-                        current_rotation.1,
-                    ) {
+                    if let Err(error) =
+                        self.teleport(start_pos, current_rotation.0, current_rotation.1)
+                    {
                         log::warn!(
                             "Failed to correct too-fast player {} movement: {error}",
                             self.id()
@@ -322,13 +319,7 @@ impl Player {
         }
 
         if self.move_entity(MoverType::Player, move_delta).is_none() {
-            if let Err(error) = self.teleport(
-                start_pos.x,
-                start_pos.y,
-                start_pos.z,
-                target_yaw,
-                target_pitch,
-            ) {
+            if let Err(error) = self.teleport(start_pos, target_yaw, target_pitch) {
                 panic!(
                     "failed to correct rejected player {} movement: {error}",
                     self.id()
@@ -345,7 +336,7 @@ impl Player {
             && !is_spectator
             && !in_impulse_grace;
 
-        let new_aabb = self.bounding_box().move_vec(target_pos - self.position());
+        let new_aabb = self.bounding_box().translate(target_pos - self.position());
         let collision_world = WorldCollisionProvider::for_entity(&world, self);
         let old_collision = collision_world.has_entity_context_collision(
             old_aabb,
@@ -363,13 +354,7 @@ impl Player {
         })
         .rejects()
         {
-            if let Err(error) = self.teleport(
-                start_pos.x,
-                start_pos.y,
-                start_pos.z,
-                target_yaw,
-                target_pitch,
-            ) {
+            if let Err(error) = self.teleport(start_pos, target_yaw, target_pitch) {
                 log::warn!(
                     "Failed to correct collided player {} movement: {error}",
                     self.id()
@@ -414,13 +399,7 @@ impl Player {
                     "Rejected accepted player movement for entity {}: {error}",
                     self.id()
                 );
-                if let Err(teleport_error) = self.teleport(
-                    start_pos.x,
-                    start_pos.y,
-                    start_pos.z,
-                    target_yaw,
-                    target_pitch,
-                ) {
+                if let Err(teleport_error) = self.teleport(start_pos, target_yaw, target_pitch) {
                     log::warn!(
                         "Failed to correct rejected player movement for entity {}: {teleport_error}",
                         self.id()
@@ -459,13 +438,17 @@ impl Player {
     )]
     pub fn handle_move_vehicle(&self, packet: SMoveVehicle) {
         if Self::is_invalid_position(
-            packet.position.x,
-            packet.position.y,
-            packet.position.z,
+            packet.pos.x,
+            packet.pos.y,
+            packet.pos.z,
             packet.x_rot,
             packet.y_rot,
         ) {
             self.disconnect(translations::MULTIPLAYER_DISCONNECT_INVALID_VEHICLE_MOVEMENT.msg());
+            return;
+        }
+
+        if self.is_world_change_pending() {
             return;
         }
 
@@ -476,6 +459,9 @@ impl Player {
         let Some(vehicle) = self.root_vehicle() else {
             return;
         };
+        if vehicle.is_world_change_pending() {
+            return;
+        }
         let controlled_by_player = vehicle
             .controlling_passenger()
             .is_some_and(|controller| controller.id() == self.id());
@@ -491,9 +477,9 @@ impl Player {
         let world = self.get_world();
         let old_position = vehicle.position();
         let target_pos = DVec3::new(
-            clamp_horizontal(packet.position.x),
-            clamp_vertical(packet.position.y),
-            clamp_horizontal(packet.position.z),
+            clamp_horizontal(packet.pos.x),
+            clamp_vertical(packet.pos.y),
+            clamp_horizontal(packet.pos.z),
         );
         let target_yaw = wrap_degrees(packet.y_rot);
         let target_pitch = wrap_degrees(packet.x_rot);
@@ -539,7 +525,7 @@ impl Player {
 
         let new_aabb = vehicle
             .bounding_box()
-            .move_vec(target_pos - vehicle.position());
+            .translate(target_pos - vehicle.position());
         let collision_world = WorldCollisionProvider::for_entity(&world, vehicle.as_ref());
         let old_collision = collision_world.has_entity_context_collision(
             old_aabb,
@@ -755,18 +741,51 @@ impl Player {
     /// Until acknowledged, movement packets from the client will be rejected.
     ///
     /// Matches vanilla `ServerGamePacketListenerImpl.teleport()`.
-    pub fn teleport(
+    pub fn teleport(&self, pos: DVec3, yaw: f32, pitch: f32) -> Result<(), EntityMoveError> {
+        self.teleport_with_velocity(pos, DVec3::ZERO, yaw, pitch)
+    }
+
+    /// Sends a `CPlayerPosition` packet with explicit delta movement for vanilla
+    /// `ServerPlayer.teleport(TeleportTransition)` paths.
+    pub(crate) fn teleport_with_velocity(
         &self,
-        x: f64,
-        y: f64,
-        z: f64,
+        pos: DVec3,
+        velocity: DVec3,
         yaw: f32,
         pitch: f32,
     ) -> Result<(), EntityMoveError> {
-        let pos = DVec3::new(x, y, z);
+        self.teleport_with_velocity_packet(
+            pos,
+            velocity,
+            (yaw, pitch),
+            pos,
+            velocity,
+            (yaw, pitch),
+            RelativeMovement::NONE,
+        )
+    }
 
+    /// Commits resolved server state while sending vanilla packet-relative values.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "packet-relative teleports must keep resolved and protocol values separate"
+    )]
+    pub(crate) fn teleport_with_velocity_packet(
+        &self,
+        pos: DVec3,
+        velocity: DVec3,
+        rotation: (f32, f32),
+        packet_pos: DVec3,
+        packet_velocity: DVec3,
+        packet_rotation: (f32, f32),
+        relatives: RelativeMovement,
+    ) -> Result<(), EntityMoveError> {
+        let world = self.get_world();
         self.try_set_position(pos)?;
-        self.set_velocity(DVec3::ZERO);
+        if world.entity_manager().get_by_id(self.id()).is_some() {
+            world.chunk_map.update_player_status(self);
+        }
+        self.set_velocity(velocity);
 
         let new_id = {
             let mut tp = self.teleport_state.lock();
@@ -776,14 +795,21 @@ impl Player {
             id
         };
 
-        self.set_rotation((yaw, pitch));
+        self.set_rotation(rotation);
         self.set_old_position_to_current();
         {
             let mut movement = self.movement.lock();
             movement.reset_last_known_client_movement();
         }
 
-        self.send_packet(CPlayerPosition::absolute(new_id, x, y, z, yaw, pitch));
+        self.send_packet(CPlayerPosition::new(
+            new_id,
+            packet_pos,
+            packet_velocity,
+            packet_rotation.0,
+            packet_rotation.1,
+            relatives,
+        ));
         Ok(())
     }
 

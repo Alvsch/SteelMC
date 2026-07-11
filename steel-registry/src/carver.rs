@@ -1,7 +1,7 @@
 //! Configured carver registry.
 //!
 //! Mirrors vanilla's `ConfiguredWorldCarver` — each entry is a
-//! `CarverType` (the carver kind — cave / nether_cave / canyon) paired with
+//! `CarverType` (the carver kind — cave / `nether_cave` / canyon) paired with
 //! its configuration. Configured carvers are referenced by biomes via the
 //! `carvers` field on [`Biome`](crate::biome::Biome) and sampled during the
 //! `CARVERS` chunk generation stage.
@@ -218,6 +218,8 @@ crate::impl_registry_ext!(
     carvers_by_id,
     carvers_by_key
 );
+
+crate::impl_registry_entry_eq!(ConfiguredCarver);
 
 impl crate::RegistryEntry for ConfiguredCarver {
     fn key(&self) -> &Identifier {

@@ -5,7 +5,6 @@ use steel_utils::Identifier;
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code)]
 pub struct BlockStateData {
     #[serde(rename = "Name")]
     pub name: Identifier,
@@ -15,7 +14,6 @@ pub struct BlockStateData {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-#[allow(dead_code)]
 pub struct FluidStateData {
     #[serde(rename = "Name")]
     pub name: Identifier,
@@ -54,7 +52,29 @@ pub struct SpawnConditionEntry {
 pub struct BiomeCondition {
     #[serde(rename = "type")]
     pub(crate) condition_type: String,
-    pub(crate) biomes: String,
+    #[serde(deserialize_with = "deserialize_biome_condition_target")]
+    pub(crate) biomes: BiomeConditionTarget,
+}
+
+#[derive(Debug)]
+pub(crate) enum BiomeConditionTarget {
+    Tag(Identifier),
+    Direct(Identifier),
+}
+
+fn deserialize_biome_condition_target<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BiomeConditionTarget, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    if let Some(tag) = value.strip_prefix('#') {
+        return Identifier::from_str(tag)
+            .map(BiomeConditionTarget::Tag)
+            .map_err(D::Error::custom);
+    }
+
+    Identifier::from_str(&value)
+        .map(BiomeConditionTarget::Direct)
+        .map_err(D::Error::custom)
 }
 
 #[derive(Deserialize, Debug)]

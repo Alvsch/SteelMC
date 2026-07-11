@@ -145,6 +145,12 @@ pub enum DensityFunctionData {
         when_in_range: Box<DensityFunctionJson>,
         when_out_of_range: Box<DensityFunctionJson>,
     },
+    #[serde(rename = "minecraft:interval_select")]
+    IntervalSelect {
+        input: Box<DensityFunctionJson>,
+        thresholds: Vec<f64>,
+        functions: Vec<DensityFunctionJson>,
+    },
     #[serde(rename = "minecraft:interpolated")]
     Interpolated { argument: Box<DensityFunctionJson> },
     #[serde(rename = "minecraft:flat_cache")]
@@ -267,7 +273,7 @@ struct NoiseSettingsJson {
 
 // ── Datapack file reading ───────────────────────────────────────────────────
 
-const DATAPACK_BASE: &str = "../steel-registry/build_assets/builtin_datapacks/minecraft/worldgen";
+const DATAPACK_BASE: &str = "../steel-utils/build_assets/builtin_datapacks/minecraft/worldgen";
 
 /// Recursively collect all .json files under a directory.
 fn collect_json_files(dir: &Path) -> Vec<PathBuf> {
@@ -334,9 +340,9 @@ fn read_noise_settings(dimension: &str) -> NoiseSettingsJson {
 
 use crate::density::{
     BlendAlpha, BlendDensity, BlendOffset, BlendedNoise, Clamp, Constant, CubicSpline,
-    DensityFunction, FindTopSurface, Mapped, MappedType, Marker, MarkerType, Noise, RangeChoice,
-    RarityValueMapper, Reference, Shift, ShiftA, ShiftB, ShiftedNoise, Spline, SplinePoint,
-    SplineValue, TwoArgType, TwoArgumentSimple, WeirdScaledSampler, YClampedGradient,
+    DensityFunction, FindTopSurface, IntervalSelect, Mapped, MappedType, Marker, MarkerType, Noise,
+    RangeChoice, RarityValueMapper, Reference, Shift, ShiftA, ShiftB, ShiftedNoise, Spline,
+    SplinePoint, SplineValue, TwoArgType, TwoArgumentSimple, WeirdScaledSampler, YClampedGradient,
 };
 
 /// Convert a JSON density function to a runtime `DensityFunction` value.
@@ -470,6 +476,12 @@ fn json_data_to_df(data: &DensityFunctionData) -> DensityFunction {
             when_out_of_range: Arc::new(json_to_df(when_out_of_range)),
         }),
 
+        DensityFunctionData::IntervalSelect {
+            input,
+            thresholds,
+            functions,
+        } => json_interval_select(input, thresholds, functions),
+
         DensityFunctionData::Interpolated { argument } => {
             json_marker(MarkerType::Interpolated, argument)
         }
@@ -562,6 +574,37 @@ fn json_marker(kind: MarkerType, argument: &DensityFunctionJson) -> DensityFunct
     DensityFunction::Marker(Marker {
         kind,
         wrapped: Arc::new(json_to_df(argument)),
+    })
+}
+
+fn json_interval_select(
+    input: &DensityFunctionJson,
+    thresholds: &[f64],
+    functions: &[DensityFunctionJson],
+) -> DensityFunction {
+    assert!(
+        functions.len() >= 2,
+        "minecraft:interval_select requires at least two functions, got {}",
+        functions.len()
+    );
+    assert!(
+        thresholds.len() == functions.len().saturating_sub(1),
+        "minecraft:interval_select requires exactly one more function than thresholds, got {} thresholds and {} functions",
+        thresholds.len(),
+        functions.len()
+    );
+    assert!(
+        thresholds.windows(2).all(|pair| pair[0] <= pair[1]),
+        "minecraft:interval_select thresholds must be ordered from smallest to largest"
+    );
+
+    DensityFunction::IntervalSelect(IntervalSelect {
+        input: Arc::new(json_to_df(input)),
+        thresholds: thresholds.to_vec(),
+        functions: functions
+            .iter()
+            .map(|function| Arc::new(json_to_df(function)))
+            .collect(),
     })
 }
 
@@ -863,77 +906,77 @@ fn generate_noise_settings(dimension: &str, prefix: &str) -> TokenStream {
 
             #[inline]
             fn router_final_density(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_final_density(self, cache, x, y, z)
+                router_final_density(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_depth(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_depth(self, cache, x, y, z)
+                router_depth(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_barrier(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_barrier(self, cache, x, y, z)
+                router_barrier(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_fluid_level_floodedness(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_fluid_level_floodedness(self, cache, x, y, z)
+                router_fluid_level_floodedness(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_fluid_level_spread(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_fluid_level_spread(self, cache, x, y, z)
+                router_fluid_level_spread(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_lava(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_lava(self, cache, x, y, z)
+                router_lava(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_vein_toggle(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_vein_toggle(self, cache, x, y, z)
+                router_vein_toggle(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_vein_ridged(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_vein_ridged(self, cache, x, y, z)
+                router_vein_ridged(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_vein_gap(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_vein_gap(self, cache, x, y, z)
+                router_vein_gap(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_erosion(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_erosion(self, cache, x, y, z)
+                router_erosion(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_continentalness(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_continentalness(self, cache, x, y, z)
+                router_continentalness(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_temperature(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_temperature(self, cache, x, y, z)
+                router_temperature(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_vegetation(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_vegetation(self, cache, x, y, z)
+                router_vegetation(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_ridges(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_ridges(self, cache, x, y, z)
+                router_ridges(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
             fn router_preliminary_surface_level(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32) -> f64 {
-                router_preliminary_surface_level(self, cache, x, y, z)
+                router_preliminary_surface_level(self, cache, x as f64, y as f64, z as f64)
             }
 
             #[inline]
@@ -945,6 +988,7 @@ fn generate_noise_settings(dimension: &str, prefix: &str) -> TokenStream {
                 VEIN_INTERP_ENABLED
             }
 
+            #[inline]
             fn compute_noise_column(&self, x: i32, block_ys: &[i32], z: i32, out: &mut [f64]) {
                 self.blended_noise.compute_column(x, block_ys, z, out);
             }
@@ -952,6 +996,19 @@ fn generate_noise_settings(dimension: &str, prefix: &str) -> TokenStream {
             #[inline]
             fn fill_cell_corner_densities(&self, cache: &mut Self::ColumnCache, x: i32, y: i32, z: i32, blended_noise_value: f64, out: &mut [f64]) {
                 fill_cell_corner_densities(self, cache, x, y, z, blended_noise_value, out)
+            }
+
+            #[inline]
+            fn fill_cell_corner_densities_4x(
+                &self,
+                cache: &mut Self::ColumnCache,
+                x: i32,
+                ys: std::simd::f64x4,
+                z: i32,
+                blended_noise_values: std::simd::f64x4,
+                out: &mut [f64],
+            ) {
+                fill_cell_corner_densities_4x(self, cache, x, ys, z, blended_noise_values, out)
             }
 
             #[inline]

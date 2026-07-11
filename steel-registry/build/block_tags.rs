@@ -19,16 +19,15 @@ fn read_all_fabric_tags(tag_file: &str) -> FxHashMap<String, Vec<String>> {
         && let Ok(content) = fs::read_to_string(tag_file)
     {
         let tag: TagFile = serde_json::from_str(&content)
-            .unwrap_or_else(|e| panic!("Failed to parse {}: {}", tag_file, e));
+            .unwrap_or_else(|e| panic!("Failed to parse {tag_file}: {e}"));
         return tag.block;
     }
     FxHashMap::default()
 }
 
 pub(crate) fn build() -> TokenStream {
-    println!("cargo:rerun-if-changed=build_assets/builtin_datapacks/minecraft/tags/block/");
-
-    let tag_dir = "build_assets/builtin_datapacks/minecraft/tags/block";
+    let tag_dir = "../steel-utils/build_assets/builtin_datapacks/minecraft/tags/block";
+    println!("cargo:rerun-if-changed={tag_dir}");
     let mut all_tags = tag_utils::read_all_tags(tag_dir);
     all_tags.extend(read_all_fabric_tags("build_assets/tags.json"));
 
@@ -51,7 +50,7 @@ pub(crate) fn build() -> TokenStream {
             Span::call_site(),
         );
 
-        let block_strs = blocks.iter().map(|s| s.as_str());
+        let block_strs = blocks.iter().map(std::string::String::as_str);
 
         static_array.extend(quote! {
             static #tag_ident_array: &[&str] = &[#(#block_strs),*];

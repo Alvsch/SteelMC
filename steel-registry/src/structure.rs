@@ -92,6 +92,8 @@ crate::impl_registry_ext!(
 );
 crate::impl_tagged_registry!(StructureRegistry, structures_by_key, "structure");
 
+crate::impl_registry_entry_eq!(StructureData);
+
 impl crate::RegistryEntry for StructureData {
     fn key(&self) -> &Identifier {
         &self.key
@@ -250,7 +252,7 @@ pub enum StructureConfigData {
 
 impl StructureConfigData {
     #[must_use]
-    pub fn as_jigsaw(&self) -> Option<&JigsawConfig> {
+    pub const fn as_jigsaw(&self) -> Option<&JigsawConfig> {
         match self {
             Self::Jigsaw(config) => Some(config),
             _ => None,

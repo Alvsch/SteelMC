@@ -4,14 +4,20 @@ use std::str::FromStr;
 use std::sync::Weak;
 
 use glam::DVec3;
-use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtTag};
+use steel_macros::entity_behavior;
 use steel_registry::entity_type::EntityTypeRef;
-use steel_registry::vanilla_entities;
 use steel_utils::Identifier;
+use steel_utils::axis::Axis;
+use steel_utils::block_util::FoundRectangle;
 use steel_utils::locks::SyncMutex;
+use steel_utils::{DowncastType, DowncastTypeKey};
 
-use crate::entity::{Entity, EntityBase, EntityBaseLoad};
+use crate::entity::{
+    Entity, EntityBase, EntityBaseLoad, reset_forward_direction_of_relative_portal_position,
+};
+use crate::portal::portal_shape::PortalShape;
 use crate::world::World;
 
 /// Chest minecart entity state used by mineshaft generation.
@@ -19,9 +25,16 @@ use crate::world::World;
 /// Steel does not yet implement minecart movement or container interaction, so this
 /// entity currently preserves the vanilla placement and loot-table state that
 /// structure generation creates.
+#[entity_behavior(class = "MinecartChest")]
 pub struct ChestMinecartEntity {
     base: EntityBase,
+    entity_type: EntityTypeRef,
     state: SyncMutex<ChestMinecartState>,
+}
+
+// SAFETY: This key is owned by Steel and uniquely identifies `ChestMinecartEntity`.
+unsafe impl DowncastType for ChestMinecartEntity {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:entity/chest_minecart");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,23 +57,20 @@ impl ChestMinecartState {
 impl ChestMinecartEntity {
     /// Creates a new chest minecart entity.
     #[must_use]
-    pub fn new(id: i32, position: DVec3, world: Weak<World>) -> Self {
+    pub fn new(entity_type: EntityTypeRef, id: i32, position: DVec3, world: Weak<World>) -> Self {
         Self {
-            base: EntityBase::new(
-                id,
-                position,
-                vanilla_entities::CHEST_MINECART.dimensions,
-                world,
-            ),
+            base: EntityBase::new(id, position, entity_type.dimensions, world),
+            entity_type,
             state: SyncMutex::new(ChestMinecartState::new(true)),
         }
     }
 
     /// Creates a chest minecart entity from saved data.
     #[must_use]
-    pub fn from_saved(load: EntityBaseLoad) -> Self {
+    pub fn from_saved(entity_type: EntityTypeRef, load: EntityBaseLoad) -> Self {
         Self {
-            base: EntityBase::from_load(load, vanilla_entities::CHEST_MINECART.dimensions),
+            base: EntityBase::from_load(load, entity_type.dimensions),
+            entity_type,
             state: SyncMutex::new(ChestMinecartState::new(false)),
         }
     }
@@ -83,7 +93,7 @@ impl Entity for ChestMinecartEntity {
     }
 
     fn entity_type(&self) -> EntityTypeRef {
-        &vanilla_entities::CHEST_MINECART
+        self.entity_type
     }
 
     fn is_pickable(&self) -> bool {
@@ -96,6 +106,15 @@ impl Entity for ChestMinecartEntity {
 
     fn blocks_building(&self) -> bool {
         true
+    }
+
+    fn get_relative_portal_position(&self, axis: Axis, portal_area: FoundRectangle) -> DVec3 {
+        reset_forward_direction_of_relative_portal_position(PortalShape::get_relative_position(
+            portal_area,
+            axis,
+            self.position(),
+            self.dimensions_for_pose(self.pose()),
+        ))
     }
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
@@ -111,9 +130,7 @@ impl Entity for ChestMinecartEntity {
         }
     }
 
-    fn load_additional(&self, nbt: &BorrowedNbtCompound<'_>) {
-        let nbt: NbtCompoundView<'_, '_> = nbt.into();
-
+    fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         let loot_table = nbt
             .string("LootTable")
             .and_then(|value| Identifier::from_str(&value.to_string()).ok());
@@ -129,10 +146,16 @@ impl Entity for ChestMinecartEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use steel_registry::vanilla_entities;
 
     #[test]
     fn chest_minecart_saves_structure_loot_table_state() {
-        let minecart = ChestMinecartEntity::new(1, DVec3::new(1.5, 2.5, 3.5), Weak::new());
+        let minecart = ChestMinecartEntity::new(
+            &vanilla_entities::CHEST_MINECART,
+            1,
+            DVec3::new(1.5, 2.5, 3.5),
+            Weak::new(),
+        );
         minecart.set_loot_table(
             Identifier::new_static("minecraft", "chests/abandoned_mineshaft"),
             42,
@@ -152,10 +175,38 @@ mod tests {
 
     #[test]
     fn chest_minecart_is_pickable_and_pushable_like_vanilla() {
-        let minecart = ChestMinecartEntity::new(1, DVec3::new(1.5, 2.5, 3.5), Weak::new());
+        let minecart = ChestMinecartEntity::new(
+            &vanilla_entities::CHEST_MINECART,
+            1,
+            DVec3::new(1.5, 2.5, 3.5),
+            Weak::new(),
+        );
 
         assert!(minecart.is_pickable());
         assert!(minecart.is_pushable());
         assert!(minecart.blocks_building());
+    }
+
+    #[test]
+    fn chest_minecart_relative_portal_position_resets_forward_offset() {
+        let minecart = ChestMinecartEntity::new(
+            &vanilla_entities::CHEST_MINECART,
+            1,
+            DVec3::new(12.0, 66.0, 20.75),
+            Weak::new(),
+        );
+        let portal_area = FoundRectangle {
+            min_corner: steel_utils::BlockPos::new(10, 64, 20),
+            axis1_size: 4,
+            axis2_size: 5,
+        };
+
+        assert!(
+            minecart
+                .get_relative_portal_position(Axis::X, portal_area)
+                .z
+                .abs()
+                < f64::EPSILON
+        );
     }
 }

@@ -15,7 +15,7 @@ use crate::{
 pub struct Item {
     pub key: Identifier,
     pub components: DataComponentMap,
-    /// The item key returned when this item is used in crafting (e.g., "bucket" from milk_bucket).
+    /// The item key returned when this item is used in crafting (e.g., "bucket" from `milk_bucket`).
     /// Stored as an Identifier to avoid circular reference issues during initialization.
     pub craft_remainder: Option<Identifier>,
     /// Cached registry ID, set during registration for O(1) lookup on hot paths.
@@ -61,7 +61,7 @@ impl Item {
     }
 
     /// Returns the item stack that remains after this item is used in crafting.
-    /// For example, milk_bucket returns an empty bucket.
+    /// For example, `milk_bucket` returns an empty bucket.
     #[must_use]
     pub fn get_crafting_remainder(&self) -> ItemStack {
         match &self.craft_remainder {
@@ -83,15 +83,6 @@ impl Item {
 }
 
 pub type ItemRef = &'static Item;
-
-impl PartialEq for ItemRef {
-    #[expect(clippy::disallowed_methods)] // This IS the PartialEq impl; ptr::eq is correct here
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(*self, *other)
-    }
-}
-
-impl Eq for ItemRef {}
 
 pub struct ItemRegistry {
     items_by_id: Vec<ItemRef>,
@@ -142,6 +133,8 @@ impl ItemRegistry {
 
 crate::impl_registry_ext!(ItemRegistry, Item, items_by_id, items_by_key);
 crate::impl_tagged_registry!(ItemRegistry, items_by_key, "item");
+
+crate::impl_registry_entry_eq!(Item);
 
 impl crate::RegistryEntry for Item {
     fn key(&self) -> &Identifier {

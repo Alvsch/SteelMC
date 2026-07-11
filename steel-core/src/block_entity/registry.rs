@@ -16,7 +16,10 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId};
 
 use super::SharedBlockEntity;
-use super::entities::{BarrelBlockEntity, BeehiveBlockEntity, RawBlockEntity, SignBlockEntity};
+use super::entities::{
+    BarrelBlockEntity, BeehiveBlockEntity, EndGatewayBlockEntity, EndPortalBlockEntity,
+    PotentSulfurBlockEntity, RawBlockEntity, SignBlockEntity,
+};
 use crate::world::World;
 
 /// Factory function type for creating block entities.
@@ -248,6 +251,32 @@ pub fn init_block_entities() {
     registry.register(&vanilla_block_entity_types::BEEHIVE, |level, pos, state| {
         Arc::new(SyncMutex::new(BeehiveBlockEntity::new(level, pos, state)))
     });
+
+    // Register End gateway block entity factory
+    registry.register(
+        &vanilla_block_entity_types::END_GATEWAY,
+        |level, pos, state| {
+            Arc::new(SyncMutex::new(EndGatewayBlockEntity::new(
+                level, pos, state,
+            )))
+        },
+    );
+
+    // Register End portal block entity factory
+    registry.register(
+        &vanilla_block_entity_types::END_PORTAL,
+        |level, pos, state| Arc::new(SyncMutex::new(EndPortalBlockEntity::new(level, pos, state))),
+    );
+
+    // Register potent sulfur block entity factory
+    registry.register(
+        &vanilla_block_entity_types::POTENT_SULFUR,
+        |level, pos, state| {
+            Arc::new(SyncMutex::new(PotentSulfurBlockEntity::new(
+                level, pos, state,
+            )))
+        },
+    );
 
     assert!(
         BLOCK_ENTITIES.set(registry).is_ok(),

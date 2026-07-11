@@ -1,4 +1,6 @@
-use crate::shared_structs::{BiomeCondition, SpawnConditionEntry, TextComponentJson};
+use crate::shared_structs::{
+    BiomeCondition, BiomeConditionTarget, SpawnConditionEntry, TextComponentJson,
+};
 use heck::ToShoutySnakeCase;
 use proc_macro2::TokenStream;
 use proc_macro2::{Ident, Span};
@@ -48,12 +50,11 @@ pub fn generate_option<T, F>(opt: &Option<T>, f: F) -> TokenStream
 where
     F: FnOnce(&T) -> TokenStream,
 {
-    match opt {
-        Some(val) => {
-            let inner = f(val);
-            quote! { Some(#inner) }
-        }
-        None => quote! { None },
+    if let Some(val) = opt {
+        let inner = f(val);
+        quote! { Some(#inner) }
+    } else {
+        quote! { None }
     }
 }
 
@@ -67,12 +68,25 @@ where
 
 pub fn generate_biome_condition(condition: &BiomeCondition) -> TokenStream {
     let condition_type = condition.condition_type.as_str();
-    let biomes = condition.biomes.as_str();
+    let biomes = generate_biome_condition_target(&condition.biomes);
 
     quote! {
         BiomeCondition {
             condition_type: #condition_type,
             biomes: #biomes,
+        }
+    }
+}
+
+fn generate_biome_condition_target(target: &BiomeConditionTarget) -> TokenStream {
+    match target {
+        BiomeConditionTarget::Tag(tag) => {
+            let tag = generate_identifier(tag);
+            quote! { crate::shared_structs::BiomeConditionTarget::Tag(#tag) }
+        }
+        BiomeConditionTarget::Direct(biome) => {
+            let biome = generate_identifier(biome);
+            quote! { crate::shared_structs::BiomeConditionTarget::Direct(#biome) }
         }
     }
 }
@@ -96,7 +110,7 @@ pub fn generate_text_component(component: &TextComponentJson) -> TokenStream {
 }
 
 pub fn read_variants_from_dir<T: serde::de::DeserializeOwned>(subdir: &str) -> Vec<(String, T)> {
-    let dir = format!("build_assets/builtin_datapacks/minecraft/{subdir}");
+    let dir = format!("../steel-utils/build_assets/builtin_datapacks/minecraft/{subdir}");
     println!("cargo:rerun-if-changed={dir}/");
     let mut out = Vec::new();
     for entry in fs::read_dir(&dir).unwrap_or_else(|e| panic!("Failed to read {dir}: {e}")) {
@@ -114,7 +128,7 @@ pub fn read_variants_from_dir<T: serde::de::DeserializeOwned>(subdir: &str) -> V
         let content = fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
         let value: T = serde_json::from_str(&content)
-            .unwrap_or_else(|e| panic!("Failed to parse {}: {}", name, e));
+            .unwrap_or_else(|e| panic!("Failed to parse {name}: {e}"));
         out.push((name, value));
     }
     let order = vanilla_variant_order(subdir);

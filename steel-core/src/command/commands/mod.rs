@@ -12,6 +12,7 @@ pub mod kill;
 pub mod list;
 pub mod locate;
 pub mod seed;
+pub mod setworldspawn;
 pub mod steel;
 pub mod stop;
 pub mod summon;
@@ -847,10 +848,6 @@ impl<S, A, E1> CommandParserArgumentExecutor<S, A, E1> {
 
 type SplitLeafExecutor<S, E1, E2> =
     CommandParserSplitExecutor<S, E1, CommandParserLeafExecutor<S, E2>>;
-
-// ============================================================================
-// Dynamic command building support
-// ============================================================================
 
 /// A boxed command parser executor that allows dynamic command tree construction.
 /// This enables building command trees in loops where the concrete type changes each iteration.

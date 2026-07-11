@@ -1,4 +1,8 @@
 //! Crafting recipe types (shaped and shapeless).
+#![expect(
+    clippy::unwrap_used,
+    reason = "crafting recipe tests unwrap known valid generated item stacks"
+)]
 
 use steel_utils::Identifier;
 
@@ -18,7 +22,7 @@ pub enum CraftingCategory {
 impl CraftingCategory {
     /// Parses a category from a JSON string.
     #[must_use]
-    pub fn parse_json(s: &str) -> Self {
+    pub const fn parse_json(s: &str) -> Self {
         match s {
             "building" => Self::Building,
             "redstone" => Self::Redstone,
@@ -103,7 +107,7 @@ impl ShapedRecipe {
 
     /// Returns true if this recipe fits in a 2x2 grid.
     #[must_use]
-    pub fn fits_in_2x2(&self) -> bool {
+    pub const fn fits_in_2x2(&self) -> bool {
         self.width <= 2 && self.height <= 2
     }
 
@@ -184,7 +188,7 @@ pub struct ShapelessRecipe {
 impl ShapelessRecipe {
     /// Returns true if this recipe fits in a 2x2 grid.
     #[must_use]
-    pub fn fits_in_2x2(&self) -> bool {
+    pub const fn fits_in_2x2(&self) -> bool {
         self.ingredients.len() <= 4
     }
 
@@ -252,10 +256,18 @@ pub enum CraftingRecipe {
     Shapeless(&'static ShapelessRecipe),
 }
 
+impl PartialEq for CraftingRecipe {
+    fn eq(&self, other: &Self) -> bool {
+        self.id() == other.id()
+    }
+}
+
+impl Eq for CraftingRecipe {}
+
 impl CraftingRecipe {
     /// Returns the recipe identifier.
     #[must_use]
-    pub fn id(&self) -> &Identifier {
+    pub const fn id(&self) -> &Identifier {
         match self {
             Self::Shaped(r) => &r.id,
             Self::Shapeless(r) => &r.id,
@@ -264,7 +276,7 @@ impl CraftingRecipe {
 
     /// Returns the recipe category.
     #[must_use]
-    pub fn category(&self) -> CraftingCategory {
+    pub const fn category(&self) -> CraftingCategory {
         match self {
             Self::Shaped(r) => r.category,
             Self::Shapeless(r) => r.category,
@@ -273,7 +285,7 @@ impl CraftingRecipe {
 
     /// Returns the result of this recipe.
     #[must_use]
-    pub fn result(&self) -> &RecipeResult {
+    pub const fn result(&self) -> &RecipeResult {
         match self {
             Self::Shaped(r) => &r.result,
             Self::Shapeless(r) => &r.result,
@@ -310,7 +322,7 @@ impl CraftingRecipe {
 
     /// Returns true if this recipe fits in a 2x2 grid.
     #[must_use]
-    pub fn fits_in_2x2(&self) -> bool {
+    pub const fn fits_in_2x2(&self) -> bool {
         match self {
             Self::Shaped(r) => r.fits_in_2x2(),
             Self::Shapeless(r) => r.fits_in_2x2(),
@@ -427,13 +439,13 @@ impl CraftingInput {
 
     /// Returns the number of non-empty items (pre-computed).
     #[must_use]
-    pub fn ingredient_count(&self) -> usize {
+    pub const fn ingredient_count(&self) -> usize {
         self.ingredient_count
     }
 
     /// Returns true if the input is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.ingredient_count == 0
     }
 }
@@ -472,7 +484,7 @@ impl PositionedCraftingInput {
     /// # Returns
     /// The slot index in the original crafting grid.
     #[must_use]
-    pub fn to_grid_slot(&self, x: usize, y: usize, grid_width: usize) -> usize {
+    pub const fn to_grid_slot(&self, x: usize, y: usize, grid_width: usize) -> usize {
         (x + self.left) + (y + self.top) * grid_width
     }
 }

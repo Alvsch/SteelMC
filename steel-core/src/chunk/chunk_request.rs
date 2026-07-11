@@ -23,8 +23,12 @@ pub enum ChunkTicketKind {
     SpawnSearch,
     /// Candidate chunks loaded by structure location queries.
     StructureLocate,
+    /// Chunks loaded by startup pregeneration.
+    Pregen,
     /// Generic command-owned chunk request.
     Command,
+    /// Chunks loaded while preparing a portal destination.
+    Portal,
 }
 
 /// Request for a set of chunks at a minimum generation status.
@@ -129,8 +133,8 @@ impl ChunkRequestHandle {
             .map_or(&[], |inner| inner.positions.as_ref())
     }
 
-    /// Polls request readiness and schedules target-status generation for
-    /// holders that already exist and are allowed by ticket propagation.
+    /// Polls request readiness. Chunk holder creation and generation scheduling
+    /// are owned by the chunk scheduling tick.
     #[must_use]
     pub fn poll(&self) -> ChunkRequestState {
         let Some(inner) = &self.inner else {
@@ -152,11 +156,6 @@ impl ChunkRequestHandle {
 
             if holder.try_chunk(inner.status).is_some() {
                 ready += 1;
-                continue;
-            }
-
-            if !holder.is_status_disallowed(inner.status) {
-                holder.schedule_chunk_generation_task_b(inner.status, &inner.chunk_map);
             }
         }
 
@@ -219,9 +218,8 @@ impl Drop for ChunkRequestHandle {
 impl ChunkMap {
     /// Adds tickets for a chunk request and returns a pollable handle.
     ///
-    /// The returned handle owns the tickets. Polling the handle may enqueue
-    /// generation work for holders created by the chunk scheduling tick, but it
-    /// never creates holders itself.
+    /// The returned handle owns the tickets. Holder creation and generation
+    /// scheduling are handled by the chunk scheduling tick.
     #[must_use]
     pub fn request_chunks(self: &Arc<Self>, request: ChunkRequest) -> ChunkRequestHandle {
         ChunkRequestHandle::new(self.clone(), request)

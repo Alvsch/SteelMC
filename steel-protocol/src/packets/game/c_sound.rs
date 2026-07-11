@@ -1,8 +1,9 @@
+use glam::{DVec3, IVec3};
 use steel_macros::{ClientPacket, WriteTo};
 use steel_registry::packets::play::C_SOUND;
 use steel_registry::sound_event::SoundEventRef;
 
-/// Sound source categories (matches vanilla SoundSource enum order).
+/// Sound source categories (matches vanilla `SoundSource` enum order).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SoundSource {
@@ -20,9 +21,9 @@ pub enum SoundSource {
 }
 
 impl SoundSource {
-    /// Returns the VarInt value for the enum.
+    /// Returns the `VarInt` value for the enum.
     #[must_use]
-    pub fn as_varint(self) -> i32 {
+    pub const fn as_varint(self) -> i32 {
         self as i32
     }
 }
@@ -34,21 +35,17 @@ impl SoundSource {
 #[derive(WriteTo, ClientPacket, Clone, Debug)]
 #[packet_id(Play = C_SOUND)]
 pub struct CSound {
-    /// The holder-encoded sound event ID (VarInt).
+    /// The holder-encoded sound event ID (`VarInt`).
     ///
     /// Vanilla reserves `0` for direct sound events, so registered sound events
     /// are encoded as `registry_id + 1`.
     #[write(as = VarInt)]
     pub sound_id: i32,
-    /// The sound source category (VarInt).
+    /// The sound source category (`VarInt`).
     #[write(as = VarInt)]
     pub source: i32,
     /// X position multiplied by 8 (fixed-point).
-    pub x: i32,
-    /// Y position multiplied by 8 (fixed-point).
-    pub y: i32,
-    /// Z position multiplied by 8 (fixed-point).
-    pub z: i32,
+    pub pos: IVec3,
     /// Volume (1.0 = normal).
     pub volume: f32,
     /// Pitch (1.0 = normal).
@@ -68,13 +65,10 @@ impl CSound {
     /// * `pitch` - Pitch multiplier (1.0 = normal)
     /// * `seed` - Random seed for sound variations
     #[must_use]
-    #[expect(clippy::too_many_arguments)]
     pub fn new(
         sound: SoundEventRef,
         source: SoundSource,
-        x: f64,
-        y: f64,
-        z: f64,
+        pos: DVec3,
         volume: f32,
         pitch: f32,
         seed: i64,
@@ -82,9 +76,11 @@ impl CSound {
         Self {
             sound_id: sound.packet_holder_id(),
             source: source.as_varint(),
-            x: (x * 8.0) as i32,
-            y: (y * 8.0) as i32,
-            z: (z * 8.0) as i32,
+            pos: IVec3::new(
+                (pos.x * 8.0) as i32,
+                (pos.y * 8.0) as i32,
+                (pos.z * 8.0) as i32,
+            ),
             volume,
             pitch,
             seed,
@@ -110,9 +106,7 @@ impl CSound {
         Self::new(
             sound,
             SoundSource::Blocks,
-            f64::from(pos.x()) + 0.5,
-            f64::from(pos.y()) + 0.5,
-            f64::from(pos.z()) + 0.5,
+            pos.0.as_dvec3().map(|v| v + 0.5),
             volume,
             pitch,
             seed,
@@ -124,7 +118,7 @@ impl CSound {
 mod tests {
     use std::sync::Once;
 
-    use steel_registry::{REGISTRY, Registry, sound_events};
+    use steel_registry::{REGISTRY, Registry, RegistryEntry, sound_events};
     use steel_utils::BlockPos;
 
     use super::CSound;
@@ -151,10 +145,11 @@ mod tests {
             0,
         );
 
+        let expected_holder_id = sound_events::BLOCK_WOODEN_BUTTON_CLICK_ON.id() as i32 + 1;
         assert_eq!(
             sound_events::BLOCK_WOODEN_BUTTON_CLICK_ON.packet_holder_id(),
-            1841
+            expected_holder_id
         );
-        assert_eq!(packet.sound_id, 1841);
+        assert_eq!(packet.sound_id, expected_holder_id);
     }
 }

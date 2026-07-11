@@ -3,7 +3,6 @@
 //! Signs store text on both front and back sides, along with color and glow
 //! information.
 
-use std::any::Any;
 use std::array;
 use std::sync::{Arc, Weak};
 
@@ -15,11 +14,11 @@ use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::loot_table::DyeColor;
 use steel_registry::vanilla_block_entity_types;
-use steel_utils::{BlockPos, BlockStateId};
+use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 use text_components::{TextComponent, content::Content};
 use uuid::Uuid;
 
-use crate::block_entity::BlockEntity;
+use crate::block_entity::{BlockEntity, BlockEntityTickAction};
 use crate::entity::Entity;
 use crate::world::World;
 
@@ -151,6 +150,12 @@ pub struct SignBlockEntity {
     player_who_may_edit: Option<Uuid>,
 }
 
+// SAFETY: This key identifies Steel's shared sign implementation for both sign
+// registry entries, rather than either registry entry itself.
+unsafe impl DowncastType for SignBlockEntity {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:block_entity/sign");
+}
+
 impl SignBlockEntity {
     /// Creates a new sign block entity.
     #[must_use]
@@ -233,14 +238,6 @@ impl SignBlockEntity {
 }
 
 impl BlockEntity for SignBlockEntity {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
     fn get_type(&self) -> BlockEntityTypeRef {
         self.block_entity_type
     }
@@ -320,7 +317,7 @@ impl BlockEntity for SignBlockEntity {
         self.player_who_may_edit.is_some()
     }
 
-    fn tick(&mut self, world: &Arc<World>) {
+    fn tick(&mut self, world: &Arc<World>) -> Option<BlockEntityTickAction> {
         // Clear the edit lock if the editing player is too far away or gone
         if let Some(editor_uuid) = self.player_who_may_edit {
             let should_clear = world
@@ -340,6 +337,7 @@ impl BlockEntity for SignBlockEntity {
                 self.player_who_may_edit = None;
             }
         }
+        None
     }
 }
 

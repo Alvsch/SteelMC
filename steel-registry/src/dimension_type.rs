@@ -86,6 +86,14 @@ pub struct DimensionType {
     pub background_music: Option<BackgroundMusic>,
 }
 
+impl DimensionType {
+    /// Returns vanilla `DimensionType.getTeleportationScale`.
+    #[must_use]
+    pub fn get_teleportation_scale(last_dimension_type: &Self, new_dimension_type: &Self) -> f64 {
+        last_dimension_type.coordinate_scale / new_dimension_type.coordinate_scale
+    }
+}
+
 /// Represents the complex structure for monster spawn light level.
 #[derive(Debug)]
 pub enum MonsterSpawnLightLevel {
@@ -289,15 +297,6 @@ impl ToNbtTag for &DimensionType {
 
 pub type DimensionTypeRef = &'static DimensionType;
 
-impl PartialEq for DimensionTypeRef {
-    #[expect(clippy::disallowed_methods)] // This IS the PartialEq impl; ptr::eq is correct here
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(*self, *other)
-    }
-}
-
-impl Eq for DimensionTypeRef {}
-
 pub struct DimensionTypeRegistry {
     dimension_types_by_id: Vec<DimensionTypeRef>,
     dimension_types_by_key: FxHashMap<Identifier, usize>,
@@ -335,3 +334,25 @@ crate::impl_registry!(
     dimension_types_by_key,
     dimension_types
 );
+
+#[cfg(test)]
+mod tests {
+    use crate::dimension_type::DimensionType;
+    use crate::vanilla_dimension_types::{OVERWORLD, THE_END, THE_NETHER};
+
+    #[test]
+    fn teleportation_scale_matches_vanilla_coordinate_ratio() {
+        assert_eq!(
+            DimensionType::get_teleportation_scale(&OVERWORLD, &THE_NETHER),
+            0.125
+        );
+        assert_eq!(
+            DimensionType::get_teleportation_scale(&THE_NETHER, &OVERWORLD),
+            8.0
+        );
+        assert_eq!(
+            DimensionType::get_teleportation_scale(&THE_END, &THE_NETHER),
+            0.125
+        );
+    }
+}

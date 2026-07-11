@@ -14,7 +14,7 @@ use steel_registry::blocks::properties::{BlockStateProperties, Direction};
 use steel_registry::blocks::shapes::SupportType;
 use steel_registry::vanilla_blocks;
 use steel_utils::locks::SyncMutex;
-use steel_utils::{BlockPos, BlockStateId};
+use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::InventoryAccess;
 use crate::behavior::block::BlockBehavior;
@@ -143,7 +143,7 @@ fn can_wall_sign_survive(world: &dyn LevelReader, pos: BlockPos, facing: Directi
 fn can_ceiling_hanging_sign_survive(world: &dyn LevelReader, pos: BlockPos) -> bool {
     let above_pos = BlockPos::new(pos.x(), pos.y() + 1, pos.z());
     let above_state = world.get_block_state(above_pos);
-    above_state.is_face_sturdy_for(Direction::Down, SupportType::Center)
+    above_state.is_face_sturdy_for_at(above_pos, Direction::Down, SupportType::Center)
 }
 
 /// Checks if a wall hanging sign can attach to a neighboring block.
@@ -173,7 +173,7 @@ fn can_attach_to(
     }
 
     // Otherwise, check for sturdy face with FULL support
-    attach_state.is_face_sturdy_for(attach_face, SupportType::Full)
+    attach_state.is_face_sturdy_for_at(attach_pos, attach_face, SupportType::Full)
 }
 
 /// Checks if a wall hanging sign can survive at the given position.
@@ -244,7 +244,7 @@ fn try_open_sign_editor(
     };
 
     let mut guard = block_entity.lock();
-    let Some(sign) = guard.as_any_mut().downcast_mut::<SignBlockEntity>() else {
+    let Some(sign) = guard.downcast_mut::<SignBlockEntity>() else {
         return InteractionResult::Pass;
     };
 
@@ -312,7 +312,7 @@ impl BlockBehavior for StandingSignBlock {
 
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         // Check if we can place on the block below
-        if !can_support_standing_sign(context.world, context.relative_pos) {
+        if !can_support_standing_sign(context.world, context.place_pos) {
             return None;
         }
 
@@ -404,7 +404,7 @@ impl BlockBehavior for WallSignBlock {
             let facing = direction.opposite();
 
             // Check if sign can survive with this facing
-            if can_wall_sign_survive(context.world, context.relative_pos, facing) {
+            if can_wall_sign_survive(context.world, context.place_pos, facing) {
                 return Some(
                     self.block
                         .default_state()
@@ -482,20 +482,21 @@ impl BlockBehavior for CeilingHangingSignBlock {
 
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         // Check if we can hang from the block above
-        if !can_ceiling_hanging_sign_survive(context.world, context.relative_pos) {
+        if !can_ceiling_hanging_sign_survive(context.world, context.place_pos) {
             return None;
         }
 
         let above_pos = BlockPos::new(
-            context.relative_pos.x(),
-            context.relative_pos.y() + 1,
-            context.relative_pos.z(),
+            context.place_pos.x(),
+            context.place_pos.y() + 1,
+            context.place_pos.z(),
         );
         let above_state = context.world.get_block_state(above_pos);
 
         // Determine if we should attach to the middle or not based on block above
         let direction = Direction::from_yaw(context.rotation);
-        let is_above_full = above_state.is_face_sturdy_for(Direction::Down, SupportType::Full);
+        let is_above_full =
+            above_state.is_face_sturdy_for_at(above_pos, Direction::Down, SupportType::Full);
 
         // Check if block above is also a hanging sign
         let above_block = REGISTRY.blocks.by_state_id(above_state);
@@ -634,7 +635,7 @@ impl BlockBehavior for WallHangingSignBlock {
             let facing = direction.opposite();
 
             // Check if sign can survive with this facing
-            if can_wall_hanging_sign_survive(context.world, context.relative_pos, facing) {
+            if can_wall_hanging_sign_survive(context.world, context.place_pos, facing) {
                 return Some(
                     self.block
                         .default_state()

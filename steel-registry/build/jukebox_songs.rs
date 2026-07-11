@@ -1,3 +1,8 @@
+#![expect(
+    clippy::unwrap_used,
+    reason = "build script must fail immediately on invalid extracted jukebox song data"
+)]
+
 use std::fs;
 
 use crate::generator_functions::{generate_sound_event_ref, generate_text_component};
@@ -17,9 +22,8 @@ pub struct JukeboxSongJson {
 }
 
 pub(crate) fn build() -> TokenStream {
-    println!("cargo:rerun-if-changed=build_assets/builtin_datapacks/minecraft/jukebox_song/");
-
-    let jukebox_song_dir = "build_assets/builtin_datapacks/minecraft/jukebox_song";
+    let jukebox_song_dir = "../steel-utils/build_assets/builtin_datapacks/minecraft/jukebox_song";
+    println!("cargo:rerun-if-changed={jukebox_song_dir}");
     let mut jukebox_songs = Vec::new();
 
     // Read all jukebox song JSON files
@@ -31,7 +35,7 @@ pub(crate) fn build() -> TokenStream {
             let jukebox_song_name = path.file_stem().unwrap().to_str().unwrap().to_string();
             let content = fs::read_to_string(&path).unwrap();
             let jukebox_song: JukeboxSongJson = serde_json::from_str(&content)
-                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", jukebox_song_name, e));
+                .unwrap_or_else(|e| panic!("Failed to parse {jukebox_song_name}: {e}"));
 
             jukebox_songs.push((jukebox_song_name, jukebox_song));
         }

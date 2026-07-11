@@ -25,13 +25,11 @@ use steel_utils::{
 };
 
 use super::component_data::{Component, ComponentData, ComponentDataDiscriminant};
-use super::components::ItemEnchantments;
+use super::components::{ItemAttributeModifiers, ItemEnchantments};
 use super::vanilla_components::{
     ATTRIBUTE_MODIFIERS, BREAK_SOUND, ENCHANTMENTS, LORE, MAX_STACK_SIZE, RARITY, REPAIR_COST,
     TOOLTIP_DISPLAY,
 };
-
-// ==================== DataComponentType ====================
 
 /// A typed handle for a data component.
 ///
@@ -70,8 +68,6 @@ impl<T> DataComponentType<T> {
         }
     }
 }
-
-// ==================== ComponentEntry ====================
 
 /// Reader function for deserializing a component from network format.
 pub type NetworkReader = fn(&mut Cursor<&[u8]>) -> Result<ComponentData>;
@@ -136,8 +132,6 @@ impl ComponentEntry {
 }
 
 pub type ComponentEntryRef = &'static ComponentEntry;
-
-// ==================== DataComponentRegistry ====================
 
 /// Registry of all data component types.
 ///
@@ -356,8 +350,6 @@ crate::impl_registry!(
     data_components
 );
 
-// ==================== DataComponentMap ====================
-
 /// Storage for component values.
 ///
 /// Maps component keys to their values. Used on items to store their data components.
@@ -391,7 +383,10 @@ impl DataComponentMap {
             ComponentData::Enchantments(ItemEnchantments::empty()),
         );
         map.insert(REPAIR_COST.key.clone(), ComponentData::I32(0));
-        map.insert(ATTRIBUTE_MODIFIERS.key.clone(), ComponentData::Todo);
+        map.insert(
+            ATTRIBUTE_MODIFIERS.key.clone(),
+            ComponentData::AttributeModifiers(ItemAttributeModifiers::empty()),
+        );
         map.insert(RARITY.key.clone(), ComponentData::Todo);
         map.insert(BREAK_SOUND.key.clone(), ComponentData::Todo);
         map.insert(TOOLTIP_DISPLAY.key.clone(), ComponentData::Todo);
@@ -487,10 +482,12 @@ impl DataComponentMap {
     }
 }
 
-// ==================== DataComponentPatch ====================
-
 /// Entry in a component patch.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "component patches keep set values inline to avoid changing shared item component storage semantics"
+)]
 pub enum ComponentPatchEntry {
     /// Component is set to this value
     Set(ComponentData),
@@ -646,8 +643,6 @@ impl DataComponentPatch {
     }
 }
 
-// ==================== Network Serialization ====================
-
 impl WriteTo for DataComponentPatch {
     fn write(&self, writer: &mut impl Write) -> Result<()> {
         use crate::{REGISTRY, RegistryExt};
@@ -761,7 +756,7 @@ impl ReadFrom for DataComponentPatch {
 }
 
 impl DataComponentPatch {
-    /// Reads a patch where each component value is prefixed with a VarInt byte length.
+    /// Reads a patch where each component value is prefixed with a `VarInt` byte length.
     ///
     /// Vanilla uses this for untrusted client packets (e.g., creative mode slot)
     /// via `DataComponentPatch.DELIMITED_STREAM_CODEC`.
@@ -838,8 +833,6 @@ impl DataComponentPatch {
     }
 }
 
-// ==================== NBT Serialization ====================
-
 impl ToNbtTag for DataComponentPatch {
     fn to_nbt_tag(self) -> OwnedNbtTag {
         self.to_nbt_tag_ref()
@@ -877,8 +870,6 @@ impl FromNbtTag for DataComponentPatch {
         Some(patch)
     }
 }
-
-// ==================== Helper Functions ====================
 
 /// Attempts to extract a typed component from `ComponentData`.
 #[must_use]
