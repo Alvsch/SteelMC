@@ -36,6 +36,8 @@ pub struct RuntimeConfig {
     pub online_mode: bool,
     /// Whether the server should use encryption.
     pub encryption: bool,
+    /// Whether vanilla floating/flying movement checks permit unauthorized flight.
+    pub allow_flight: bool,
     /// The message of the day.
     pub motd: String,
     /// Whether to use a favicon.
@@ -604,12 +606,10 @@ fn parse_difficulty(value: &str) -> Result<Difficulty, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use steel_registry::{REGISTRY, Registry};
+    use steel_registry::test_support::init_test_registry;
 
     fn registries() -> (WorldGeneratorRegistry, WorldStorageRegistry) {
-        let mut registry = Registry::new_vanilla();
-        registry.freeze();
-        let _ = REGISTRY.init(registry);
+        init_test_registry();
         let generators = WorldGeneratorRegistry::new_with_builtins()
             .expect("built-in generator registry should initialize");
         let storage = WorldStorageRegistry::new_with_builtins()

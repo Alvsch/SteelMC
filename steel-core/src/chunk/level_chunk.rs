@@ -30,10 +30,10 @@ use crate::chunk::{
     proto_chunk::ProtoChunk,
     section::Sections,
 };
-use crate::entity::{EntityStorage, SharedEntity};
+use crate::entity::SharedEntity;
 use crate::world::World;
-use crate::world::structure::{StructureReferenceMap, StructureStartMap};
 use crate::world::tick_scheduler::{BlockTick, BlockTickList, FluidTick, FluidTickList};
+use steel_worldgen::structure::{StructureReferenceMap, StructureStartMap};
 
 fn empty_postprocessing(height: i32) -> Box<[Vec<u16>]> {
     let section_count = (height / 16) as usize;
@@ -62,8 +62,6 @@ pub struct LevelChunk {
     level: Weak<World>,
     /// Block entities stored in this chunk.
     block_entities: BlockEntityStorage,
-    /// Entities stored in this chunk.
-    pub entities: EntityStorage,
     /// Scheduled block ticks pending in this chunk.
     pub block_ticks: SyncMutex<BlockTickList>,
     /// Scheduled fluid ticks pending in this chunk.
@@ -74,6 +72,14 @@ pub struct LevelChunk {
     pub structure_references: SyncRwLock<StructureReferenceMap>,
     /// Vanilla proto postprocessing offsets carried through promotion and drained once.
     postprocessing: SyncMutex<Box<[Vec<u16>]>>,
+}
+
+/// Result of promoting a proto chunk to a full chunk.
+pub struct LevelChunkPromotion {
+    /// The promoted full chunk.
+    pub chunk: LevelChunk,
+    /// Entities that should be registered after the full chunk is published.
+    pub pending_entities: Vec<SharedEntity>,
 }
 
 impl LevelChunk {
@@ -93,7 +99,7 @@ impl LevelChunk {
     pub fn tick(
         &self,
         random_tick_speed: u32,
-        tick_count: i32,
+        _tick_count: i32,
         ready_block_ticks: &mut Vec<BlockTick>,
         ready_fluid_ticks: &mut Vec<FluidTick>,
     ) {
@@ -103,15 +109,6 @@ impl LevelChunk {
 
         // Tick block entities regardless of random tick speed
         self.tick_block_entities();
-
-        // Tick entities in this chunk
-        if let Some(world) = self.get_level() {
-            let ticked_entities = self.entities.tick(&world, self.pos, tick_count);
-            if ticked_entities {
-                // Mark chunk dirty since entity state may have changed
-                self.dirty.store(true, Ordering::Release);
-            }
-        }
 
         if random_tick_speed == 0 {
             return;
@@ -191,7 +188,7 @@ impl LevelChunk {
         min_y: i32,
         height: i32,
         level: Weak<World>,
-    ) -> Self {
+    ) -> LevelChunkPromotion {
         // Ensure full chunks always have populated final heightmaps. Some stages
         // may not touch blocks (carvers are currently empty), so lazy final
         // heightmaps are not guaranteed to exist before promotion.
@@ -212,10 +209,14 @@ impl LevelChunk {
         let structure_starts = proto_chunk.structure_starts.into_inner();
         let structure_references = proto_chunk.structure_references.into_inner();
         let postprocessing = proto_chunk.postprocessing.into_inner();
+        let block_ticks = proto_chunk.block_ticks.into_inner();
+        let fluid_ticks = proto_chunk.fluid_ticks.into_inner();
+        let block_entities = proto_chunk.block_entities;
+        let pending_entities = proto_chunk.entities.get_all();
 
         Self::populate_poi(&level, &proto_chunk.sections, proto_chunk.pos, min_y);
 
-        Self {
+        let chunk = Self {
             sections: proto_chunk.sections,
             pos: proto_chunk.pos,
             dirty: AtomicBool::new(proto_chunk.dirty.load(Ordering::Acquire)),
@@ -223,13 +224,16 @@ impl LevelChunk {
             min_y,
             height,
             level,
-            block_entities: BlockEntityStorage::new(),
-            entities: EntityStorage::new(),
-            block_ticks: SyncMutex::new(BlockTickList::new()),
-            fluid_ticks: SyncMutex::new(FluidTickList::new()),
+            block_entities,
+            block_ticks: SyncMutex::new(block_ticks),
+            fluid_ticks: SyncMutex::new(fluid_ticks),
             structure_starts: SyncRwLock::new(structure_starts),
             structure_references: SyncRwLock::new(structure_references),
             postprocessing: SyncMutex::new(postprocessing),
+        };
+        LevelChunkPromotion {
+            chunk,
+            pending_entities,
         }
     }
 
@@ -282,7 +286,6 @@ impl LevelChunk {
             height,
             level,
             block_entities: BlockEntityStorage::new(),
-            entities: EntityStorage::new(),
             block_ticks: SyncMutex::new(block_ticks),
             fluid_ticks: SyncMutex::new(fluid_ticks),
             structure_starts: SyncRwLock::new(structure_starts),
@@ -461,46 +464,6 @@ impl LevelChunk {
         self.mark_unsaved();
     }
 
-    /// Adds an entity to this chunk and registers it with all world systems.
-    ///
-    /// This is the main entry point for adding entities. It handles:
-    /// 1. Adding to chunk's entity storage
-    /// 2. Setting up the level callback for position tracking
-    /// 3. Registering in entity cache for fast lookups
-    /// 4. Adding to entity tracker and sending spawn packets to nearby players
-    /// 5. Marking the chunk dirty for persistence
-    ///
-    /// Returns `false` if the world reference is no longer valid.
-    pub fn add_and_register_entity(&self, entity: SharedEntity) -> bool {
-        use crate::entity::EntityChunkCallback;
-
-        let Some(world) = self.level.upgrade() else {
-            return false;
-        };
-
-        // Add to chunk storage
-        self.entities.add(entity.clone());
-
-        // Set up callback for chunk/section tracking
-        let callback = Arc::new(EntityChunkCallback::new(&entity, Arc::downgrade(&world)));
-        entity.set_level_callback(callback);
-
-        // Register in entity cache (for fast lookups)
-        world.entity_cache().register(&entity);
-
-        // Add to entity tracker and send spawn packets to nearby players
-        world.entity_tracker().add(
-            &entity,
-            |chunk| world.player_area_map.get_tracking_players(chunk),
-            |id| world.players.get_by_entity_id(id),
-        );
-
-        // Mark chunk dirty for persistence
-        self.mark_unsaved();
-
-        true
-    }
-
     /// Updates the ticking status of a block entity.
     ///
     /// Call this when a block entity's ticking status may have changed
@@ -584,11 +547,6 @@ impl LevelChunk {
         }
 
         let section = &self.sections.sections[section_index];
-
-        let was_empty = section.read().is_empty();
-        if was_empty && state.is_air() {
-            return None;
-        }
 
         let local_x = (pos.0.x & 15) as usize;
         let local_y = (y & 15) as usize;
