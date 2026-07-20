@@ -15,7 +15,7 @@ use steel_registry::{
     vanilla_items, vanilla_menu_types,
 };
 use steel_utils::{
-    BlockPos,
+    BlockPos, Identifier,
     locks::{IntoShared, Shared, SyncMutex},
 };
 use text_components::TextComponent;
@@ -156,7 +156,7 @@ impl AnvilKind {
         if !second.is_empty() {
             let has_stored_enchantments = second.has(STORED_ENCHANTMENTS);
 
-            if result.is_damageable_item() && first.is_valid_repair_item(second.item) {
+            if result.is_damageable_item() && first.is_valid_repair_item(second) {
                 let mut repair_per_unit =
                     result.get_damage_value().min(result.get_max_damage() / 4);
                 if repair_per_unit <= 0 {
@@ -218,7 +218,7 @@ impl AnvilKind {
                         .by_key(&ident)
                         .expect("should exist because we got it from item enchantments");
                     let mut can_apply = enchantment.can_enchant(first.item)
-                        || first.is(&vanilla_items::ITEMS.enchanted_book)
+                        || first.is(&vanilla_items::ENCHANTED_BOOK)
                         || player.has_infinite_materials();
 
                     for (existing_key, _) in first
@@ -266,17 +266,19 @@ impl AnvilKind {
         }
 
         //// --- Renaming ---
-        if let Some(name) = self.item_name.lock().as_ref() {
-            if name != &first.hover_name().to_string() {
+        let item_name = self.item_name.lock();
+        if let Some(name) = item_name.as_deref().filter(|name| !name.trim().is_empty()) {
+            if name != first.hover_name().to_string() {
                 rename_cost = 1;
                 additional_cost += rename_cost as u32;
-                result.set(CUSTOM_NAME, TextComponent::from(name.clone()));
+                result.set(CUSTOM_NAME, TextComponent::from(name.to_string()));
             }
         } else if first.has(CUSTOM_NAME) {
             rename_cost = 1;
             additional_cost += rename_cost as u32;
             result.remove(CUSTOM_NAME);
         }
+        drop(item_name);
 
         // Final cost calculation
         let total_cost = if additional_cost == 0 {
@@ -312,7 +314,9 @@ impl AnvilKind {
             if final_repair_cost > 0 {
                 result.set(REPAIR_COST, final_repair_cost);
             }
-            result.set_enchantments(enchantments.iter(), false);
+            let enchantments: Vec<(Identifier, u32)> =
+                enchantments.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            result.set_enchantments(&enchantments, false);
         }
 
         result_container.set_item(0, result.clone());
@@ -372,7 +376,7 @@ impl AnvilKind {
     }
 
     fn can_store_enchantments(item_stack: &ItemStack) -> bool {
-        item_stack.has(if item_stack.is(&vanilla_items::ITEMS.enchanted_book) {
+        item_stack.has(if item_stack.is(&vanilla_items::ENCHANTED_BOOK) {
             STORED_ENCHANTMENTS
         } else {
             ENCHANTMENTS

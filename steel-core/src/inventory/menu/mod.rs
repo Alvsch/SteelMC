@@ -7,6 +7,7 @@ mod kind;
 pub mod kinds;
 mod layout;
 
+use crate::inventory::container::Container as _;
 pub use behavior::{MenuBehavior, RemoteSlot};
 pub use builder::{
     ContainerSlots, DataSlot, FillDirection, MenuBuilder, PlayerInventorySections, Section,
@@ -15,12 +16,15 @@ pub use builder::{
 pub use grid::{GridPlacer, Rect, Region};
 pub use kind::{MenuKind, MenuKindType};
 pub(crate) use layout::MenuLayout;
+#[cfg(test)]
+use steel_utils::locks::Shared;
 
 use std::mem;
 
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef};
 use steel_utils::types::GameType;
 
+use crate::inventory::container::CraftingContainer;
 use crate::inventory::slots::slot::Slot;
 use crate::{
     inventory::lock::{ContainerId, ContainerLockGuard},
@@ -122,7 +126,7 @@ impl Menu {
             if return_to_inventory {
                 player.add_item_or_drop(carried);
             } else {
-                player.drop_item(carried, false, false);
+                let _ = player.drop_item(carried, false, false);
             }
         }
         self.layout
@@ -141,6 +145,47 @@ impl Menu {
         if let MenuKindType::Anvil(anvil) = kind {
             anvil.set_item_name(behavior, name, player);
         }
+    }
+
+    /// Clears or counts crafting-grid items in the base inventory menu using
+    /// vanilla `/clear` semantics, returning the number cleared or counted. A
+    /// no-op (returns 0) for any other menu.
+    pub(crate) fn clear_or_count_crafting_items(
+        &mut self,
+        predicate: &dyn Fn(&ItemStack) -> bool,
+        amount_to_remove: i32,
+        counting_only: bool,
+    ) -> i32 {
+        let MenuKindType::Inventory(kind) = &self.kind else {
+            return 0;
+        };
+        let crafting_id = kind.crafting_id();
+        let mut guard = self.behavior.lock_all_containers();
+        let Some(crafting) = guard.get_typed_mut::<CraftingContainer>(crafting_id) else {
+            return 0;
+        };
+
+        crafting.clear_or_count_matching_items(predicate, amount_to_remove, counting_only)
+    }
+
+    /// A shared handle to the base inventory menu's 2x2 crafting grid, or `None`
+    /// for any other menu.
+    #[cfg(test)]
+    pub(crate) fn crafting_container(&self) -> Option<Shared<CraftingContainer>> {
+        let MenuKindType::Inventory(kind) = &self.kind else {
+            return None;
+        };
+        Some(kind.crafting_container())
+    }
+
+    /// Recomputes the base inventory menu's crafting result. A no-op for any
+    /// other menu.
+    pub(crate) fn update_crafting_result(&mut self) {
+        let MenuKindType::Inventory(kind) = &self.kind else {
+            return;
+        };
+        let mut guard = self.behavior.lock_all_containers();
+        kind.update_result(&mut guard);
     }
 
     /// Recomputes recipe-driven slots after a change (delegates to the kind).

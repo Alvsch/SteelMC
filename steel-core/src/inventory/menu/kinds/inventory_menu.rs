@@ -103,6 +103,22 @@ impl InventoryKind {
     /// Slot index of the (virtual) crafting result.
     const RESULT_SLOT: usize = 0;
 
+    /// The `ContainerId` of the 2x2 crafting grid.
+    pub(crate) fn crafting_id(&self) -> ContainerId {
+        self.handler.crafting_id()
+    }
+
+    /// A shared handle to the 2x2 crafting grid container.
+    #[cfg(test)]
+    pub(crate) fn crafting_container(&self) -> Shared<CraftingContainer> {
+        self.handler.crafting_container()
+    }
+
+    /// Recomputes the crafting result from the current grid contents.
+    pub(crate) fn update_result(&self, guard: &mut ContainerLockGuard) {
+        self.handler.update_result(guard);
+    }
+
     /// Helper method to move items between inventory and hotbar.
     fn move_between_inventory_and_hotbar(
         &self,
@@ -288,7 +304,7 @@ impl MenuKind for InventoryKind {
             // Java: if (slotIndex == 0) { player.drop(stack, false); }
             // Drop any items from the result slot that couldn't fit in the inventory
             if !stack_mut.is_empty() {
-                player.drop_item(stack_mut, false, true);
+                let _ = player.drop_item(stack_mut, false, true);
             }
         }
 

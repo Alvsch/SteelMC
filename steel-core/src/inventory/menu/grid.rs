@@ -19,7 +19,7 @@
 //!
 //!     let items = b.grid(3, |g| {
 //!         let items = g.place(Rect::new(3, 1, 3, 1), storage);
-//!         g.paint_all(ItemStack::new(&vanilla_items::ITEMS.gray_stained_glass_pane));
+//!         g.paint_all(ItemStack::new(&vanilla_items::GRAY_STAINED_GLASS_PANE));
 //!         items
 //!     });
 //!

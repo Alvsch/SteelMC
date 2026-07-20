@@ -47,7 +47,7 @@ impl MenuLayout {
                 if return_to_inventory {
                     player.add_item_or_drop_with_guard(&mut guard, item);
                 } else {
-                    player.drop_item(item, false, false);
+                    let _ = player.drop_item(item, false, false);
                 }
             }
         }
@@ -126,7 +126,7 @@ impl MenuLayout {
             // Output that didn't fit in the inventory is dropped, matching
             // vanilla's result-slot shift-click (`player.drop(stack, false)`).
             if !remaining.is_empty() {
-                player.drop_item(remaining.clone(), false, true);
+                let _ = player.drop_item(remaining.clone(), false, true);
             }
         }
 

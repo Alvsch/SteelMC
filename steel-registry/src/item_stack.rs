@@ -5,8 +5,9 @@ use std::io::{Cursor, Result, Write};
 use rand::RngExt;
 
 use steel_utils::{
-    Identifier,
+    DowncastType, Identifier,
     codec::VarInt,
+    random::{Random, xoroshiro::Xoroshiro},
     serial::{ReadFrom, WriteTo},
 };
 use text_components::TextComponent;
@@ -15,21 +16,22 @@ use crate::{
     REGISTRY, RegistryEntry, RegistryExt,
     damage_type::DamageTypeRef,
     data_components::{
-        Component, ComponentData, ComponentPatchEntry, DataComponentMap, DataComponentPatch,
-        DataComponentType,
-        components::MAX_LORE_LINES,
+        Component, ComponentData, ComponentPatchEntry, CustomData, DataComponentMap,
+        DataComponentPatch, DataComponentType,
         vanilla_components::{
-            ATTACK_RANGE, ATTRIBUTE_MODIFIERS, AttackRange, CUSTOM_NAME, DAMAGE, DAMAGE_TYPE,
-            ENCHANTMENTS, EQUIPPABLE, Equippable, ITEM_NAME, ItemAttributeModifiers,
-            ItemEnchantments, ItemLore, LORE, MAX_DAMAGE, MAX_STACK_SIZE, MINIMUM_ATTACK_CHARGE,
-            PIERCING_WEAPON, PiercingWeapon, REPAIRABLE, STORED_ENCHANTMENTS, TOOL, Tool,
-            UNBREAKABLE, WEAPON, Weapon,
+            ATTACK_RANGE, ATTRIBUTE_MODIFIERS, AttackRange, BUNDLE_CONTENTS, CHARGED_PROJECTILES,
+            CONTAINER, CUSTOM_DATA, CUSTOM_NAME, DAMAGE, DAMAGE_RESISTANT, DAMAGE_TYPE,
+            ENCHANTABLE, ENCHANTMENTS, EQUIPPABLE, Equippable, ITEM_NAME, ItemAttributeModifiers,
+            ItemEnchantments, MAX_DAMAGE, MAX_STACK_SIZE, MINIMUM_ATTACK_CHARGE,
+            OMINOUS_BOTTLE_AMPLIFIER, OminousBottleAmplifier, PIERCING_WEAPON, PiercingWeapon,
+            REPAIRABLE, STORED_ENCHANTMENTS, TOOL, Tool, UNBREAKABLE, WEAPON, Weapon,
         },
     },
     enchantment_effect::EnchantmentEffectComponent,
     equipment::EquipmentSlot,
+    item_stack_template::ItemStackTemplate,
     items::ItemRef,
-    vanilla_items::ITEMS,
+    vanilla_items,
 };
 
 /// A stack of items with a count and component modifications.
@@ -54,7 +56,7 @@ impl ItemStack {
     #[must_use]
     pub fn empty() -> Self {
         Self {
-            item: &ITEMS.air,
+            item: &vanilla_items::AIR,
             count: 0,
             patch: DataComponentPatch::new(),
         }
@@ -78,11 +80,8 @@ impl ItemStack {
 
     /// Creates a new item stack with the specified count and component patch.
     #[must_use]
-    pub const fn with_count_and_patch(
-        item: ItemRef,
-        count: i32,
-        patch: DataComponentPatch,
-    ) -> Self {
+    pub fn with_count_and_patch(item: ItemRef, count: i32, mut patch: DataComponentPatch) -> Self {
+        patch.sanitize_against(&item.components);
         Self { item, count, patch }
     }
 
@@ -93,13 +92,13 @@ impl ItemStack {
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.item == &ITEMS.air || self.count <= 0
+        self.item == &*vanilla_items::AIR || self.count <= 0
     }
 
     #[must_use]
     pub fn item(&self) -> ItemRef {
         if self.is_empty() {
-            &ITEMS.air
+            &vanilla_items::AIR
         } else {
             self.item
         }
@@ -108,6 +107,11 @@ impl ItemStack {
     #[must_use]
     pub fn count(&self) -> i32 {
         if self.is_empty() { 0 } else { self.count }
+    }
+
+    #[must_use]
+    pub const fn components_patch(&self) -> &DataComponentPatch {
+        &self.patch
     }
 
     pub const fn set_count(&mut self, count: i32) {
@@ -211,7 +215,21 @@ impl ItemStack {
     ///
     /// Returns `true` if the item broke and should be removed/replaced.
     pub fn hurt_and_break(&mut self, amount: i32, has_infinite_materials: bool) -> bool {
-        if !self.is_damageable_item() || amount <= 0 {
+        let mut random = Xoroshiro::from_seed_unmixed(rand::rng().random());
+        self.hurt_and_break_with_random(amount, has_infinite_materials, &mut random)
+    }
+
+    /// Damages the item using the supplied random source for data-driven
+    /// `minecraft:item_damage` enchantment effects.
+    ///
+    /// Returns `true` if the item broke and should be removed/replaced.
+    pub fn hurt_and_break_with_random(
+        &mut self,
+        amount: i32,
+        has_infinite_materials: bool,
+        random: &mut impl Random,
+    ) -> bool {
+        if !self.is_damageable_item() {
             return false;
         }
 
@@ -219,14 +237,7 @@ impl ItemStack {
             return false;
         }
 
-        let unbreaking_level =
-            self.get_enchantment_level(&crate::vanilla_enchantments::UNBREAKING.key);
-        let mut effective_amount = 0;
-        for _ in 0..amount {
-            if should_consume_durability(unbreaking_level) {
-                effective_amount += 1;
-            }
-        }
+        let effective_amount = self.process_durability_change(amount, random);
 
         if effective_amount == 0 {
             return false;
@@ -247,6 +258,39 @@ impl ItemStack {
         }
 
         false
+    }
+
+    fn process_durability_change(&self, amount: i32, random: &mut impl Random) -> i32 {
+        if amount <= 0 {
+            return amount;
+        }
+
+        let Some(enchantments) = self.get_enchantments() else {
+            return amount;
+        };
+
+        let mut value = amount as f32;
+        for (key, level) in enchantments.iter() {
+            if *level == 0 {
+                continue;
+            }
+            let Some(enchantment) = REGISTRY.enchantments.by_key(key) else {
+                continue;
+            };
+
+            for effect in enchantment.effects.item_damage {
+                if effect.requirements.is_some_and(|requirements| {
+                    requirements.matches_item_context(self.item()) != Some(true)
+                }) {
+                    continue;
+                }
+                value = effect
+                    .effect
+                    .process_with_random(*level as i32, random, value);
+            }
+        }
+
+        value as i32
     }
 
     /// Returns true if this item has the specified component (by type).
@@ -294,7 +338,38 @@ impl ItemStack {
 
     #[must_use]
     pub fn max_stack_size(&self) -> i32 {
-        self.get(MAX_STACK_SIZE).copied().unwrap_or(64)
+        self.get(MAX_STACK_SIZE).copied().unwrap_or(1)
+    }
+
+    /// Validates the complete stack constraints enforced by Vanilla's `ItemStack.validateStrict`.
+    pub fn validate_strict(&self) -> Result<()> {
+        let max_stack_size = self.max_stack_size();
+        if self.has(MAX_DAMAGE) && max_stack_size > 1 {
+            return Err(std::io::Error::other(
+                "Item cannot be both damageable and stackable",
+            ));
+        }
+
+        if let Some(container) = self.get(CONTAINER) {
+            validate_contained_item_sizes(container.items().iter().flatten())?;
+        }
+
+        if let Some(bundle) = self.get(BUNDLE_CONTENTS) {
+            validate_contained_item_sizes(bundle.items())?;
+            bundle.validate_weight()?;
+        }
+
+        if let Some(projectiles) = self.get(CHARGED_PROJECTILES) {
+            validate_contained_item_sizes(projectiles.items())?;
+        }
+
+        if self.count > max_stack_size {
+            return Err(std::io::Error::other(format!(
+                "Item stack with stack size of {} was larger than maximum: {max_stack_size}",
+                self.count
+            )));
+        }
+        Ok(())
     }
 
     /// Returns the equippable component if this item has one.
@@ -334,28 +409,34 @@ impl ItemStack {
     /// Gets the effective value of a component, considering the patch and prototype.
     /// Returns `None` if the component is not present or has been removed.
     #[must_use]
-    pub fn get<T: Component>(&self, component: DataComponentType<T>) -> Option<&T> {
+    pub fn get<T: Component + DowncastType>(&self, component: DataComponentType<T>) -> Option<&T> {
         let data = self.get_effective_value_raw(&component.key)?;
-        T::from_data_ref(data)
+        data.downcast_ref::<T>()
     }
 
     /// Gets the effective value of a component, or returns the default value if not present.
     #[must_use]
-    pub fn get_or_default<T: Component>(&self, component: DataComponentType<T>, default: T) -> T {
+    pub fn get_or_default<T: Component + DowncastType + Clone>(
+        &self,
+        component: DataComponentType<T>,
+        default: T,
+    ) -> T {
         self.get(component).cloned().unwrap_or(default)
     }
 
     /// Sets a component value in this item's patch, overriding the prototype.
-    pub fn set<T: Component>(&mut self, component: DataComponentType<T>, value: T) {
-        let data = value.into_data();
-        if self.prototype().get_raw(&component.key) == Some(&data) {
+    pub fn set<T: Component + DowncastType>(&mut self, component: DataComponentType<T>, value: T) {
+        let value = ComponentData::new(value);
+        let is_default = self.prototype().get_raw(&component.key) == Some(&value);
+        if is_default {
             self.patch.clear(component);
         } else {
-            self.patch.set_data(component.key, data);
+            self.patch.set_component_data(component.key, value);
         }
     }
 
-    /// Removes a component from this item.
+    /// Removes a component from this item (marks it as removed in the patch).
+    /// This will hide the component even if it exists in the prototype.
     pub fn remove<T: 'static>(&mut self, component: DataComponentType<T>) {
         if self.prototype().get_raw(&component.key).is_some() {
             self.patch.remove(component);
@@ -404,6 +485,20 @@ impl ItemStack {
     #[must_use]
     pub fn get_damage_type(&self) -> Option<DamageTypeRef> {
         self.get(DAMAGE_TYPE).map(|component| component.damage_type)
+    }
+
+    /// Returns vanilla `ItemStack.canBeHurtBy` for a damage type.
+    #[must_use]
+    pub fn can_be_hurt_by(&self, damage_type: DamageTypeRef) -> bool {
+        self.get(DAMAGE_RESISTANT)
+            .is_none_or(|resistance| !resistance.is_resistant_to(damage_type))
+    }
+
+    /// Returns vanilla `ItemStack.isValidRepairItem`.
+    #[must_use]
+    pub fn is_valid_repair_item(&self, repair_item: &Self) -> bool {
+        self.get(REPAIRABLE)
+            .is_some_and(|repairable| repairable.is_valid_repair_item(repair_item))
     }
 
     /// Returns whether this item has the vanilla piercing weapon component.
@@ -456,13 +551,28 @@ impl ItemStack {
 
     #[must_use]
     pub fn get_enchantments(&self) -> Option<&ItemEnchantments> {
-        if self.has(STORED_ENCHANTMENTS) {
-            self.get(STORED_ENCHANTMENTS)
-        } else if self.has(ENCHANTMENTS) {
-            self.get(ENCHANTMENTS)
+        self.get(self.enchantment_component())
+    }
+
+    /// Vanilla `EnchantmentHelper.getComponentType`: enchanted books keep their
+    /// enchantments in `STORED_ENCHANTMENTS`; every other item uses
+    /// `ENCHANTMENTS`.
+    #[must_use]
+    fn enchantment_component(&self) -> DataComponentType<ItemEnchantments> {
+        if self.is(&vanilla_items::ENCHANTED_BOOK) {
+            STORED_ENCHANTMENTS
         } else {
-            None
+            ENCHANTMENTS
         }
+    }
+
+    /// Mirrors Vanilla's component-based `ItemStack.isEnchantable` check.
+    #[must_use]
+    pub fn is_enchantable(&self) -> bool {
+        self.has(ENCHANTABLE)
+            && self
+                .get(ENCHANTMENTS)
+                .is_some_and(ItemEnchantments::is_empty)
     }
 
     #[must_use]
@@ -594,12 +704,18 @@ impl ItemStack {
         // Parse the JSON and set each component in the patch
     }
 
-    /// Sets custom NBT data on this item (merges with existing `custom_data`).
-    pub const fn set_custom_data(&mut self, _tag: &str) {
-        // TODO: Implement when NBT/SNBT parsing is available
-        // 1. Parse the tag string as SNBT (Stringified NBT)
-        // 2. Merge it with existing CUSTOM_DATA component
-        // 3. Set the merged result as the new CUSTOM_DATA
+    /// Merges custom NBT data into this item's `custom_data` component.
+    pub fn set_custom_data(&mut self, value: &CustomData) {
+        let merged = self
+            .get(CUSTOM_DATA)
+            .cloned()
+            .unwrap_or_default()
+            .merged_with(value);
+        if merged.is_empty() {
+            self.remove(CUSTOM_DATA);
+        } else {
+            self.set(CUSTOM_DATA, merged);
+        }
     }
 
     /// Applies furnace smelting to convert this item (e.g., raw iron -> iron ingot).
@@ -630,10 +746,12 @@ impl ItemStack {
         // Parse the name as a text component and set CUSTOM_NAME or ITEM_NAME
     }
 
-    /// Sets the ominous bottle amplifier.
-    pub const fn set_ominous_bottle_amplifier(&mut self, _amplifier: i32) {
-        // TODO: Implement ominous bottle amplifier component
-        // Set the OMINOUS_BOTTLE_AMPLIFIER component
+    /// Sets the ominous bottle amplifier component.
+    pub fn set_ominous_bottle_amplifier(&mut self, amplifier: i32) {
+        self.set(
+            OMINOUS_BOTTLE_AMPLIFIER,
+            OminousBottleAmplifier::new(amplifier),
+        );
     }
 
     /// Sets the potion type for this item.
@@ -653,21 +771,10 @@ impl ItemStack {
         // Duration is determined by each effect's NumberProvider
     }
 
-    /// Sets the instrument for a goat horn.
-    pub const fn set_instrument<R: rand::Rng>(&mut self, _options: &Identifier, _rng: &mut R) {
-        // TODO: Implement instrument setting
-        // Pick a random instrument from the tag and set INSTRUMENT component
-    }
-
-    pub fn set_enchantments<'a>(
-        &mut self,
-        enchantments: impl IntoIterator<Item = (&'a Identifier, &'a u32)>,
-        add: bool,
-    ) {
+    pub fn set_enchantments(&mut self, enchantments: &[(Identifier, u32)], add: bool) {
         let mut current = self
-            .get(ENCHANTMENTS)
+            .get(self.enchantment_component())
             .cloned()
-            .or(self.get(STORED_ENCHANTMENTS).cloned())
             .unwrap_or_else(ItemEnchantments::empty);
 
         for (key, level) in enchantments {
@@ -679,34 +786,24 @@ impl ItemStack {
             }
         }
 
-        let component = if self.has(STORED_ENCHANTMENTS) {
-            STORED_ENCHANTMENTS
-        } else {
-            ENCHANTMENTS
-        };
-
-        if current.is_empty() {
-            self.clear(component);
-        } else {
-            self.set(component, current);
-        }
+        self.set(self.enchantment_component(), current);
     }
 
     /// Vanilla `ItemStack.enchant` → `Mutable.upgrade`: keeps the higher of existing vs new level.
     pub fn upgrade_enchantment(&mut self, enchantment: Identifier, level: u32) {
         let mut current = self
-            .get(ENCHANTMENTS)
+            .get(self.enchantment_component())
             .cloned()
             .unwrap_or_else(ItemEnchantments::empty);
         current.upgrade(enchantment, level);
-        self.set(ENCHANTMENTS, current);
+        self.set(self.enchantment_component(), current);
     }
 
     /// Changes the item type entirely.
     pub fn set_item(&mut self, new_item: &Identifier) {
         if let Some(item_ref) = REGISTRY.items.by_key(new_item) {
             self.item = item_ref;
-            // Note: Components patch may need adjustment for new item type
+            self.patch.sanitize_against(&item_ref.components);
         }
     }
 
@@ -721,41 +818,11 @@ impl ItemStack {
         // Set as CUSTOM_NAME component
     }
 
-    /// Sets lore lines on this item, applying the list operation to any existing lore.
-    pub fn set_lore(&mut self, lore: &[&str], mode: crate::loot_table::ListOperation) {
-        use crate::loot_table::ListOperation;
-
-        let new_lines: Vec<text_components::TextComponent> = lore
-            .iter()
-            .map(|line| text_components::TextComponent::plain((*line).to_string()))
-            .collect();
-        let mut lines = self.lore().map(|l| l.lines.clone()).unwrap_or_default();
-
-        match mode {
-            ListOperation::ReplaceAll => lines = new_lines,
-            ListOperation::ReplaceSection { offset, size } => {
-                let offset = (offset.max(0) as usize).min(lines.len());
-                let size = size.map_or(new_lines.len(), |s| s.max(0) as usize);
-                let end = offset.saturating_add(size).min(lines.len());
-                lines.splice(offset..end, new_lines);
-            }
-            ListOperation::InsertBefore { offset } => {
-                let index = (offset.max(0) as usize).min(lines.len());
-                lines.splice(index..index, new_lines);
-            }
-            ListOperation::InsertAfter { offset } => {
-                let index = (offset.max(0) as usize).saturating_add(1).min(lines.len());
-                lines.splice(index..index, new_lines);
-            }
-            ListOperation::Append => lines.extend(new_lines),
-        }
-
-        lines.truncate(MAX_LORE_LINES);
-        if lines.is_empty() {
-            self.remove(LORE);
-        } else {
-            self.set(LORE, ItemLore::new(lines));
-        }
+    /// Sets lore lines on this item.
+    pub const fn set_lore(&mut self, _lore: &[&str], _mode: crate::loot_table::ListOperation) {
+        // TODO: Implement lore setting
+        // Parse lore strings as text components and set LORE component
+        // Apply mode (replace, append, insert, etc.)
     }
 
     /// Sets container inventory contents.
@@ -878,22 +945,18 @@ impl ItemStack {
         // Set WRITABLE_BOOK_CONTENT pages
     }
 
-    /// Toggles tooltip visibility for components.
-    pub const fn toggle_tooltips(&mut self, _toggles: &[(Identifier, bool)]) {
-        // TODO: Implement tooltip toggling
-        // For each component, set its show_in_tooltip flag
-    }
+    /// Runs vanilla `ToggleTooltips`: each boolean says whether the component is shown.
+    pub fn toggle_tooltips(&mut self, toggles: &[(Identifier, bool)]) {
+        use crate::data_components::vanilla_components::{TOOLTIP_DISPLAY, TooltipDisplay};
 
-    /// Sets custom model data.
-    pub const fn set_custom_model_data(&mut self, _value: i32) {
-        // TODO: Implement custom model data setting
-        // Set CUSTOM_MODEL_DATA component
-    }
-
-    /// Returns the lore lines stored in the LORE component, if any.
-    #[must_use]
-    pub fn lore(&self) -> Option<&ItemLore> {
-        self.get(LORE)
+        let mut display = self
+            .get(TOOLTIP_DISPLAY)
+            .cloned()
+            .unwrap_or(TooltipDisplay::DEFAULT);
+        for (component, shown) in toggles {
+            display = display.with_hidden_key(component.clone(), !shown);
+        }
+        self.set(TOOLTIP_DISPLAY, display);
     }
 
     #[must_use]
@@ -938,46 +1001,37 @@ impl ItemStack {
         true
     }
 
-    /// Returns the custom name that is stored in the Data Components
-    /// In case of a written book the title is returned
+    /// Returns the custom name stored in the `CUSTOM_NAME` component, if any.
     #[must_use]
     pub fn custom_name(&self) -> Option<&TextComponent> {
         self.get(CUSTOM_NAME)
-        // TODO: WRITTEN_BOOK_CONTENT and titles
-        // let Some(book_content) = self.get(WRITTEN_BOOK_CONTENT) else {
-        //   return None;
-        //;
     }
 
+    /// Vanilla `ItemStack.getHoverName`: the custom name if set, otherwise the
+    /// item's default name.
     #[must_use]
     pub fn hover_name(&self) -> &TextComponent {
-        if let Some(custom_name) = self.custom_name() {
-            custom_name
-        } else {
-            self.get(ITEM_NAME).unwrap_or(&EMPTY)
-        }
-    }
-
-    pub fn is_valid_repair_item(&self, item: ItemRef) -> bool {
-        log::info!("is_valid_repair_item {:?}", item.key);
-        let Some(repairable) = self.get(REPAIRABLE) else {
-            log::error!("{:?} doesnt have a REPAIRABLE DataComponent", self.item.key);
-            return false;
-        };
-
-        repairable.is_valid_repair_item(item)
+        self.custom_name()
+            .or_else(|| self.get(ITEM_NAME))
+            .unwrap_or(&EMPTY_NAME)
     }
 }
 
-static EMPTY: TextComponent = TextComponent::new();
+static EMPTY_NAME: TextComponent = TextComponent::new();
 
-/// Vanilla unbreaking formula: `1 / (unbreaking_level + 1)` chance to consume durability.
-fn should_consume_durability(unbreaking_level: i32) -> bool {
-    if unbreaking_level <= 0 {
-        return true;
+fn validate_contained_item_sizes<'a>(
+    items: impl IntoIterator<Item = &'a ItemStackTemplate>,
+) -> Result<()> {
+    for item in items {
+        let max_stack_size = item.max_stack_size();
+        if item.count() > max_stack_size {
+            return Err(std::io::Error::other(format!(
+                "Item stack with count of {} was larger than maximum: {max_stack_size}",
+                item.count()
+            )));
+        }
     }
-    // TODO: Armor uses a different formula: `3 / (unbreaking_level + 3)`
-    rand::rng().random_range(0..unbreaking_level + 1) == 0
+    Ok(())
 }
 
 impl std::fmt::Display for ItemStack {
@@ -1012,13 +1066,18 @@ impl ReadFrom for ItemStack {
             return Ok(Self::empty());
         }
 
-        let item_id = VarInt::read(data)?.0 as usize;
-        let item = REGISTRY.items.by_id(item_id).unwrap_or(&ITEMS.air);
+        let item_id = VarInt::read(data)?.0;
+        let item_id = usize::try_from(item_id)
+            .map_err(|_| std::io::Error::other(format!("Negative item id: {item_id}")))?;
+        let item = REGISTRY
+            .items
+            .by_id(item_id)
+            .ok_or_else(|| std::io::Error::other(format!("Unknown item id: {item_id}")))?;
 
         // Read DataComponentPatch
         let patch = DataComponentPatch::read(data)?;
 
-        Ok(Self { item, count, patch })
+        Ok(Self::with_count_and_patch(item, count, patch))
     }
 }
 
@@ -1033,11 +1092,18 @@ impl ItemStack {
             return Ok(Self::empty());
         }
 
-        let item_id = VarInt::read(data)?.0 as usize;
-        let item = REGISTRY.items.by_id(item_id).unwrap_or(&ITEMS.air);
+        let item_id = VarInt::read(data)?.0;
+        let item_id = usize::try_from(item_id)
+            .map_err(|_| std::io::Error::other(format!("Negative item id: {item_id}")))?;
+        let item = REGISTRY
+            .items
+            .by_id(item_id)
+            .ok_or_else(|| std::io::Error::other(format!("Unknown item id: {item_id}")))?;
         let patch = DataComponentPatch::read_delimited(data)?;
 
-        Ok(Self { item, count, patch })
+        let stack = Self::with_count_and_patch(item, count, patch);
+        stack.validate_persistent_encoding()?;
+        Ok(stack)
     }
 }
 
@@ -1046,6 +1112,7 @@ use simdnbt::{
     borrow::{NbtCompound as NbtCompoundView, NbtTag as BorrowedNbtTag},
     owned::NbtCompound,
 };
+use steel_utils::nbt::NbtNumeric as _;
 
 impl ToNbtTag for ItemStack {
     /// Converts this item stack to an NBT tag for persistent storage.
@@ -1064,6 +1131,25 @@ impl ToNbtTag for ItemStack {
 }
 
 impl ItemStack {
+    /// Checks that this stack can be encoded by Vanilla's persistent
+    /// `ItemStack.CODEC` before untrusted network data enters server state.
+    ///
+    /// This is an ingress check rather than a type invariant: programmatic
+    /// component mutation can still create values whose save codec reports
+    /// and omits invalid fields.
+    pub fn validate_persistent_encoding(&self) -> Result<()> {
+        if self.is_empty() {
+            return Ok(());
+        }
+        if !(1..=99).contains(&self.count) {
+            return Err(std::io::Error::other(format!(
+                "Item stack count {} is outside the persistent range 1..=99",
+                self.count
+            )));
+        }
+        self.patch.try_to_nbt_tag_ref().map(|_| ())
+    }
+
     /// Converts this item stack to an NBT tag for persistent storage without consuming it.
     #[must_use]
     pub fn to_nbt_tag_ref(&self) -> simdnbt::owned::NbtTag {
@@ -1077,7 +1163,6 @@ impl ItemStack {
         // id: The item identifier
         compound.insert("id", self.item.key.to_string());
 
-        // count: The stack count (vanilla uses Int for NBT storage)
         compound.insert("count", self.count);
 
         // components: The component patch (only if non-empty)
@@ -1110,16 +1195,14 @@ impl FromNbtTag for ItemStack {
         // Look up the item in the registry
         let item = REGISTRY.items.by_key(&id)?;
 
-        // Get the count (default to 1 if not present)
-        let count = compound.get("count").and_then(|t| t.int()).unwrap_or(1);
+        let count = decode_persistent_count(compound.get("count"))?;
 
-        // Parse components if present
-        let patch = compound
-            .get("components")
-            .and_then(DataComponentPatch::from_nbt_tag)
-            .unwrap_or_default();
+        let patch = match compound.get("components") {
+            Some(tag) => DataComponentPatch::from_nbt_tag(tag)?,
+            None => DataComponentPatch::new(),
+        };
 
-        Some(Self { item, count, patch })
+        Some(Self::with_count_and_patch(item, count, patch))
     }
 }
 
@@ -1137,15 +1220,378 @@ impl ItemStack {
         // Look up the item in the registry
         let item = REGISTRY.items.by_key(&id)?;
 
-        // Get the count (default to 1 if not present)
-        let count = compound.int("count").unwrap_or(1);
+        let count = decode_persistent_count(compound.get("count"))?;
 
-        // Parse components if present
-        let patch = compound
-            .get("components")
-            .and_then(DataComponentPatch::from_nbt_tag)
-            .unwrap_or_default();
+        let patch = match compound.get("components") {
+            Some(tag) => DataComponentPatch::from_nbt_tag(tag)?,
+            None => DataComponentPatch::new(),
+        };
 
         Some(Self::with_count_and_patch(item, count, patch))
+    }
+}
+
+fn decode_persistent_count(tag: Option<BorrowedNbtTag<'_, '_>>) -> Option<i32> {
+    let count = match tag {
+        Some(tag) => tag.codec_i32()?,
+        None => 1,
+    };
+    (1..=99).contains(&count).then_some(count)
+}
+
+#[cfg(test)]
+mod durability_tests {
+    use steel_utils::random::xoroshiro::Xoroshiro;
+
+    use super::ItemStack;
+    use crate::data_components::vanilla_components::{ENCHANTMENTS, ItemEnchantments};
+    use crate::test_support::init_test_registry;
+    use crate::{vanilla_enchantments, vanilla_items};
+
+    fn with_unbreaking(item: crate::items::ItemRef, level: u32) -> ItemStack {
+        let mut stack = ItemStack::new(item);
+        let mut enchantments = ItemEnchantments::empty();
+        enchantments.set(vanilla_enchantments::UNBREAKING.key.clone(), level);
+        stack.set(ENCHANTMENTS, enchantments);
+        stack
+    }
+
+    #[test]
+    fn item_damage_uses_generated_unbreaking_tool_requirements() {
+        init_test_registry();
+        let mut armor = with_unbreaking(&vanilla_items::DIAMOND_CHESTPLATE, 3);
+        let mut tool = with_unbreaking(&vanilla_items::DIAMOND_PICKAXE, 3);
+        let mut armor_random = Xoroshiro::from_seed_unmixed(42);
+        let mut tool_random = Xoroshiro::from_seed_unmixed(42);
+
+        assert!(!armor.hurt_and_break_with_random(100, false, &mut armor_random));
+        assert!(!tool.hurt_and_break_with_random(100, false, &mut tool_random));
+        assert_eq!(armor.get_damage_value(), 68);
+        assert_eq!(tool.get_damage_value(), 18);
+
+        let effects = vanilla_enchantments::UNBREAKING.effects.item_damage;
+        assert_eq!(
+            effects[0].requirements.and_then(|requirements| {
+                requirements.matches_item_context(&vanilla_items::DIAMOND_CHESTPLATE)
+            }),
+            Some(true)
+        );
+        assert_eq!(
+            effects[1].requirements.and_then(|requirements| {
+                requirements.matches_item_context(&vanilla_items::DIAMOND_CHESTPLATE)
+            }),
+            Some(false)
+        );
+        assert_eq!(
+            effects[0].requirements.and_then(|requirements| {
+                requirements.matches_item_context(&vanilla_items::DIAMOND_PICKAXE)
+            }),
+            Some(false)
+        );
+        assert_eq!(
+            effects[1].requirements.and_then(|requirements| {
+                requirements.matches_item_context(&vanilla_items::DIAMOND_PICKAXE)
+            }),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn match_tool_supports_generated_direct_item_sets() {
+        init_test_registry();
+        let requirements = vanilla_enchantments::INFINITY.effects.ammo_use[0]
+            .requirements
+            .expect("Infinity ammo use should have a match_tool requirement");
+
+        assert_eq!(
+            requirements.matches_item_context(&vanilla_items::ARROW),
+            Some(true)
+        );
+        assert_eq!(
+            requirements.matches_item_context(&vanilla_items::SPECTRAL_ARROW),
+            Some(false)
+        );
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use std::io::Cursor;
+
+    use simdnbt::FromNbtTag;
+    use simdnbt::borrow::{NbtTag as BorrowedNbtTag, read_tag};
+    use simdnbt::owned::{NbtCompound, NbtTag};
+    use steel_utils::codec::VarInt;
+    use steel_utils::serial::WriteTo;
+
+    use super::ItemStack;
+    use crate::data_components::vanilla_components::{
+        CUSTOM_DATA, JUKEBOX_PLAYABLE, LORE, MAX_DAMAGE, MAX_STACK_SIZE, TOOLTIP_DISPLAY,
+    };
+    use crate::data_components::{CustomData, JukeboxPlayable};
+    use crate::test_support::init_test_registry;
+    use crate::{REGISTRY, RegistryEntry, RegistryExt, vanilla_items, vanilla_jukebox_songs};
+
+    fn with_borrowed_tag<R>(tag: NbtTag, visitor: impl FnOnce(BorrowedNbtTag<'_, '_>) -> R) -> R {
+        let mut bytes = Vec::new();
+        tag.write(&mut bytes);
+        let borrowed =
+            read_tag(&mut Cursor::new(bytes.as_slice())).expect("owned test tag should parse");
+        visitor(borrowed.as_tag())
+    }
+
+    fn parse_stack(compound: NbtCompound) -> Option<ItemStack> {
+        with_borrowed_tag(NbtTag::Compound(compound), ItemStack::from_nbt_tag)
+    }
+
+    fn stone_stack_nbt() -> NbtCompound {
+        let mut compound = NbtCompound::new();
+        compound.insert("id", "minecraft:stone");
+        compound
+    }
+
+    fn untrusted_stack_bytes(
+        count: i32,
+        component: Option<(&steel_utils::Identifier, Vec<u8>)>,
+    ) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        VarInt(count)
+            .write(&mut bytes)
+            .expect("test stack count should encode");
+        VarInt(vanilla_items::STONE.id() as i32)
+            .write(&mut bytes)
+            .expect("test item id should encode");
+
+        if let Some((component, value)) = component {
+            VarInt(1)
+                .write(&mut bytes)
+                .expect("added component count should encode");
+            VarInt(0)
+                .write(&mut bytes)
+                .expect("removed component count should encode");
+            let component_id = REGISTRY
+                .data_components
+                .id_from_key(component)
+                .expect("test component should be registered");
+            VarInt(component_id as i32)
+                .write(&mut bytes)
+                .expect("component id should encode");
+            VarInt(value.len() as i32)
+                .write(&mut bytes)
+                .expect("component length should encode");
+            bytes.extend_from_slice(&value);
+        } else {
+            VarInt(0)
+                .write(&mut bytes)
+                .expect("added component count should encode");
+            VarInt(0)
+                .write(&mut bytes)
+                .expect("removed component count should encode");
+        }
+        bytes
+    }
+
+    #[test]
+    fn persistent_item_count_uses_vanilla_integer_codec() {
+        init_test_registry();
+        let mut compound = stone_stack_nbt();
+        compound.insert("count", 5.9_f64);
+        assert_eq!(parse_stack(compound).map(|stack| stack.count()), Some(5));
+
+        let mut compound = stone_stack_nbt();
+        compound.insert("count", 100);
+        assert!(parse_stack(compound).is_none());
+
+        let mut compound = stone_stack_nbt();
+        compound.insert("count", "5");
+        assert!(parse_stack(compound).is_none());
+    }
+
+    #[test]
+    fn malformed_present_component_patch_rejects_the_item_stack() {
+        init_test_registry();
+        let mut components = NbtCompound::new();
+        components.insert("minecraft:max_stack_size", 0);
+        let mut compound = stone_stack_nbt();
+        compound.insert("components", components);
+
+        assert!(parse_stack(compound).is_none());
+    }
+
+    #[test]
+    fn component_patches_stay_sanitized_against_the_item_prototype() {
+        init_test_registry();
+        let mut patch = crate::data_components::DataComponentPatch::new();
+        patch.set(MAX_STACK_SIZE, 64);
+        patch.remove(CUSTOM_DATA);
+        let mut stack = ItemStack::with_count_and_patch(&vanilla_items::STONE, 1, patch);
+        assert!(stack.components_patch().is_empty());
+
+        stack.set(MAX_STACK_SIZE, 16);
+        assert_eq!(stack.components_patch().len(), 1);
+        stack.set(MAX_STACK_SIZE, 64);
+        assert!(stack.components_patch().is_empty());
+
+        stack.remove(MAX_STACK_SIZE);
+        assert!(stack.components_patch().is_removed(&MAX_STACK_SIZE.key));
+        stack.set(MAX_STACK_SIZE, 64);
+        assert!(stack.components_patch().is_empty());
+
+        stack.remove(CUSTOM_DATA);
+        assert!(stack.components_patch().is_empty());
+
+        stack.set(MAX_STACK_SIZE, 16);
+        stack.set_item(&vanilla_items::ENDER_PEARL.key);
+        assert_eq!(stack.max_stack_size(), 16);
+        assert!(stack.components_patch().is_empty());
+    }
+
+    #[test]
+    fn strict_validation_checks_components_even_when_the_stack_is_empty() {
+        init_test_registry();
+        let mut patch = crate::data_components::DataComponentPatch::new();
+        patch.set(MAX_DAMAGE, 1);
+        let stack = ItemStack::with_count_and_patch(&vanilla_items::STONE, 0, patch);
+
+        assert!(stack.is_empty());
+        assert!(stack.validate_strict().is_err());
+    }
+
+    #[test]
+    fn default_count_is_always_present_in_persistent_encoding() {
+        init_test_registry();
+        let stack = ItemStack::new(&vanilla_items::STONE);
+        let NbtTag::Compound(compound) = stack.to_nbt_tag_ref() else {
+            panic!("item stack should encode as a compound");
+        };
+
+        assert_eq!(compound.get("count"), Some(&NbtTag::Int(1)));
+    }
+
+    #[test]
+    fn untrusted_stack_rejects_direct_jukebox_holders() {
+        init_test_registry();
+        let mut component_bytes = Vec::new();
+        VarInt(0)
+            .write(&mut component_bytes)
+            .expect("direct holder discriminator should encode");
+        let bytes = untrusted_stack_bytes(1, Some((&JUKEBOX_PLAYABLE.key, component_bytes)));
+
+        assert!(ItemStack::read_untrusted(&mut Cursor::new(bytes.as_slice())).is_err());
+    }
+
+    #[test]
+    fn untrusted_stack_accepts_persistable_registry_holders() {
+        init_test_registry();
+        let reference = JukeboxPlayable::new(&vanilla_jukebox_songs::CAT);
+        let mut component_bytes = Vec::new();
+        reference
+            .write(&mut component_bytes)
+            .expect("registry holder should have a network representation");
+        let bytes = untrusted_stack_bytes(1, Some((&JUKEBOX_PLAYABLE.key, component_bytes)));
+
+        let stack = ItemStack::read_untrusted(&mut Cursor::new(bytes.as_slice()))
+            .expect("persistable untrusted stack should decode");
+        assert_eq!(stack.get(JUKEBOX_PLAYABLE), Some(&reference));
+    }
+
+    #[test]
+    fn untrusted_stack_uses_persistent_count_range() {
+        init_test_registry();
+        let bytes = untrusted_stack_bytes(100, None);
+
+        assert!(ItemStack::read_untrusted(&mut Cursor::new(bytes.as_slice())).is_err());
+    }
+
+    #[test]
+    fn untrusted_stack_validates_component_persistent_constraints() {
+        init_test_registry();
+        let mut component_bytes = Vec::new();
+        VarInt(0)
+            .write(&mut component_bytes)
+            .expect("max stack size should encode on the network");
+        let bytes = untrusted_stack_bytes(
+            1,
+            Some((
+                &crate::data_components::vanilla_components::MAX_STACK_SIZE.key,
+                component_bytes,
+            )),
+        );
+
+        assert!(ItemStack::read_untrusted(&mut Cursor::new(bytes.as_slice())).is_err());
+    }
+
+    #[test]
+    fn save_omits_invalid_component_value_but_keeps_present_patch_field() {
+        init_test_registry();
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+        stack.set(MAX_STACK_SIZE, 0);
+
+        assert!(stack.validate_persistent_encoding().is_err());
+        let NbtTag::Compound(compound) = stack.to_nbt_tag_ref() else {
+            panic!("item stack should still encode as a compound");
+        };
+        assert_eq!(
+            compound.string("id").map(|value| value.to_str()),
+            Some("minecraft:stone".into())
+        );
+        assert!(
+            compound
+                .compound("components")
+                .is_some_and(simdnbt::owned::NbtCompound::is_empty)
+        );
+    }
+
+    #[test]
+    fn toggle_tooltips_updates_the_typed_display_component() {
+        init_test_registry();
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+
+        stack.toggle_tooltips(&[(LORE.key.clone(), false)]);
+        let display = stack
+            .get(TOOLTIP_DISPLAY)
+            .expect("tooltip display should be set");
+        assert!(!display.shows(LORE));
+
+        stack.toggle_tooltips(&[(LORE.key.clone(), true)]);
+        assert!(
+            stack
+                .get(TOOLTIP_DISPLAY)
+                .expect("tooltip display should remain set")
+                .shows(LORE)
+        );
+    }
+
+    #[test]
+    fn set_custom_data_recursively_merges_and_removes_empty_values() {
+        init_test_registry();
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+        let empty = CustomData::default();
+        stack.set_custom_data(&empty);
+        assert!(stack.get(CUSTOM_DATA).is_none());
+
+        let mut nested = NbtCompound::new();
+        nested.insert("kept", 1);
+        nested.insert("changed", 1);
+        let mut first = NbtCompound::new();
+        first.insert("nested", nested);
+        stack.set_custom_data(
+            &CustomData::try_from_compound(first).expect("first value should be valid"),
+        );
+
+        let mut nested = NbtCompound::new();
+        nested.insert("changed", 2);
+        let mut second = NbtCompound::new();
+        second.insert("nested", nested);
+        stack.set_custom_data(
+            &CustomData::try_from_compound(second).expect("second value should be valid"),
+        );
+
+        let nested = stack
+            .get(CUSTOM_DATA)
+            .and_then(|data| data.as_compound().compound("nested"))
+            .expect("nested custom data should remain");
+        assert_eq!(nested.int("kept"), Some(1));
+        assert_eq!(nested.int("changed"), Some(2));
     }
 }

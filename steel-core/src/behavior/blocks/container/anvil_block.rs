@@ -55,7 +55,7 @@ impl BlockBehavior for AnvilBlock {
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         Some(self.block.default_state().set_value(
             &BlockStateProperties::HORIZONTAL_FACING,
-            context.horizontal_direction.rotate_y_clockwise(),
+            context.horizontal_direction().rotate_y_clockwise(),
         ))
     }
 

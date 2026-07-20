@@ -15,17 +15,14 @@ pub trait BlockStateExt {
     fn get_block(&self) -> BlockRef;
     fn is_air(&self) -> bool;
     fn has_block_entity(&self) -> bool;
-    fn get_value<T, P: Property<T>>(&self, property: &P) -> T;
+    fn get_value<P: Property>(&self, property: &P) -> P::Value;
     /// Gets the value of a property, returning `None` if the block doesn't have this property.
-    fn try_get_value<T, P: Property<T>>(&self, property: &P) -> Option<T>;
+    fn try_get_value<P: Property>(&self, property: &P) -> Option<P::Value>;
     #[must_use]
-    fn set_value<T, P: Property<T>>(&self, property: &P, value: T) -> BlockStateId;
-    fn copy_value<T, P: Property<T>, O: BlockStateExt>(
-        &self,
-        property: &P,
-        other: &O,
-    ) -> BlockStateId;
+    fn set_value<P: Property>(&self, property: &P, value: P::Value) -> BlockStateId;
+    fn copy_value<P: Property, O: BlockStateExt>(&self, property: &P, other: &O) -> BlockStateId;
     fn get_property_str(&self, name: &str) -> Option<String>;
+    fn with_properties_of(&self, source: BlockStateId) -> BlockStateId;
     fn get_static_collision_shape(&self) -> blocks::shapes::VoxelShape;
     fn get_collision_shape_at(&self, pos: BlockPos) -> OffsetVoxelShape;
     fn get_static_support_shape(&self) -> blocks::shapes::VoxelShape;
@@ -82,7 +79,11 @@ impl BlockStateExt for BlockStateId {
             .by_state_id(*self)
             .expect("Expected a valid state id")
     }
-
+    fn with_properties_of(&self, source: BlockStateId) -> BlockStateId {
+        REGISTRY
+            .blocks
+            .copy_matching_properties(source, self.get_block())
+    }
     fn is_air(&self) -> bool {
         self.get_block().config.is_air
     }
@@ -92,23 +93,19 @@ impl BlockStateExt for BlockStateId {
         false
     }
 
-    fn get_value<T, P: Property<T>>(&self, property: &P) -> T {
+    fn get_value<P: Property>(&self, property: &P) -> P::Value {
         REGISTRY.blocks.get_property(*self, property)
     }
 
-    fn try_get_value<T, P: Property<T>>(&self, property: &P) -> Option<T> {
+    fn try_get_value<P: Property>(&self, property: &P) -> Option<P::Value> {
         REGISTRY.blocks.try_get_property(*self, property)
     }
 
-    fn set_value<T, P: Property<T>>(&self, property: &P, value: T) -> BlockStateId {
+    fn set_value<P: Property>(&self, property: &P, value: P::Value) -> BlockStateId {
         REGISTRY.blocks.set_property(*self, property, value)
     }
 
-    fn copy_value<T, P: Property<T>, O: BlockStateExt>(
-        &self,
-        property: &P,
-        other: &O,
-    ) -> BlockStateId {
+    fn copy_value<P: Property, O: BlockStateExt>(&self, property: &P, other: &O) -> BlockStateId {
         self.set_value(property, other.get_value(property))
     }
 
@@ -371,5 +368,15 @@ mod tests {
                 .uses_offset(ShapeChannel::Collision)
         );
         assert!(!tall_grass.shape_offsets.uses_offset(ShapeChannel::Outline));
+    }
+
+    #[test]
+    fn with_properties_of_keeps_target_defaults_for_non_matching_properties() {
+        init_test_registry();
+
+        let source = vanilla_blocks::STONE.default_state();
+        let target = vanilla_blocks::CANDLE.default_state();
+
+        assert_eq!(target.with_properties_of(source), target);
     }
 }

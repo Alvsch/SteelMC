@@ -9,7 +9,7 @@
 //! fn example(container_id: u8, inventory: Shared<PlayerInventory>) -> Menu {
 //!     let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
 //!
-//!     let items = vec![ItemStack::new(&vanilla_items::ITEMS.flint_and_steel); 9];
+//!     let items = vec![ItemStack::new(&vanilla_items::FLINT_AND_STEEL); 9];
 //!     let container = SimpleContainer::from_items(items).into_shared();
 //!
 //!     let section = builder.section(container, 9);
@@ -391,7 +391,7 @@ impl MenuBuilder {
     ///
     /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
     ///
-    /// let items = vec![ItemStack::new(&vanilla_items::ITEMS.gray_stained_glass_pane); 9];
+    /// let items = vec![ItemStack::new(&vanilla_items::GRAY_STAINED_GLASS_PANE); 9];
     ///
     /// let container = SimpleContainer::from_items(items).into_shared();
     /// let display_section = b.restricted_section(container.clone(), 9, |_slot, _item_stack| true, Some(|_: usize, _: &ContainerLockGuard, _: &Player, _: &ItemStack| false));
@@ -443,7 +443,7 @@ impl MenuBuilder {
     /// let container_id = 0;
     ///
     /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);;
-    /// let items = vec![ItemStack::new(&vanilla_items::ITEMS.gray_stained_glass_pane); 9];
+    /// let items = vec![ItemStack::new(&vanilla_items::GRAY_STAINED_GLASS_PANE); 9];
     /// let container = SimpleContainer::from_items(items).into_shared();
     /// let display_section = b.display_section(container, 9);
     ///
@@ -579,7 +579,7 @@ impl MenuBuilder {
     /// let items = vec![ItemStack::empty(); 9];
     /// let upper_container = SimpleContainer::from_items(items).into_shared();
     ///
-    /// let items = vec![ItemStack::new(&vanilla_items::ITEMS.barrier); 9];
+    /// let items = vec![ItemStack::new(&vanilla_items::BARRIER); 9];
     /// let lower_container = SimpleContainer::from_items(items).into_shared();
     ///
     /// let restricted_section = b.display_section(lower_container, 9);

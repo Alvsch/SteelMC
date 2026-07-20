@@ -46,6 +46,13 @@ impl CraftingHandler {
         ContainerId::from_arc(&self.crafting_container)
     }
 
+    /// A shared handle to the crafting container.
+    #[cfg(test)]
+    #[must_use]
+    pub fn crafting_container(&self) -> Shared<CraftingContainer> {
+        self.crafting_container.clone()
+    }
+
     /// The `ContainerId` of the result container
     #[must_use]
     pub fn result_id(&self) -> ContainerId {
