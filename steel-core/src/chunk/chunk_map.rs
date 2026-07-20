@@ -1105,10 +1105,10 @@ impl ChunkMap {
         .ok()
     }
 
-    /// Broadcasts all pending block and light changes to nearby players.
+    /// Broadcasts pending block changes and completed light changes to nearby players.
     #[expect(
         clippy::too_many_lines,
-        reason = "broadcasting block and light packets is one ordered publish workflow"
+        reason = "block and light packet construction share the same holder drain"
     )]
     pub fn broadcast_changed_chunks(&self) {
         self.propagate_queued_light_changes();
@@ -1122,15 +1122,10 @@ impl ChunkMap {
         };
 
         let mut world = None;
-        let mut deferred_holders = Vec::new();
 
         for holder in holders {
             let chunk_pos = holder.get_pos();
-            if self.light_updates.lock().touches_chunk(chunk_pos) {
-                deferred_holders.push(holder);
-                continue;
-            }
-
+            // Vanilla publishes block changes independently of unfinished light propagation.
             let world = world.get_or_insert_with(|| self.world_gen_context.world());
             let has_skylight = world.dimension_type.has_skylight;
             let min_y = holder.min_y();
@@ -1285,10 +1280,6 @@ impl ChunkMap {
                     }
                 }
             }
-        }
-
-        if !deferred_holders.is_empty() {
-            self.chunks_to_broadcast.lock().extend(deferred_holders);
         }
     }
 
@@ -2544,12 +2535,119 @@ mod tests {
     use crate::chunk::proto_chunk::ProtoChunk;
     use crate::chunk::section::{ChunkSection, Sections};
     use crate::chunk_saver::RamOnlyStorage;
-    use crate::test_support::fresh_test_world;
+    use crate::config::RuntimeConfig;
+    use crate::player::connection::NetworkConnection;
+    use crate::player::{ClientInformation, GameProfile, PlayerConnection, ResetReason};
+    use crate::server::Server;
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
     use crate::world::tick_scheduler::{BlockTickList, FluidTickList};
     use crate::worldgen::EmptyChunkGenerator;
+    use std::io::Cursor;
     use std::thread;
-    use steel_registry::{test_support::init_test_registry, vanilla_dimension_types::OVERWORLD};
+    use steel_protocol::packet_traits::CompressionInfo;
+    use steel_registry::{
+        packets::play::{C_BLOCK_CHANGED_ACK, C_BLOCK_UPDATE},
+        test_support::init_test_registry,
+        vanilla_blocks,
+        vanilla_dimension_types::OVERWORLD,
+    };
+    use steel_utils::codec::VarInt;
+    use steel_utils::serial::ReadFrom;
+    use steel_utils::types::UpdateFlags;
     use steel_worldgen::structure::{StructureReferenceMap, StructureStartMap};
+    use text_components::TextComponent;
+    use uuid::Uuid;
+
+    struct RecordingConnection {
+        packets: Arc<SyncMutex<Vec<EncodedPacket>>>,
+    }
+
+    impl NetworkConnection for RecordingConnection {
+        fn compression(&self) -> Option<CompressionInfo> {
+            None
+        }
+
+        fn send_encoded(&self, packet: EncodedPacket) {
+            self.packets.lock().push(packet);
+        }
+
+        fn send_encoded_bundle(&self, packets: Vec<EncodedPacket>) {
+            self.packets.lock().extend(packets);
+        }
+
+        fn disconnect_with_reason(&self, _reason: TextComponent) {}
+
+        fn tick(&self) {}
+
+        fn latency(&self) -> i32 {
+            0
+        }
+
+        fn close(&self) {}
+
+        fn closed(&self) -> bool {
+            false
+        }
+    }
+
+    fn recording_player(world: &Arc<World>) -> (Arc<Player>, Arc<SyncMutex<Vec<EncodedPacket>>>) {
+        let packets = Arc::new(SyncMutex::new(Vec::new()));
+        let connection = Arc::new(PlayerConnection::Other(Box::new(RecordingConnection {
+            packets: Arc::clone(&packets),
+        })));
+        let config = Arc::new(RuntimeConfig {
+            max_players: 1,
+            view_distance: 2,
+            simulation_distance: 2,
+            max_chained_neighbor_updates: 1_000_000,
+            online_mode: false,
+            auth_server: None,
+            profile_server: None,
+            encryption: false,
+            allow_flight: false,
+            motd: String::new(),
+            use_favicon: false,
+            favicon: String::new(),
+            enforce_secure_chat: false,
+            chat_spam_threshold_seconds: 10,
+            command_spam_threshold_seconds: 10,
+            compression: None,
+            server_links: None,
+            packet_workers: Some(1),
+            chunk_generation_threads: Some(1),
+            chunk_encoding_threads: Some(1),
+        });
+        let player = Arc::new_cyclic(|weak_player| {
+            Player::new(
+                GameProfile {
+                    id: Uuid::from_u128(1),
+                    name: "TestPlayer".to_owned(),
+                    properties: Vec::new(),
+                    profile_actions: None,
+                },
+                Arc::clone(&connection),
+                Arc::clone(world),
+                Weak::<Server>::new(),
+                config,
+                1,
+                weak_player,
+                ClientInformation::default(),
+            )
+        });
+        (player, packets)
+    }
+
+    fn packet_id(packet: &EncodedPacket) -> i32 {
+        let mut cursor = Cursor::new(packet.encoded_data.as_slice());
+        assert!(
+            VarInt::read(&mut cursor).is_ok(),
+            "packet length should decode"
+        );
+        match VarInt::read(&mut cursor) {
+            Ok(packet_id) => packet_id.0,
+            Err(error) => panic!("packet id should decode: {error}"),
+        }
+    }
 
     fn advance_until_revision(chunk_map: &Arc<ChunkMap>, revision: ChunkTicketRevision) {
         for _ in 0..10_000 {
@@ -3097,39 +3195,72 @@ mod tests {
     }
 
     #[test]
-    fn broadcast_changed_chunks_defers_holder_while_light_work_is_blocked() {
-        let chunk_map = test_chunk_map();
+    fn broadcast_changed_chunks_does_not_defer_blocks_while_light_work_is_blocked() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("blocked_light_block_publication");
         let center = ChunkPos::new(0, 0);
-        let holder = unloaded_full_holder(center);
-        assert_eq!(
-            holder.transition_ticking_readiness(TickingReadiness::BlockTicking),
-            Some(TickingReadiness::Unready)
-        );
-        assert!(holder.block_changed(BlockPos::new(1, 2, 3)));
-        chunk_map
-            .chunks_to_broadcast
-            .lock()
-            .push(Arc::clone(&holder));
-        chunk_map.light_updates.lock().pending.queue_change(
-            center,
-            BlockPos::new(1, 2, 3),
-            true,
-            None,
-        );
-        let Some(_reservation) = chunk_map
+        let holder = insert_ready_full_chunk(&world, center);
+        for z in -LIGHT_CACHE_RADIUS..=LIGHT_CACHE_RADIUS {
+            for x in -LIGHT_CACHE_RADIUS..=LIGHT_CACHE_RADIUS {
+                if x != 0 || z != 0 {
+                    insert_ready_full_chunk(&world, ChunkPos::new(x, z));
+                }
+            }
+        }
+        let pos = BlockPos::new(1, 2, 3);
+        assert!(world.set_block(
+            pos,
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        ));
+        world.chunk_map.broadcast_changed_chunks();
+        assert!(!world.chunk_map.light_update_touches_chunk(center));
+
+        let (player, packets) = recording_player(&world);
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+        let _ = player.mark_joined_world();
+        player.set_client_loaded(true);
+        player.chunk_sender.lock().mark_chunk_sent_for_test(center);
+        packets.lock().clear();
+
+        let Some(reservation) = world
+            .chunk_map
             .light_work_window_gate
             .try_reserve_centered(center)
         else {
             panic!("test should reserve the light work window");
         };
 
-        chunk_map.broadcast_changed_chunks();
-
-        assert_eq!(chunk_map.chunks_to_broadcast.lock().len(), 1);
+        assert!(world.set_block(
+            pos,
+            vanilla_blocks::AIR.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        ));
         assert!(holder.has_changes_to_broadcast());
-        let changes = holder.take_changed_blocks();
-        assert_eq!(changes.len(), 1);
-        assert!(chunk_map.light_update_touches_chunk(center));
+        assert!(world.chunk_map.light_update_touches_chunk(center));
+        player.ack_block_changes_up_to(1);
+
+        world.tick_game(1, true);
+
+        assert!(world.chunk_map.chunks_to_broadcast.lock().is_empty());
+        assert!(!holder.has_changes_to_broadcast());
+        assert!(holder.take_changed_blocks().is_empty());
+        assert!(world.chunk_map.light_update_touches_chunk(center));
+        let relevant_packet_ids = packets
+            .lock()
+            .iter()
+            .map(packet_id)
+            .filter(|id| matches!(*id, C_BLOCK_UPDATE | C_BLOCK_CHANGED_ACK))
+            .collect::<Vec<_>>();
+        assert_eq!(relevant_packet_ids, [C_BLOCK_UPDATE, C_BLOCK_CHANGED_ACK]);
+
+        drop(reservation);
+        world.chunk_map.broadcast_changed_chunks();
+
+        assert!(!world.chunk_map.light_update_touches_chunk(center));
+        assert!(world.chunk_map.chunks_to_broadcast.lock().is_empty());
+        world.remove_player_for_world_change(&player);
     }
 
     #[test]
