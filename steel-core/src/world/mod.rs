@@ -214,7 +214,7 @@ pub use signal_getter::{SignalGetter, SignalQueryContext};
 pub(crate) use signal_getter::{
     get_best_neighbor_signal, get_control_input_signal, get_signal, is_redstone_conductor,
 };
-pub use tick_scheduler::{ScheduledTick, TickPriority};
+pub use tick_scheduler::ScheduledTick;
 
 /// Generates a random value using triangle distribution.
 ///

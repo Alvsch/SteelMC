@@ -150,12 +150,8 @@ impl BlockBehavior for RepeaterBlock {
         pos: BlockPos,
         _source: &PlacementSource<'_>,
     ) {
-        self.diode.set_placed_by(
-            state,
-            world,
-            pos,
-            Self::should_turn_on(world.as_ref(), pos, state),
-        );
+        self.diode
+            .set_placed_by(world, pos, Self::should_turn_on(world.as_ref(), pos, state));
     }
 
     fn on_place(
@@ -163,10 +159,10 @@ impl BlockBehavior for RepeaterBlock {
         state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
-        old_state: BlockStateId,
+        _old_state: BlockStateId,
         _moved_by_piston: bool,
     ) {
-        self.diode.on_place(state, world, pos, old_state);
+        self.diode.on_place(state, world, pos);
     }
 
     fn affect_neighbors_after_removal(
@@ -230,6 +226,7 @@ mod tests {
     use super::*;
     use crate::behavior::init_behaviors;
     use crate::test_support::TestLevel;
+    use crate::world::tick_scheduler::TickPriority;
 
     fn repeater() -> RepeaterBlock {
         init_test_registry();
@@ -326,18 +323,18 @@ mod tests {
 
         assert_eq!(
             DiodeBlock::tick_priority(&plain_level, pos, off, false),
-            crate::world::TickPriority::High
+            TickPriority::High
         );
         assert_eq!(
             DiodeBlock::tick_priority(&plain_level, pos, on, true),
-            crate::world::TickPriority::VeryHigh
+            TickPriority::VeryHigh
         );
 
         let crossing_diode = repeater_state(Direction::East, false);
         let prioritized_level = TestLevel::default().with_block(pos.south(), crossing_diode);
         assert_eq!(
             DiodeBlock::tick_priority(&prioritized_level, pos, off, false),
-            crate::world::TickPriority::ExtremelyHigh
+            TickPriority::ExtremelyHigh
         );
     }
 }

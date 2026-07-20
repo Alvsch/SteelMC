@@ -13,8 +13,8 @@ use steel_utils::{BlockPos, BlockStateId};
 use crate::behavior::BLOCK_BEHAVIORS;
 use crate::behavior::BlockPlaceContext;
 use crate::world::{
-    LevelReader, SignalQueryContext, TickPriority, World, get_control_input_signal,
-    get_signal as get_redstone_signal,
+    LevelReader, SignalQueryContext, World, get_control_input_signal,
+    get_signal as get_redstone_signal, tick_scheduler::TickPriority,
 };
 
 /// Common server-side behavior inherited from vanilla's abstract `DiodeBlock`.
@@ -198,25 +198,13 @@ impl DiodeBlock {
         }
     }
 
-    pub(super) fn set_placed_by(
-        &self,
-        _state: BlockStateId,
-        world: &Arc<World>,
-        pos: BlockPos,
-        should_turn_on: bool,
-    ) {
+    pub(super) fn set_placed_by(&self, world: &Arc<World>, pos: BlockPos, should_turn_on: bool) {
         if should_turn_on {
             world.schedule_block_tick_default(pos, self.block, 1);
         }
     }
 
-    pub(super) fn on_place(
-        &self,
-        state: BlockStateId,
-        world: &Arc<World>,
-        pos: BlockPos,
-        _old_state: BlockStateId,
-    ) {
+    pub(super) fn on_place(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
         self.update_neighbors_in_front(world, pos, state);
     }
 

@@ -25,10 +25,8 @@ fn notify_neighbors(block: BlockRef, world: &Arc<World>, pos: BlockPos) {
     }
 }
 
-fn on_place(block: BlockRef, world: &Arc<World>, pos: BlockPos, old_state: BlockStateId) {
-    if old_state.get_block() != block {
-        notify_neighbors(block, world, pos);
-    }
+fn on_place(block: BlockRef, world: &Arc<World>, pos: BlockPos) {
+    notify_neighbors(block, world, pos);
 }
 
 fn affect_neighbors_after_removal(
@@ -154,10 +152,10 @@ impl BlockBehavior for RedstoneTorchBlock {
         _state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
-        old_state: BlockStateId,
+        _old_state: BlockStateId,
         _moved_by_piston: bool,
     ) {
-        on_place(self.block, world, pos, old_state);
+        on_place(self.block, world, pos);
     }
 
     fn affect_neighbors_after_removal(
@@ -316,10 +314,10 @@ impl BlockBehavior for RedstoneWallTorchBlock {
         _state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
-        old_state: BlockStateId,
+        _old_state: BlockStateId,
         _moved_by_piston: bool,
     ) {
-        on_place(self.block, world, pos, old_state);
+        on_place(self.block, world, pos);
     }
 
     fn affect_neighbors_after_removal(
