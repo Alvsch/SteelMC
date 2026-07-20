@@ -386,6 +386,14 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         false
     }
 
+    /// Returns whether this entity is excluded from pressure plates and tripwires.
+    ///
+    /// Mirrors vanilla `Entity.isIgnoringBlockTriggers`. Display-like entities
+    /// and marker entities override this capability.
+    fn is_ignoring_block_triggers(&self) -> bool {
+        false
+    }
+
     /// Returns whether vanilla lets this entity interact with its loaded level.
     fn can_interact_with_level(&self) -> bool {
         self.is_alive() && !self.is_removed() && !self.is_spectator()

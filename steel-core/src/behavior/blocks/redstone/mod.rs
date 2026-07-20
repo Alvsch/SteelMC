@@ -1,3 +1,4 @@
+mod base_pressure_plate_block;
 mod button_block;
 mod comparator_block;
 mod default_redstone_wire_evaluator;
@@ -6,17 +7,21 @@ mod face_attached_horizontal_directional_block;
 mod lever_block;
 mod observer_block;
 mod powered_block;
+mod pressure_plate_block;
 mod redstone_lamp_block;
 mod redstone_torch_block;
 mod redstone_wire_block;
 mod repeater_block;
+mod weighted_pressure_plate_block;
 
 pub use button_block::ButtonBlock;
 pub use comparator_block::ComparatorBlock;
 pub use lever_block::LeverBlock;
 pub use observer_block::ObserverBlock;
 pub use powered_block::PoweredBlock;
+pub use pressure_plate_block::{PressurePlateBlock, PressurePlateSensitivity};
 pub use redstone_lamp_block::RedstoneLampBlock;
 pub use redstone_torch_block::{RedstoneTorchBlock, RedstoneWallTorchBlock};
 pub use redstone_wire_block::RedStoneWireBlock;
 pub use repeater_block::RepeaterBlock;
+pub use weighted_pressure_plate_block::WeightedPressurePlateBlock;
