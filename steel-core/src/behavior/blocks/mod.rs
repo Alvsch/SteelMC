@@ -36,7 +36,7 @@ pub use portal::{
     SoulFireBlock,
 };
 pub use redstone::{
-    ButtonBlock, ComparatorBlock, PoweredBlock, RedStoneWireBlock, RedstoneTorchBlock,
+    ButtonBlock, ComparatorBlock, LeverBlock, PoweredBlock, RedStoneWireBlock, RedstoneTorchBlock,
     RedstoneWallTorchBlock, RepeaterBlock,
 };
 pub use vegetation::{

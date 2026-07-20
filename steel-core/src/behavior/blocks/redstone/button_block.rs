@@ -10,13 +10,13 @@ use std::sync::Arc;
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
-use steel_registry::blocks::properties::{AttachFace, BlockStateProperties, Direction};
+use steel_registry::blocks::properties::{BlockStateProperties, Direction};
 use steel_registry::sound_event::SoundEventRef;
-use steel_registry::{REGISTRY, vanilla_blocks, vanilla_game_events};
-use steel_utils::axis::Axis;
+use steel_registry::vanilla_game_events;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
+use super::face_attached_horizontal_directional_block::FaceAttachedHorizontalDirectionalBlock;
 use crate::behavior::InventoryAccess;
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
@@ -33,7 +33,7 @@ use crate::world::{
 /// Each variant has its own click on/off sounds determined by the block set type.
 #[block_behavior]
 pub struct ButtonBlock {
-    block: BlockRef,
+    face_attached: FaceAttachedHorizontalDirectionalBlock,
     #[json_arg(value)]
     ticks_to_stay_pressed: i32,
     #[json_arg(sound_events, json = "type_button_click_on")]
@@ -54,22 +54,10 @@ impl ButtonBlock {
         sound_click_off: SoundEventRef,
     ) -> Self {
         Self {
-            block,
+            face_attached: FaceAttachedHorizontalDirectionalBlock::new(block),
             ticks_to_stay_pressed,
             sound_click_on,
             sound_click_off,
-        }
-    }
-
-    /// Returns the outward direction the button faces (away from the support block).
-    ///
-    /// Vanilla equivalent: `FaceAttachedHorizontalDirectionalBlock.getConnectedDirection()`.
-    fn get_connected_direction(state: BlockStateId) -> Direction {
-        let face: AttachFace = state.get_value(&BlockStateProperties::ATTACH_FACE);
-        match face {
-            AttachFace::Floor => Direction::Up,
-            AttachFace::Ceiling => Direction::Down,
-            AttachFace::Wall => state.get_value(&BlockStateProperties::HORIZONTAL_FACING),
         }
     }
 
@@ -77,10 +65,11 @@ impl ButtonBlock {
     ///
     /// Vanilla equivalent: `ButtonBlock.updateNeighbors()`.
     fn update_button_neighbors(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
-        world.update_neighbors_at(pos, self.block);
-        let support_dir = Self::get_connected_direction(state).opposite();
+        world.update_neighbors_at(pos, self.face_attached.block);
+        let support_dir =
+            FaceAttachedHorizontalDirectionalBlock::connected_direction(state).opposite();
         let support_pos = support_dir.relative(pos);
-        world.update_neighbors_at(support_pos, self.block);
+        world.update_neighbors_at(support_pos, self.face_attached.block);
     }
 
     /// Presses the button: sets POWERED=true, updates neighbors, schedules unpress tick,
@@ -89,7 +78,11 @@ impl ButtonBlock {
         let powered_state = state.set_value(&BlockStateProperties::POWERED, true);
         world.set_block(pos, powered_state, UpdateFlags::UPDATE_ALL);
         self.update_button_neighbors(powered_state, world, pos);
-        world.schedule_block_tick_default(pos, self.block, self.ticks_to_stay_pressed);
+        world.schedule_block_tick_default(
+            pos,
+            self.face_attached.block,
+            self.ticks_to_stay_pressed,
+        );
         world.play_block_sound(self.sound_click_on, pos, 1.0, 1.0, Some(player.id()));
         world.game_event(
             &vanilla_game_events::BLOCK_ACTIVATE,
@@ -102,42 +95,11 @@ impl ButtonBlock {
 impl BlockBehavior for ButtonBlock {
     /// Checks if a button with the given state can survive at the given position.
     fn can_survive(&self, state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> bool {
-        let support_dir = Self::get_connected_direction(state).opposite();
-        let support_pos = support_dir.relative(pos);
-        let support_state = world.get_block_state(support_pos);
-        support_state.is_face_sturdy_at(support_pos, support_dir.opposite())
+        FaceAttachedHorizontalDirectionalBlock::can_survive(state, world, pos)
     }
 
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
-        for direction in context.get_nearest_looking_directions() {
-            let state = if direction.get_axis() == Axis::Y {
-                let face = if direction == Direction::Up {
-                    AttachFace::Ceiling
-                } else {
-                    AttachFace::Floor
-                };
-                self.block
-                    .default_state()
-                    .set_value(&BlockStateProperties::ATTACH_FACE, face)
-                    .set_value(
-                        &BlockStateProperties::HORIZONTAL_FACING,
-                        context.horizontal_direction(),
-                    )
-            } else {
-                self.block
-                    .default_state()
-                    .set_value(&BlockStateProperties::ATTACH_FACE, AttachFace::Wall)
-                    .set_value(
-                        &BlockStateProperties::HORIZONTAL_FACING,
-                        direction.opposite(),
-                    )
-            };
-
-            if self.can_survive(state, context.world, context.place_pos()) {
-                return Some(state);
-            }
-        }
-        None
+        self.face_attached.state_for_placement(context)
     }
 
     fn update_shape(
@@ -149,11 +111,7 @@ impl BlockBehavior for ButtonBlock {
         _neighbor_pos: BlockPos,
         _neighbor_state: BlockStateId,
     ) -> BlockStateId {
-        let support_dir = Self::get_connected_direction(state).opposite();
-        if direction == support_dir && !self.can_survive(state, world, pos) {
-            return REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
-        }
-        state
+        FaceAttachedHorizontalDirectionalBlock::update_shape(state, world, pos, direction)
     }
 
     fn use_without_item(
@@ -167,7 +125,7 @@ impl BlockBehavior for ButtonBlock {
     ) -> InteractionResult {
         let powered: bool = state.get_value(&BlockStateProperties::POWERED);
         if powered {
-            return InteractionResult::Fail;
+            return InteractionResult::Consume;
         }
         self.press(state, world, pos, player);
         InteractionResult::Success
@@ -178,10 +136,8 @@ impl BlockBehavior for ButtonBlock {
         if !powered {
             return;
         }
-        // TODO: Check for arrows via checkPressed() — wooden buttons should stay
-        // pressed while an arrow is touching them and reschedule the tick.
-        // Also needs entity_inside() on BlockBehavior trait for arrows pressing
-        // unpowered wooden buttons. Blocked on entity collision system.
+        // Arrow-sensitive buttons need Steel's missing typed `AbstractArrow`
+        // capability before `checkPressed` can distinguish the vanilla class.
 
         // Unpress the button
         let unpowered_state = state.set_value(&BlockStateProperties::POWERED, false);
@@ -239,7 +195,7 @@ impl BlockBehavior for ButtonBlock {
         _context: SignalQueryContext,
     ) -> i32 {
         if state.get_value(&BlockStateProperties::POWERED)
-            && Self::get_connected_direction(state) == direction
+            && FaceAttachedHorizontalDirectionalBlock::connected_direction(state) == direction
         {
             15
         } else {
