@@ -291,22 +291,25 @@ impl BlockBreakingManager {
             pos,
             &GameEventContext::new(Some(player), Some(adjusted_state)),
         );
-        let changed_by_player_will_destroy = world.get_block_state(pos) != state;
+        let state_after_player_will_destroy = world.get_block_state(pos);
 
         // Vanilla parity: fluidState.createLegacyBlock() — breaking a waterlogged
         // block leaves water behind instead of air.
         let replacement = fluid_state_to_block(state.get_fluid_state());
-        // player_will_destroy may mutate the world itself, so block breaking remains globally
-        // exclusive. The normal removal path still rejects a stale observed state.
-        let removed_by_player_break = !changed_by_player_will_destroy
-            && world.set_block_if_unchanged(pos, state, replacement, UpdateFlags::UPDATE_ALL)
-                == ConditionalBlockSetResult::Changed;
+        // Vanilla removes the live state after `playerWillDestroy`; tripwire uses
+        // that callback to set DISARMED before the same block is removed.
+        let removed_by_player_break = !state_after_player_will_destroy.is_air()
+            && world.set_block_if_unchanged(
+                pos,
+                state_after_player_will_destroy,
+                replacement,
+                UpdateFlags::UPDATE_ALL,
+            ) == ConditionalBlockSetResult::Changed;
+        let changed_by_player_will_destroy = state_after_player_will_destroy != state;
         let changed = changed_by_player_will_destroy || removed_by_player_break;
 
-        if changed {
-            if removed_by_player_break {
-                behavior.destroy(adjusted_state, world, pos);
-            }
+        if removed_by_player_break {
+            behavior.destroy(adjusted_state, world, pos);
 
             // Play block destruction particles and sound (skip for fire blocks like vanilla)
             // Exclude the breaking player as they see the effect client-side
@@ -314,7 +317,7 @@ impl BlockBreakingManager {
             let is_fire = block.is_some_and(|b| {
                 b.key == vanilla_blocks::FIRE.key || b.key == vanilla_blocks::SOUL_FIRE.key
             });
-            if !changed_by_player_will_destroy && !is_fire {
+            if !is_fire {
                 world.destroy_block_effect(pos, u32::from(adjusted_state.0), Some(player.id()));
             }
 

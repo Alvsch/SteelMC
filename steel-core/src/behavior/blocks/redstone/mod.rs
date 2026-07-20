@@ -19,6 +19,8 @@ mod redstone_torch_block;
 mod redstone_wire_block;
 mod repeater_block;
 mod target_block;
+mod tripwire_block;
+mod tripwire_hook_block;
 mod weighted_pressure_plate_block;
 
 pub use button_block::ButtonBlock;
@@ -36,4 +38,6 @@ pub use redstone_torch_block::{RedstoneTorchBlock, RedstoneWallTorchBlock};
 pub use redstone_wire_block::RedStoneWireBlock;
 pub use repeater_block::RepeaterBlock;
 pub use target_block::TargetBlock;
+pub use tripwire_block::TripWireBlock;
+pub use tripwire_hook_block::TripWireHookBlock;
 pub use weighted_pressure_plate_block::WeightedPressurePlateBlock;

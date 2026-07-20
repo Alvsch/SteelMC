@@ -39,7 +39,8 @@ pub use redstone::{
     ButtonBlock, ComparatorBlock, CopperBulbBlock, LeverBlock, MovingPistonBlock, ObserverBlock,
     PistonBaseBlock, PistonHeadBlock, PoweredBlock, PressurePlateBlock, PressurePlateSensitivity,
     RedStoneWireBlock, RedstoneLampBlock, RedstoneTorchBlock, RedstoneWallTorchBlock,
-    RepeaterBlock, TargetBlock, WeatheringCopperBulbBlock, WeightedPressurePlateBlock,
+    RepeaterBlock, TargetBlock, TripWireBlock, TripWireHookBlock, WeatheringCopperBulbBlock,
+    WeightedPressurePlateBlock,
 };
 pub use vegetation::{
     AzaleaBlock, BambooSaplingBlock, BambooStalkBlock, BeetrootBlock, CactusBlock,
