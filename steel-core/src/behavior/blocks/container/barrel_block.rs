@@ -7,7 +7,7 @@ use std::sync::{Arc, Weak};
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
-use steel_registry::blocks::properties::BlockStateProperties;
+use steel_registry::blocks::properties::{BlockStateProperties, Direction};
 use steel_registry::vanilla_block_entity_types;
 use steel_utils::{BlockPos, BlockStateId, translations};
 use text_components::TextComponent;
@@ -20,7 +20,7 @@ use crate::inventory::chest_menu::ChestMenuProvider;
 use crate::inventory::container::calculate_redstone_signal_from_container;
 use crate::inventory::lock::ContainerRef;
 use crate::player::Player;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 /// Behavior for barrel blocks.
 ///
@@ -106,8 +106,9 @@ impl BlockBehavior for BarrelBlock {
     fn get_analog_output_signal(
         &self,
         _state: BlockStateId,
-        world: &Arc<World>,
+        world: &dyn LevelReader,
         pos: BlockPos,
+        _direction: Direction,
     ) -> i32 {
         // Get the block entity and calculate signal from container contents
         world.get_block_entity(pos).map_or(0, |be| {

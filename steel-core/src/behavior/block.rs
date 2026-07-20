@@ -1270,6 +1270,7 @@ pub trait BlockBehavior: Send + Sync {
     /// * `state` - The current block state
     /// * `world` - The world
     /// * `pos` - The position of the block
+    /// * `direction` - The face from which the comparator reads the block
     #[expect(
         unused_variables,
         reason = "default trait implementation ignores all params"
@@ -1277,8 +1278,9 @@ pub trait BlockBehavior: Send + Sync {
     fn get_analog_output_signal(
         &self,
         state: BlockStateId,
-        world: &Arc<World>,
+        world: &dyn LevelReader,
         pos: BlockPos,
+        direction: Direction,
     ) -> i32 {
         0
     }

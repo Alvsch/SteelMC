@@ -19,7 +19,7 @@ use crate::world::{
 
 /// Common server-side behavior inherited from vanilla's abstract `DiodeBlock`.
 pub(super) struct DiodeBlock {
-    block: BlockRef,
+    pub(super) block: BlockRef,
 }
 
 impl DiodeBlock {
@@ -220,7 +220,12 @@ impl DiodeBlock {
         }
     }
 
-    fn update_neighbors_in_front(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
+    pub(super) fn update_neighbors_in_front(
+        &self,
+        world: &Arc<World>,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) {
         let direction = state.get_value(&BlockStateProperties::HORIZONTAL_FACING);
         let opposite_pos = pos.relative(direction.opposite());
         world.neighbor_changed(opposite_pos, self.block);
