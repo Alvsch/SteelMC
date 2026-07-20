@@ -435,7 +435,7 @@ impl PropertyEnum for SideChainPart {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, Eq)]
 #[derive_const(PartialEq)]
 pub enum RailShape {
     NorthSouth,
@@ -448,6 +448,17 @@ pub enum RailShape {
     SouthWest,
     NorthWest,
     NorthEast,
+}
+
+impl RailShape {
+    /// Returns whether this shape raises one end of a rail by one block.
+    #[must_use]
+    pub const fn is_slope(&self) -> bool {
+        matches!(
+            self,
+            Self::AscendingEast | Self::AscendingWest | Self::AscendingNorth | Self::AscendingSouth
+        )
+    }
 }
 
 impl PropertyEnum for RailShape {

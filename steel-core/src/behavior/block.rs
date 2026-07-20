@@ -53,6 +53,16 @@ pub struct PickupResult {
     pub sound: Option<SoundEventRef>,
 }
 
+/// Shared behavior exposed by blocks in vanilla's `BaseRailBlock` hierarchy.
+///
+/// Rail topology uses this capability in addition to the `minecraft:rails` tag.
+/// This keeps class-hierarchy checks extensible without relying on concrete
+/// downcasts.
+pub trait RailBehavior: Send + Sync {
+    /// Returns whether this rail forbids curved shapes.
+    fn is_straight(&self) -> bool;
+}
+
 /// Resolved block-local collision boxes for a live block state.
 ///
 /// Most blocks materialize their extracted static voxel shape here. Dynamic
@@ -887,7 +897,7 @@ pub trait BlockBehavior: Send + Sync {
 
     /// Returns whether this behavior implements vanilla `BaseRailBlock` semantics.
     fn is_rail(&self) -> bool {
-        false
+        self.as_rail().is_some()
     }
 
     /// Returns whether this behavior implements vanilla `PistonBaseBlock` semantics.
@@ -1518,6 +1528,11 @@ pub trait BlockBehavior: Send + Sync {
 
     /// Returns the trait object for Blocks that have the Bonemealable trait implemented.
     fn as_bonemealable(&self) -> Option<&dyn Bonemealable> {
+        None
+    }
+
+    /// Returns the shared vanilla rail capability implemented by this block.
+    fn as_rail(&self) -> Option<&dyn RailBehavior> {
         None
     }
 }

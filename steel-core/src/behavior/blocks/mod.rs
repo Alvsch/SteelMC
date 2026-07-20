@@ -36,11 +36,11 @@ pub use portal::{
     RespawnAnchorBlock, SoulFireBlock,
 };
 pub use redstone::{
-    ButtonBlock, ComparatorBlock, CopperBulbBlock, DaylightDetectorBlock, LeverBlock,
-    MovingPistonBlock, ObserverBlock, PistonBaseBlock, PistonHeadBlock, PoweredBlock,
-    PressurePlateBlock, PressurePlateSensitivity, RedStoneWireBlock, RedstoneLampBlock,
-    RedstoneTorchBlock, RedstoneWallTorchBlock, RepeaterBlock, TargetBlock, TripWireBlock,
-    TripWireHookBlock, WeatheringCopperBulbBlock, WeightedPressurePlateBlock,
+    ButtonBlock, ComparatorBlock, CopperBulbBlock, DaylightDetectorBlock, DetectorRailBlock,
+    LeverBlock, MovingPistonBlock, ObserverBlock, PistonBaseBlock, PistonHeadBlock, PoweredBlock,
+    PoweredRailBlock, PressurePlateBlock, PressurePlateSensitivity, RailBlock, RedStoneWireBlock,
+    RedstoneLampBlock, RedstoneTorchBlock, RedstoneWallTorchBlock, RepeaterBlock, TargetBlock,
+    TripWireBlock, TripWireHookBlock, WeatheringCopperBulbBlock, WeightedPressurePlateBlock,
 };
 pub use vegetation::{
     AzaleaBlock, BambooSaplingBlock, BambooStalkBlock, BeetrootBlock, CactusBlock,
