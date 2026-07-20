@@ -37,6 +37,7 @@ pub use portal::{
 };
 pub use redstone::{
     ButtonBlock, PoweredBlock, RedStoneWireBlock, RedstoneTorchBlock, RedstoneWallTorchBlock,
+    RepeaterBlock,
 };
 pub use vegetation::{
     AzaleaBlock, BambooSaplingBlock, BambooStalkBlock, BeetrootBlock, CactusBlock,

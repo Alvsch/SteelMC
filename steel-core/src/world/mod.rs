@@ -211,8 +211,10 @@ use neighbor_updater::{CollectingNeighborUpdater, ShapeUpdate};
 pub use player_area_map::PlayerAreaMap;
 pub use player_map::PlayerMap;
 pub use signal_getter::{SignalGetter, SignalQueryContext};
-pub(crate) use signal_getter::{get_best_neighbor_signal, get_signal, is_redstone_conductor};
-pub use tick_scheduler::ScheduledTick;
+pub(crate) use signal_getter::{
+    get_best_neighbor_signal, get_control_input_signal, get_signal, is_redstone_conductor,
+};
+pub use tick_scheduler::{ScheduledTick, TickPriority};
 
 /// Generates a random value using triangle distribution.
 ///
