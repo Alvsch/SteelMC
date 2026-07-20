@@ -763,6 +763,14 @@ pub trait BlockBehavior: Send + Sync {
         false
     }
 
+    /// Returns whether this behavior implements vanilla `TrapDoorBlock` semantics.
+    ///
+    /// Redstone wire uses this class-hierarchy check when deciding whether it
+    /// can climb onto a neighboring block.
+    fn is_trapdoor(&self) -> bool {
+        false
+    }
+
     /// Returns whether this behavior implements vanilla `BaseRailBlock` semantics.
     fn is_rail(&self) -> bool {
         false

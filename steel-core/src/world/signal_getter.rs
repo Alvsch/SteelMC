@@ -28,6 +28,16 @@ impl SignalQueryContext {
     pub const fn wire_signals_enabled(self) -> bool {
         self.wire_signals_enabled
     }
+
+    /// Returns a query context that excludes redstone-wire output.
+    ///
+    /// Vanilla temporarily clears `RedStoneWireBlock.shouldSignal` while its
+    /// default evaluator measures power supplied by non-wire neighbors.
+    pub(crate) const fn without_wire_signals() -> Self {
+        Self {
+            wire_signals_enabled: false,
+        }
+    }
 }
 
 /// Read-only redstone signal queries matching vanilla `SignalGetter`.

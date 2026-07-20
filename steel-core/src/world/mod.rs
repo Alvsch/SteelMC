@@ -210,6 +210,7 @@ use neighbor_updater::{CollectingNeighborUpdater, ShapeUpdate};
 pub use player_area_map::PlayerAreaMap;
 pub use player_map::PlayerMap;
 pub use signal_getter::{SignalGetter, SignalQueryContext};
+pub(crate) use signal_getter::{get_best_neighbor_signal, is_redstone_conductor};
 pub use tick_scheduler::ScheduledTick;
 
 /// Generates a random value using triangle distribution.
@@ -4351,6 +4352,19 @@ impl World {
     /// Defaults to recursion limit of 512
     pub fn destroy_block(self: &Arc<Self>, pos: BlockPos, drop_items: bool) -> bool {
         self.destroy_block_with_limit(pos, drop_items, 512)
+    }
+
+    /// Replaces a block with its fluid state's legacy block.
+    ///
+    /// Mirrors vanilla `Level.removeBlock`, including the piston-move update flag.
+    pub fn remove_block(self: &Arc<Self>, pos: BlockPos, moved_by_piston: bool) -> bool {
+        let state = self.get_block_state(pos);
+        let replacement = fluid_state_to_block(state.get_fluid_state());
+        let mut flags = UpdateFlags::UPDATE_ALL;
+        if moved_by_piston {
+            flags |= UpdateFlags::UPDATE_MOVE_BY_PISTON;
+        }
+        self.set_block(pos, replacement, flags)
     }
 
     /// Destroys a block with an entity source for game-event context.

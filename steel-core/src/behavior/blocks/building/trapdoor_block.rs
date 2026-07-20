@@ -112,6 +112,10 @@ impl TrapDoorBlock {
 }
 
 impl BlockBehavior for TrapDoorBlock {
+    fn is_trapdoor(&self) -> bool {
+        true
+    }
+
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         let mut state = self.block.default_state();
         let face = context.clicked_face();
@@ -240,6 +244,10 @@ impl WeatheringCopperTrapDoorBlock {
 }
 
 impl BlockBehavior for WeatheringCopperTrapDoorBlock {
+    fn is_trapdoor(&self) -> bool {
+        true
+    }
+
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         self.trapdoor().get_state_for_placement(context)
     }

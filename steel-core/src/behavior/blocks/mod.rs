@@ -35,7 +35,9 @@ pub use portal::{
     EndGatewayBlock, EndPortalBlock, EndPortalFrameBlock, FireBlock, NetherPortalBlock,
     SoulFireBlock,
 };
-pub use redstone::{ButtonBlock, PoweredBlock, RedstoneTorchBlock, RedstoneWallTorchBlock};
+pub use redstone::{
+    ButtonBlock, PoweredBlock, RedStoneWireBlock, RedstoneTorchBlock, RedstoneWallTorchBlock,
+};
 pub use vegetation::{
     AzaleaBlock, BambooSaplingBlock, BambooStalkBlock, BeetrootBlock, CactusBlock,
     CactusFlowerBlock, CarrotBlock, CocoaBlock, CoralBlock, CropBlock, DoublePlantBlock,
