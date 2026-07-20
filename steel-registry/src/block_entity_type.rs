@@ -1,12 +1,25 @@
 use rustc_hash::FxHashMap;
 use steel_utils::Identifier;
 
+use crate::blocks::BlockRef;
+
 /// Represents a block entity type in Minecraft.
 /// Block entities are used for blocks that need to store additional data
 /// beyond their block state, such as chests, furnaces, signs, etc.
 #[derive(Debug)]
 pub struct BlockEntityType {
     pub key: Identifier,
+    /// Blocks for which vanilla accepts this block entity type.
+    pub valid_blocks: &'static [BlockRef],
+}
+
+impl BlockEntityType {
+    #[must_use]
+    pub fn is_valid(&self, block: BlockRef) -> bool {
+        self.valid_blocks
+            .iter()
+            .any(|valid_block| std::ptr::eq(*valid_block, block))
+    }
 }
 
 pub type BlockEntityTypeRef = &'static BlockEntityType;

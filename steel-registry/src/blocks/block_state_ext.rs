@@ -91,8 +91,11 @@ impl BlockStateExt for BlockStateId {
     }
 
     fn has_block_entity(&self) -> bool {
-        // TODO: Implement when block entities are added
-        false
+        let block = self.get_block();
+        REGISTRY
+            .block_entity_types
+            .iter()
+            .any(|(_, block_entity_type)| block_entity_type.is_valid(block))
     }
 
     fn get_value<P: Property>(&self, property: &P) -> P::Value {
@@ -357,6 +360,19 @@ mod tests {
         assert!(vanilla_blocks::AIR.default_state().is_air());
         assert!(vanilla_blocks::CAVE_AIR.default_state().is_air());
         assert!(vanilla_blocks::VOID_AIR.default_state().is_air());
+    }
+
+    #[test]
+    fn block_entity_presence_uses_extracted_type_validity() {
+        init_test_registry();
+
+        assert!(
+            vanilla_blocks::MOVING_PISTON
+                .default_state()
+                .has_block_entity()
+        );
+        assert!(vanilla_blocks::CHEST.default_state().has_block_entity());
+        assert!(!vanilla_blocks::STONE.default_state().has_block_entity());
     }
 
     #[test]
