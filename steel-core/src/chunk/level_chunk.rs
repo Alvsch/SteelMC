@@ -508,14 +508,9 @@ impl LevelChunk {
     /// Returns false when the entity's position or type does not match the
     /// current block state.
     pub fn try_add_and_register_block_entity(&self, block_entity: SharedBlockEntity) -> bool {
-        let (pos, cached_state, block_entity_type) = {
-            let guard = block_entity.lock();
-            (
-                guard.get_block_pos(),
-                guard.get_block_state(),
-                guard.get_type(),
-            )
-        };
+        let pos = block_entity.get_block_pos();
+        let cached_state = block_entity.get_block_state();
+        let block_entity_type = block_entity.get_type();
         let state = self.get_block_state(pos);
         if !state.has_block_entity() {
             log::warn!(
@@ -543,7 +538,7 @@ impl LevelChunk {
                     cached_state.get_block().key,
                 );
             }
-            block_entity.lock().set_block_state(state);
+            block_entity.set_block_state(state);
         }
 
         self.block_entities.add_and_register(block_entity);
@@ -589,19 +584,12 @@ impl LevelChunk {
         // Get entities to tick (already filters out removed)
         let entities = self.block_entities.get_tickers();
 
-        // Tick each entity
+        // Tick each entity without retaining a block-entity state lock.
         for entity in entities {
-            let action = {
-                let mut guard = entity.lock();
-                if guard.is_removed() {
-                    continue;
-                }
-                guard.tick(&world)
-            };
-
-            if let Some(action) = action {
-                world.apply_block_entity_tick_action(action);
+            if entity.is_removed() {
+                continue;
             }
+            entity.tick(&world);
         }
 
         // Clean up removed entities from the ticking list
@@ -746,7 +734,7 @@ impl LevelChunk {
                 let should_keep = new_behavior.should_keep_block_entity(old_state, state);
                 if !should_keep {
                     if side_effects && let Some(block_entity) = self.get_block_entity(pos) {
-                        block_entity.lock().pre_remove_side_effects(pos, old_state);
+                        block_entity.pre_remove_side_effects(pos, old_state);
                     }
                     self.remove_block_entity(pos);
                 }
@@ -786,7 +774,7 @@ impl LevelChunk {
             if new_behavior.has_block_entity() && requested_block_remains {
                 if let Some(existing) = self.get_block_entity(pos) {
                     // Update existing block entity's state
-                    existing.lock().set_block_state(state);
+                    existing.set_block_state(state);
                     self.update_block_entity_ticker(&existing);
                 } else {
                     // Create new block entity
@@ -891,10 +879,9 @@ impl LevelChunk {
             .get_all()
             .iter()
             .map(|entity| {
-                let guard = entity.lock();
-                let pos = guard.get_block_pos();
-                let type_id = guard.get_type().id() as i32;
-                let update_tag = guard.get_update_tag();
+                let pos = entity.get_block_pos();
+                let type_id = entity.get_type().id() as i32;
+                let update_tag = entity.get_update_tag();
 
                 BlockEntityInfo {
                     packed_xz: PackedChunkLocalXZ::from_block_pos(pos),

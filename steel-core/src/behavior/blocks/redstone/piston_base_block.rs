@@ -9,7 +9,6 @@ use steel_registry::blocks::behavior::PushReaction;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction, PistonType};
 use steel_registry::{sound_events, vanilla_blocks, vanilla_game_events};
-use steel_utils::locks::SyncMutex;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
@@ -116,7 +115,6 @@ impl PistonBaseBlock {
             && world
                 .get_block_entity(pushed_pos)
                 .is_some_and(|block_entity| {
-                    let block_entity = block_entity.lock();
                     block_entity
                         .downcast_ref::<PistonMovingBlockEntity>()
                         .is_some_and(|piston| {
@@ -137,16 +135,10 @@ impl PistonBaseBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return false;
         };
-        let action = {
-            let mut block_entity = block_entity.lock();
-            let Some(piston) = block_entity.downcast_mut::<PistonMovingBlockEntity>() else {
-                return false;
-            };
-            piston.final_tick_action(world)
+        let Some(piston) = block_entity.downcast_ref::<PistonMovingBlockEntity>() else {
+            return false;
         };
-        if let Some(action) = action {
-            world.apply_block_entity_tick_action(action);
-        }
+        piston.final_tick(world);
         true
     }
 
@@ -159,7 +151,7 @@ impl PistonBaseBlock {
         extending: bool,
         source: bool,
     ) -> SharedBlockEntity {
-        Arc::new(SyncMutex::new(PistonMovingBlockEntity::new_moving(
+        Arc::new(PistonMovingBlockEntity::new_moving(
             Arc::downgrade(world),
             pos,
             state,
@@ -167,7 +159,7 @@ impl PistonBaseBlock {
             direction,
             extending,
             source,
-        )))
+        ))
     }
 
     #[expect(
@@ -432,7 +424,6 @@ impl PistonBaseBlock {
             let two_state = world.get_block_state(two_pos);
             let piston_piece = if two_state.get_block() == &vanilla_blocks::MOVING_PISTON {
                 let matches = world.get_block_entity(two_pos).is_some_and(|block_entity| {
-                    let block_entity = block_entity.lock();
                     block_entity
                         .downcast_ref::<PistonMovingBlockEntity>()
                         .is_some_and(|piston| {

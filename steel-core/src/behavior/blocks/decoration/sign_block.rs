@@ -13,7 +13,6 @@ use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction};
 use steel_registry::blocks::shapes::SupportType;
 use steel_registry::vanilla_blocks;
-use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::InventoryAccess;
@@ -243,13 +242,12 @@ fn try_open_sign_editor(
         return InteractionResult::Pass;
     };
 
-    let mut guard = block_entity.lock();
-    let Some(sign) = guard.downcast_mut::<SignBlockEntity>() else {
+    let Some(sign) = block_entity.downcast_ref::<SignBlockEntity>() else {
         return InteractionResult::Pass;
     };
 
     // Check 1: Is the sign waxed?
-    if sign.is_waxed {
+    if sign.is_waxed() {
         // TODO: Play waxed sign interaction fail sound
         return InteractionResult::Success; // Vanilla returns SUCCESS even when waxed
     }
@@ -270,9 +268,6 @@ fn try_open_sign_editor(
 
     // Set the editing player lock
     sign.set_player_who_may_edit(Some(player.gameprofile.id));
-
-    // Release lock before calling player method
-    drop(guard);
 
     // Open the editor
     player.open_sign_editor(pos, is_front_text);
@@ -337,9 +332,7 @@ impl BlockBehavior for StandingSignBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SyncMutex::new(SignBlockEntity::new(
-            level, pos, state,
-        ))))
+        Some(Arc::new(SignBlockEntity::new(level, pos, state)))
     }
 
     fn should_keep_block_entity(&self, _old_state: BlockStateId, _new_state: BlockStateId) -> bool {
@@ -427,9 +420,7 @@ impl BlockBehavior for WallSignBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SyncMutex::new(SignBlockEntity::new(
-            level, pos, state,
-        ))))
+        Some(Arc::new(SignBlockEntity::new(level, pos, state)))
     }
 
     fn should_keep_block_entity(&self, _old_state: BlockStateId, _new_state: BlockStateId) -> bool {
@@ -555,9 +546,7 @@ impl BlockBehavior for CeilingHangingSignBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SyncMutex::new(SignBlockEntity::new_hanging(
-            level, pos, state,
-        ))))
+        Some(Arc::new(SignBlockEntity::new_hanging(level, pos, state)))
     }
 
     fn should_keep_block_entity(&self, _old_state: BlockStateId, _new_state: BlockStateId) -> bool {
@@ -662,9 +651,7 @@ impl BlockBehavior for WallHangingSignBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SyncMutex::new(SignBlockEntity::new_hanging(
-            level, pos, state,
-        ))))
+        Some(Arc::new(SignBlockEntity::new_hanging(level, pos, state)))
     }
 
     fn should_keep_block_entity(&self, _old_state: BlockStateId, _new_state: BlockStateId) -> bool {

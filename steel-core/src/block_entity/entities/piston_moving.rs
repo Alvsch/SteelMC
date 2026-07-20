@@ -6,7 +6,6 @@ use std::sync::{Arc, Weak};
 use glam::DVec3;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::NbtCompound;
-use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::behavior::PushReaction;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction, PistonType};
@@ -15,11 +14,12 @@ use steel_utils::axis::Axis;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{
     BlockLocalAabb, BlockPos, BlockStateId, DowncastType, DowncastTypeKey, WorldAabb,
+    locks::SyncMutex,
 };
 
 use crate::behavior::{BLOCK_BEHAVIORS, BlockCollisionBoxes, BlockCollisionContext};
 use crate::block_entity::block_state_nbt;
-use crate::block_entity::{BlockEntity, BlockEntityTickAction};
+use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::Entity;
 use crate::physics::MoverType;
 use crate::world::{LevelReader, World};
@@ -47,9 +47,12 @@ impl Drop for NoClipGuard {
 
 /// Vanilla `PistonMovingBlockEntity`.
 pub struct PistonMovingBlockEntity {
-    world: Weak<World>,
-    pos: BlockPos,
-    state: BlockStateId,
+    base: BlockEntityBase,
+    moving: SyncMutex<PistonMovingState>,
+}
+
+#[derive(Clone, Copy)]
+struct PistonMovingState {
     moved_state: BlockStateId,
     direction: Direction,
     extending: bool,
@@ -57,7 +60,6 @@ pub struct PistonMovingBlockEntity {
     progress: f32,
     progress_o: f32,
     last_ticked: i64,
-    removed: bool,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `PistonMovingBlockEntity`.
@@ -82,7 +84,7 @@ impl PistonMovingBlockEntity {
 
     /// Creates a moving block or source-piston entity.
     #[must_use]
-    pub const fn new_moving(
+    pub fn new_moving(
         world: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
@@ -92,60 +94,97 @@ impl PistonMovingBlockEntity {
         source_piston: bool,
     ) -> Self {
         Self {
-            world,
-            pos,
-            state,
-            moved_state,
-            direction,
-            extending,
-            source_piston,
-            progress: 0.0,
-            progress_o: 0.0,
-            last_ticked: 0,
-            removed: false,
+            base: BlockEntityBase::new(&vanilla_block_entity_types::PISTON, world, pos, state),
+            moving: SyncMutex::new(PistonMovingState {
+                moved_state,
+                direction,
+                extending,
+                source_piston,
+                progress: 0.0,
+                progress_o: 0.0,
+                last_ticked: 0,
+            }),
         }
     }
 
     /// Returns whether this block is extending.
     #[must_use]
-    pub const fn is_extending(&self) -> bool {
-        self.extending
+    pub fn is_extending(&self) -> bool {
+        self.moving.lock().extending
     }
 
     /// Returns the piston facing direction.
     #[must_use]
-    pub const fn direction(&self) -> Direction {
-        self.direction
+    pub fn direction(&self) -> Direction {
+        self.moving.lock().direction
     }
 
     /// Returns whether this entity represents the source piston or its head.
     #[must_use]
-    pub const fn is_source_piston(&self) -> bool {
-        self.source_piston
+    pub fn is_source_piston(&self) -> bool {
+        self.moving.lock().source_piston
     }
 
     /// Returns the state being moved.
     #[must_use]
-    pub const fn moved_state(&self) -> BlockStateId {
-        self.moved_state
+    pub fn moved_state(&self) -> BlockStateId {
+        self.moving.lock().moved_state
     }
 
     /// Returns the last game time at which this entity ticked.
     #[must_use]
-    pub const fn last_ticked(&self) -> i64 {
-        self.last_ticked
+    pub fn last_ticked(&self) -> i64 {
+        self.moving.lock().last_ticked
     }
 
     /// Returns interpolated movement progress.
     #[must_use]
     pub fn progress(&self, partial_tick: f32) -> f32 {
         let partial_tick = partial_tick.min(1.0);
-        (self.progress - self.progress_o).mul_add(partial_tick, self.progress_o)
+        let moving = self.moving.lock();
+        (moving.progress - moving.progress_o).mul_add(partial_tick, moving.progress_o)
     }
 
     /// Returns the movement direction, which reverses while retracting.
     #[must_use]
-    pub const fn movement_direction(&self) -> Direction {
+    pub fn movement_direction(&self) -> Direction {
+        self.moving.lock().movement_direction()
+    }
+
+    /// Returns the direction used for the final neighbor notification.
+    #[must_use]
+    pub fn push_direction(&self) -> Direction {
+        self.moving.lock().movement_direction()
+    }
+
+    /// Resolves the transient collision boxes at the current progress.
+    #[must_use]
+    pub fn collision_boxes(&self, world: &dyn LevelReader, pos: BlockPos) -> BlockCollisionBoxes {
+        let moving = *self.moving.lock();
+        moving.collision_boxes(world, pos)
+    }
+
+    /// Completes an in-flight moving block before its piston starts retracting.
+    pub fn final_tick(&self, world: &Arc<World>) -> bool {
+        let moving = {
+            let mut moving = self.moving.lock();
+            if moving.progress_o >= 1.0 {
+                return false;
+            }
+            moving.progress = 1.0;
+            moving.progress_o = 1.0;
+            *moving
+        };
+        let pos = self.get_block_pos();
+        world.remove_block_entity(pos);
+        self.set_removed();
+        moving.finish_movement_early(world, pos);
+        true
+    }
+}
+
+impl PistonMovingState {
+    const fn movement_direction(self) -> Direction {
         if self.extending {
             self.direction
         } else {
@@ -153,13 +192,7 @@ impl PistonMovingBlockEntity {
         }
     }
 
-    /// Returns the direction used for the final neighbor notification.
-    #[must_use]
-    pub const fn push_direction(&self) -> Direction {
-        self.movement_direction()
-    }
-
-    fn extended_progress(&self, progress: f32) -> f32 {
+    fn extended_progress(self, progress: f32) -> f32 {
         if self.extending {
             progress - 1.0
         } else {
@@ -167,7 +200,7 @@ impl PistonMovingBlockEntity {
         }
     }
 
-    fn collision_related_state(&self) -> BlockStateId {
+    fn collision_related_state(self) -> BlockStateId {
         let behavior = BLOCK_BEHAVIORS.get_behavior(self.moved_state.get_block());
         if !self.extending && self.source_piston && behavior.is_piston_base() {
             vanilla_blocks::PISTON_HEAD
@@ -387,15 +420,15 @@ impl PistonMovingBlockEntity {
         }
     }
 
-    fn move_collided_entities(&self, world: &Arc<World>, new_progress: f32) {
+    fn move_collided_entities(self, world: &Arc<World>, pos: BlockPos, new_progress: f32) {
         let movement = self.movement_direction();
         let delta_progress = f64::from(new_progress - self.progress);
         let shape =
-            Self::state_collision_boxes(self.collision_related_state(), world.as_ref(), self.pos);
+            Self::state_collision_boxes(self.collision_related_state(), world.as_ref(), pos);
         let Some(bounds) = Self::boxes_bounds(&shape) else {
             return;
         };
-        let aabb = self.move_by_position_and_progress(self.pos, bounds);
+        let aabb = self.move_by_position_and_progress(pos, bounds);
         let query =
             WorldAabb::encapsulating(&Self::movement_area(aabb, movement, delta_progress), &aabb);
         let entities = world.get_entities_in_aabb(&query);
@@ -420,7 +453,7 @@ impl PistonMovingBlockEntity {
             let entity_aabb = entity.bounding_box();
             for shape_aabb in &shape {
                 let moving_aabb = Self::movement_area(
-                    self.move_by_position_and_progress(self.pos, *shape_aabb),
+                    self.move_by_position_and_progress(pos, *shape_aabb),
                     movement,
                     delta_progress,
                 );
@@ -438,17 +471,12 @@ impl PistonMovingBlockEntity {
             let delta = delta.min(delta_progress) + PUSH_OFFSET;
             Self::move_entity_by_piston(movement, entity.as_ref(), delta, movement);
             if !self.extending && self.source_piston {
-                Self::fix_entity_within_piston_base(
-                    self.pos,
-                    entity.as_ref(),
-                    movement,
-                    delta_progress,
-                );
+                Self::fix_entity_within_piston_base(pos, entity.as_ref(), movement, delta_progress);
             }
         }
     }
 
-    fn move_stuck_entities(&self, world: &Arc<World>, new_progress: f32) {
+    fn move_stuck_entities(self, world: &Arc<World>, pos: BlockPos, new_progress: f32) {
         if self.moved_state.get_block() != &vanilla_blocks::HONEY_BLOCK {
             return;
         }
@@ -457,18 +485,18 @@ impl PistonMovingBlockEntity {
             return;
         }
 
-        let collision = Self::state_collision_boxes(self.moved_state, world.as_ref(), self.pos);
+        let collision = Self::state_collision_boxes(self.moved_state, world.as_ref(), pos);
         let sticky_top = collision
             .iter()
             .map(BlockLocalAabb::max_y)
             .fold(f64::NEG_INFINITY, f64::max);
         let local = BlockLocalAabb::new(0.0, sticky_top, 0.0, 1.0, 1.500_001, 1.0);
-        let aabb = self.move_by_position_and_progress(self.pos, local);
+        let aabb = self.move_by_position_and_progress(pos, local);
         let entities = world.get_entities_in_aabb_matching(&aabb, |entity| {
             let position = entity.position();
             entity.piston_push_reaction() == PushReaction::Normal
                 && entity.on_ground()
-                && (entity.is_supported_by(self.pos)
+                && (entity.is_supported_by(pos)
                     || (position.x >= aabb.min_x()
                         && position.x <= aabb.max_x()
                         && position.z >= aabb.min_z()
@@ -480,79 +508,52 @@ impl PistonMovingBlockEntity {
         }
     }
 
-    fn final_state_action(&mut self, world: &Arc<World>) -> BlockEntityTickAction {
-        self.removed = true;
-        let mut actions = vec![BlockEntityTickAction::RemoveBlockEntity { pos: self.pos }];
-        if world.get_block_state(self.pos).get_block() != &vanilla_blocks::MOVING_PISTON {
-            return BlockEntityTickAction::Batch(actions);
+    fn finish_tick(self, world: &Arc<World>, pos: BlockPos) {
+        if world.get_block_state(pos).get_block() != &vanilla_blocks::MOVING_PISTON {
+            return;
         }
 
-        let mut new_state = world.update_from_neighbor_shapes(self.moved_state, self.pos);
+        let mut new_state = world.update_from_neighbor_shapes(self.moved_state, pos);
         if new_state.get_block() == &vanilla_blocks::AIR {
-            actions.push(BlockEntityTickAction::SetBlock {
-                pos: self.pos,
-                state: self.moved_state,
-                flags: UpdateFlags::UPDATE_INVISIBLE
+            world.set_block(
+                pos,
+                self.moved_state,
+                UpdateFlags::UPDATE_INVISIBLE
                     | UpdateFlags::UPDATE_KNOWN_SHAPE
                     | UpdateFlags::UPDATE_MOVE_BY_PISTON
                     | UpdateFlags::UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS,
-                game_event: None,
-            });
-            actions.push(BlockEntityTickAction::UpdateOrDestroy {
-                old_state: self.moved_state,
+            );
+            world.update_or_destroy(
+                self.moved_state,
                 new_state,
-                pos: self.pos,
-                flags: UpdateFlags::UPDATE_ALL,
-                update_limit: 512,
-            });
-            return BlockEntityTickAction::Batch(actions);
+                pos,
+                UpdateFlags::UPDATE_ALL,
+                512,
+            );
+            return;
         }
 
         if new_state.try_get_value(&BlockStateProperties::WATERLOGGED) == Some(true) {
             new_state = new_state.set_value(&BlockStateProperties::WATERLOGGED, false);
         }
-        actions.push(BlockEntityTickAction::SetBlock {
-            pos: self.pos,
-            state: new_state,
-            flags: UpdateFlags::UPDATE_ALL | UpdateFlags::UPDATE_MOVE_BY_PISTON,
-            game_event: None,
-        });
-        actions.push(BlockEntityTickAction::NeighborChanged {
-            pos: self.pos,
-            source_block: new_state.get_block(),
-        });
-        BlockEntityTickAction::Batch(actions)
+        world.set_block(
+            pos,
+            new_state,
+            UpdateFlags::UPDATE_ALL | UpdateFlags::UPDATE_MOVE_BY_PISTON,
+        );
+        world.neighbor_changed(pos, new_state.get_block());
     }
 
-    /// Completes an in-flight moving block before its piston starts retracting.
-    #[must_use]
-    pub fn final_tick_action(&mut self, world: &Arc<World>) -> Option<BlockEntityTickAction> {
-        if self.progress_o >= 1.0 {
-            return None;
-        }
-        self.progress = 1.0;
-        self.progress_o = 1.0;
-        self.removed = true;
-
-        let mut actions = vec![BlockEntityTickAction::RemoveBlockEntity { pos: self.pos }];
-        if world.get_block_state(self.pos).get_block() == &vanilla_blocks::MOVING_PISTON {
+    fn finish_movement_early(self, world: &Arc<World>, pos: BlockPos) {
+        if world.get_block_state(pos).get_block() == &vanilla_blocks::MOVING_PISTON {
             let new_state = if self.source_piston {
                 vanilla_blocks::AIR.default_state()
             } else {
-                world.update_from_neighbor_shapes(self.moved_state, self.pos)
+                world.update_from_neighbor_shapes(self.moved_state, pos)
             };
-            actions.push(BlockEntityTickAction::SetBlock {
-                pos: self.pos,
-                state: new_state,
-                flags: UpdateFlags::UPDATE_ALL,
-                game_event: None,
-            });
-            actions.push(BlockEntityTickAction::NeighborChanged {
-                pos: self.pos,
-                source_block: new_state.get_block(),
-            });
+            world.set_block(pos, new_state, UpdateFlags::UPDATE_ALL);
+            world.neighbor_changed(pos, new_state.get_block());
         }
-        Some(BlockEntityTickAction::Batch(actions))
     }
 
     const fn direction_from_legacy_id(id: i32) -> Direction {
@@ -579,65 +580,41 @@ impl PistonMovingBlockEntity {
 }
 
 impl BlockEntity for PistonMovingBlockEntity {
-    fn get_type(&self) -> BlockEntityTypeRef {
-        &vanilla_block_entity_types::PISTON
+    fn base(&self) -> &BlockEntityBase {
+        &self.base
     }
 
-    fn get_block_pos(&self) -> BlockPos {
-        self.pos
-    }
-
-    fn get_block_state(&self) -> BlockStateId {
-        self.state
-    }
-
-    fn set_block_state(&mut self, state: BlockStateId) {
-        self.state = state;
-    }
-
-    fn is_removed(&self) -> bool {
-        self.removed
-    }
-
-    fn set_removed(&mut self) {
-        self.removed = true;
-    }
-
-    fn clear_removed(&mut self) {
-        self.removed = false;
-    }
-
-    fn get_level(&self) -> Option<Arc<World>> {
-        self.world.upgrade()
-    }
-
-    fn pre_remove_side_effects(&mut self, _pos: BlockPos, _state: BlockStateId) {
-        if self.progress_o < 1.0 {
-            self.progress = 1.0;
-            self.progress_o = 1.0;
+    fn pre_remove_side_effects(&self, _pos: BlockPos, _state: BlockStateId) {
+        if let Some(world) = self.get_level() {
+            self.final_tick(&world);
         }
-        self.removed = true;
     }
 
-    fn load_additional(&mut self, nbt: &BorrowedNbtCompound<'_>) {
+    fn load_additional(&self, nbt: &BorrowedNbtCompound<'_>) {
         let view = NbtCompoundView::from(nbt);
-        self.moved_state = view
+        let mut moving = self.moving.lock();
+        moving.moved_state = view
             .compound("blockState")
             .and_then(block_state_nbt::load)
             .unwrap_or_else(|| vanilla_blocks::AIR.default_state());
-        self.direction = Self::direction_from_legacy_id(view.int("facing").unwrap_or(0));
-        self.progress = view.float("progress").unwrap_or(0.0);
-        self.progress_o = self.progress;
-        self.extending = view.byte("extending").is_some_and(|value| value != 0);
-        self.source_piston = view.byte("source").is_some_and(|value| value != 0);
+        moving.direction =
+            PistonMovingState::direction_from_legacy_id(view.int("facing").unwrap_or(0));
+        moving.progress = view.float("progress").unwrap_or(0.0);
+        moving.progress_o = moving.progress;
+        moving.extending = view.byte("extending").is_some_and(|value| value != 0);
+        moving.source_piston = view.byte("source").is_some_and(|value| value != 0);
     }
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
-        nbt.insert("blockState", block_state_nbt::save(self.moved_state));
-        nbt.insert("facing", Self::direction_legacy_id(self.direction));
-        nbt.insert("progress", self.progress_o);
-        nbt.insert("extending", i8::from(self.extending));
-        nbt.insert("source", i8::from(self.source_piston));
+        let moving = self.moving.lock();
+        nbt.insert("blockState", block_state_nbt::save(moving.moved_state));
+        nbt.insert(
+            "facing",
+            PistonMovingState::direction_legacy_id(moving.direction),
+        );
+        nbt.insert("progress", moving.progress_o);
+        nbt.insert("extending", i8::from(moving.extending));
+        nbt.insert("source", i8::from(moving.source_piston));
     }
 
     fn get_update_tag(&self) -> Option<NbtCompound> {
@@ -648,18 +625,26 @@ impl BlockEntity for PistonMovingBlockEntity {
         true
     }
 
-    fn tick(&mut self, world: &Arc<World>) -> Option<BlockEntityTickAction> {
-        self.last_ticked = world.game_time();
-        self.progress_o = self.progress;
-        if self.progress_o >= 1.0 {
-            return Some(self.final_state_action(world));
-        }
+    fn tick(&self, world: &Arc<World>) {
+        let game_time = world.game_time();
+        let (moving, new_progress) = {
+            let mut moving = self.moving.lock();
+            moving.last_ticked = game_time;
+            moving.progress_o = moving.progress;
+            let new_progress = (moving.progress_o < 1.0).then(|| moving.progress + 0.5);
+            (*moving, new_progress)
+        };
+        let pos = self.get_block_pos();
+        let Some(new_progress) = new_progress else {
+            world.remove_block_entity(pos);
+            self.set_removed();
+            moving.finish_tick(world, pos);
+            return;
+        };
 
-        let new_progress = self.progress + 0.5;
-        self.move_collided_entities(world, new_progress);
-        self.move_stuck_entities(world, new_progress);
-        self.progress = new_progress.min(1.0);
-        None
+        moving.move_collided_entities(world, pos, new_progress);
+        moving.move_stuck_entities(world, pos, new_progress);
+        self.moving.lock().progress = new_progress.min(1.0);
     }
 }
 
@@ -667,10 +652,16 @@ impl BlockEntity for PistonMovingBlockEntity {
 mod tests {
     use std::io::Cursor;
 
+    use glam::DVec3;
     use simdnbt::borrow::read_compound as read_borrowed_compound;
-    use steel_registry::test_support::init_test_registry;
+    use steel_registry::{test_support::init_test_registry, vanilla_entities};
+    use steel_utils::ChunkPos;
 
     use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::block_entity::SharedBlockEntity;
+    use crate::entity::{SharedEntity, entities::RawEntity};
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
 
     #[test]
     fn moving_state_and_progress_round_trip_with_vanilla_keys() {
@@ -684,7 +675,7 @@ mod tests {
             .set_value(&BlockStateProperties::FACING, Direction::West)
             .set_value(&BlockStateProperties::PISTON_TYPE, PistonType::Sticky)
             .set_value(&BlockStateProperties::SHORT, true);
-        let mut source = PistonMovingBlockEntity::new_moving(
+        let source = PistonMovingBlockEntity::new_moving(
             Weak::new(),
             BlockPos::new(8, 64, -3),
             state,
@@ -693,7 +684,7 @@ mod tests {
             true,
             true,
         );
-        source.progress_o = 0.5;
+        source.moving.lock().progress_o = 0.5;
 
         let mut nbt = NbtCompound::new();
         source.save_additional(&mut nbt);
@@ -702,7 +693,7 @@ mod tests {
         let borrowed = read_borrowed_compound(&mut Cursor::new(bytes.as_slice()))
             .expect("test NBT should reborrow");
 
-        let mut loaded = PistonMovingBlockEntity::new(Weak::new(), source.pos, state);
+        let loaded = PistonMovingBlockEntity::new(Weak::new(), source.get_block_pos(), state);
         loaded.load_additional(&borrowed);
         assert_eq!(loaded.moved_state(), moved);
         assert_eq!(loaded.direction(), Direction::West);
@@ -715,12 +706,77 @@ mod tests {
     fn movement_area_matches_vanilla_directional_sweep() {
         let aabb = WorldAabb::new(1.0, 2.0, 3.0, 2.0, 3.0, 4.0);
         assert_eq!(
-            PistonMovingBlockEntity::movement_area(aabb, Direction::East, 0.5),
+            PistonMovingState::movement_area(aabb, Direction::East, 0.5),
             WorldAabb::new(2.0, 2.0, 3.0, 2.5, 3.0, 4.0)
         );
         assert_eq!(
-            PistonMovingBlockEntity::movement_area(aabb, Direction::North, 0.5),
+            PistonMovingState::movement_area(aabb, Direction::North, 0.5),
             WorldAabb::new(1.0, 2.0, 2.5, 2.0, 3.0, 3.0)
         );
+    }
+
+    #[test]
+    fn piston_entity_move_can_reenter_moving_block_collision() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("piston_collision_reentry");
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(&world, ChunkPos::from_block_pos(pos));
+        let state = vanilla_blocks::MOVING_PISTON
+            .default_state()
+            .set_value(&BlockStateProperties::FACING, Direction::East);
+        assert!(world.set_block(pos, state, UpdateFlags::UPDATE_NONE));
+
+        let piston = Arc::new(PistonMovingBlockEntity::new_moving(
+            Arc::downgrade(&world),
+            pos,
+            state,
+            vanilla_blocks::STONE.default_state(),
+            Direction::East,
+            true,
+            false,
+        ));
+        let block_entity: SharedBlockEntity = piston.clone();
+        assert!(world.set_block_entity(block_entity));
+
+        let start = DVec3::new(f64::from(pos.x()) + 0.1, f64::from(pos.y()), 8.5);
+        let entity: SharedEntity = Arc::new(RawEntity::new(
+            8_001,
+            start,
+            Arc::downgrade(&world),
+            &vanilla_entities::MINECART,
+        ));
+        world
+            .try_add_entity(Arc::clone(&entity))
+            .expect("test entity should enter the loaded chunk");
+
+        piston.tick(&world);
+
+        assert!((piston.progress(1.0) - 0.5).abs() < f32::EPSILON);
+        assert!(entity.position().x > start.x);
+    }
+
+    #[test]
+    fn final_tick_marks_a_detached_moving_entity_removed() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("detached_piston_final_tick");
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(&world, ChunkPos::from_block_pos(pos));
+        let state = vanilla_blocks::MOVING_PISTON
+            .default_state()
+            .set_value(&BlockStateProperties::FACING, Direction::East);
+        let piston = PistonMovingBlockEntity::new_moving(
+            Arc::downgrade(&world),
+            pos,
+            state,
+            vanilla_blocks::STONE.default_state(),
+            Direction::East,
+            true,
+            false,
+        );
+
+        assert!(piston.final_tick(&world));
+        assert!(piston.is_removed());
     }
 }

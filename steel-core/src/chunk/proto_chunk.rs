@@ -605,7 +605,7 @@ impl ProtoChunk {
             let should_keep = new_behavior.should_keep_block_entity(old_state, state);
             if !should_keep {
                 if side_effects && let Some(block_entity) = self.get_block_entity(pos) {
-                    block_entity.lock().pre_remove_side_effects(pos, old_state);
+                    block_entity.pre_remove_side_effects(pos, old_state);
                 }
                 self.remove_block_entity(pos);
             }
@@ -613,7 +613,7 @@ impl ProtoChunk {
 
         if new_behavior.has_block_entity() {
             if let Some(existing) = self.get_block_entity(pos) {
-                existing.lock().set_block_state(state);
+                existing.set_block_state(state);
                 self.update_block_entity_ticker(&existing);
             } else if let Some(entity) =
                 new_behavior.new_block_entity(self.level.clone(), pos, state)

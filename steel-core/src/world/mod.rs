@@ -99,7 +99,7 @@ use crate::{
     ChunkMap,
     behavior::BlockStateBehaviorExt,
     behavior::{BLOCK_BEHAVIORS, BlockCollisionContext, BlockLootContext, FLUID_BEHAVIORS},
-    block_entity::{BlockEntityTickAction, SharedBlockEntity, entities::EndGatewayBlockEntity},
+    block_entity::{SharedBlockEntity, entities::EndGatewayBlockEntity},
     chunk::{heightmap::HeightmapType, player_chunk_view::PlayerChunkView},
     chunk_saver::{ChunkStorage, RamOnlyStorage, RegionManager},
     entity::{
@@ -1109,8 +1109,7 @@ impl World {
         let Some(block_entity) = self.get_block_entity(origin) else {
             return false;
         };
-        let mut block_entity = block_entity.lock();
-        let Some(gateway) = block_entity.downcast_mut::<EndGatewayBlockEntity>() else {
+        let Some(gateway) = block_entity.downcast_ref::<EndGatewayBlockEntity>() else {
             return false;
         };
         gateway.set_exit_position(exit, exact);
@@ -2386,7 +2385,7 @@ impl World {
 
     /// Adds a block entity to the loaded full chunk at its position.
     pub(crate) fn set_block_entity(&self, block_entity: SharedBlockEntity) -> bool {
-        let pos = block_entity.lock().get_block_pos();
+        let pos = block_entity.get_block_pos();
         if !self.is_in_valid_bounds(pos) {
             return false;
         }
@@ -2413,43 +2412,6 @@ impl World {
                     .is_some_and(|chunk| chunk.remove_block_entity(pos))
             })
             .unwrap_or(false)
-    }
-
-    /// Applies block-entity-requested world mutations after its mutex is released.
-    pub(crate) fn apply_block_entity_tick_action(self: &Arc<Self>, action: BlockEntityTickAction) {
-        match action {
-            BlockEntityTickAction::Batch(actions) => {
-                for action in actions {
-                    self.apply_block_entity_tick_action(action);
-                }
-            }
-            BlockEntityTickAction::SetBlock {
-                pos,
-                state,
-                flags,
-                game_event,
-            } => {
-                self.set_block(pos, state, flags);
-                if let Some((event, event_state)) = game_event {
-                    self.game_event(event, pos, &GameEventContext::new(None, Some(event_state)));
-                }
-            }
-            BlockEntityTickAction::RemoveBlockEntity { pos } => {
-                self.remove_block_entity(pos);
-            }
-            BlockEntityTickAction::UpdateOrDestroy {
-                old_state,
-                new_state,
-                pos,
-                flags,
-                update_limit,
-            } => {
-                self.update_or_destroy(old_state, new_state, pos, flags, update_limit);
-            }
-            BlockEntityTickAction::NeighborChanged { pos, source_block } => {
-                self.neighbor_changed(pos, source_block);
-            }
-        }
     }
 
     /// Called when a block entity's data changes.
@@ -3550,12 +3512,9 @@ impl World {
         let Some(block_entity) = self.get_block_entity(pos) else {
             return;
         };
-        let update = {
-            let block_entity = block_entity.lock();
-            block_entity
-                .get_update_tag()
-                .map(|tag| (block_entity.get_type(), tag))
-        };
+        let update = block_entity
+            .get_update_tag()
+            .map(|tag| (block_entity.get_type(), tag));
         if let Some((block_entity_type, tag)) = update {
             self.broadcast_block_entity_update(pos, block_entity_type, tag);
         }

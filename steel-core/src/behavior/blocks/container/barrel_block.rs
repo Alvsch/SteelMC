@@ -18,7 +18,7 @@ use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionRes
 use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
 use crate::inventory::chest_menu::ChestMenuProvider;
 use crate::inventory::container::calculate_redstone_signal_from_container;
-use crate::inventory::lock::ContainerRef;
+use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::player::Player;
 use crate::world::{LevelReader, World};
 
@@ -111,13 +111,17 @@ impl BlockBehavior for BarrelBlock {
         _direction: Direction,
     ) -> i32 {
         // Get the block entity and calculate signal from container contents
-        world.get_block_entity(pos).map_or(0, |be| {
-            let guard = be.lock();
-            if let Some(container) = guard.as_container() {
+        let Some(container_ref) = world
+            .get_block_entity(pos)
+            .and_then(ContainerRef::from_block_entity)
+        else {
+            return 0;
+        };
+        let guard = ContainerLockGuard::lock_all(&[&container_ref]);
+        guard
+            .get(container_ref.container_id())
+            .map_or(0, |container| {
                 calculate_redstone_signal_from_container(container)
-            } else {
-                0
-            }
-        })
+            })
     }
 }

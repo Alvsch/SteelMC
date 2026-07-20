@@ -60,7 +60,6 @@ impl BlockBehavior for MovingPistonBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return BlockCollisionBoxes::new();
         };
-        let block_entity = block_entity.lock();
         block_entity
             .downcast_ref::<PistonMovingBlockEntity>()
             .map_or_else(BlockCollisionBoxes::new, |piston| {
@@ -94,13 +93,10 @@ impl BlockBehavior for MovingPistonBlock {
         let Some(block_entity) = context.world().get_block_entity(context.pos()) else {
             return Some(Vec::new());
         };
-        let moved_state = {
-            let block_entity = block_entity.lock();
-            let Some(piston) = block_entity.downcast_ref::<PistonMovingBlockEntity>() else {
-                return Some(Vec::new());
-            };
-            piston.moved_state()
+        let Some(piston) = block_entity.downcast_ref::<PistonMovingBlockEntity>() else {
+            return Some(Vec::new());
         };
+        let moved_state = piston.moved_state();
         Some(context.get_drops(moved_state))
     }
 

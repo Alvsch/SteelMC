@@ -4,7 +4,7 @@ use steel_macros::block_behavior;
 use steel_registry::blocks::{BlockRef, block_state_ext::BlockStateExt as _, shapes::VoxelShape};
 use steel_registry::dimension_type::DimensionTypeRef;
 use steel_registry::vanilla_dimension_types;
-use steel_utils::{BlockPos, BlockStateId, Downcast as _, locks::SyncMutex};
+use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::BlockPlaceContext;
 use crate::behavior::block::BlockBehavior;
@@ -84,9 +84,7 @@ impl BlockBehavior for EndPortalBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SyncMutex::new(EndPortalBlockEntity::new(
-            level, pos, state,
-        ))))
+        Some(Arc::new(EndPortalBlockEntity::new(level, pos, state)))
     }
 
     fn trigger_event(
@@ -100,7 +98,7 @@ impl BlockBehavior for EndPortalBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return false;
         };
-        block_entity.lock().trigger_event(param_a, param_b)
+        block_entity.trigger_event(param_a, param_b)
     }
 
     fn entity_inside(
@@ -137,8 +135,7 @@ impl EndGatewayBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return;
         };
-        let mut block_entity = block_entity.lock();
-        let Some(gateway) = block_entity.downcast_mut::<EndGatewayBlockEntity>() else {
+        let Some(gateway) = block_entity.downcast_ref::<EndGatewayBlockEntity>() else {
             return;
         };
         if gateway.is_cooling_down() {
@@ -169,9 +166,7 @@ impl BlockBehavior for EndGatewayBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SyncMutex::new(EndGatewayBlockEntity::new(
-            level, pos, state,
-        ))))
+        Some(Arc::new(EndGatewayBlockEntity::new(level, pos, state)))
     }
 
     fn trigger_event(
@@ -185,7 +180,7 @@ impl BlockBehavior for EndGatewayBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return false;
         };
-        block_entity.lock().trigger_event(param_a, param_b)
+        block_entity.trigger_event(param_a, param_b)
     }
 
     fn entity_inside(
@@ -301,13 +296,18 @@ mod tests {
         let block_entity = behavior
             .new_block_entity(Weak::new(), pos, state)
             .expect("end portal block entity");
-        let guard = block_entity.lock();
-
-        assert!(guard.downcast_ref::<EndPortalBlockEntity>().is_some());
-        assert_eq!(guard.get_type(), &vanilla_block_entity_types::END_PORTAL);
-        assert_eq!(guard.get_block_pos(), pos);
-        assert_eq!(guard.get_block_state(), state);
-        assert!(guard.get_update_tag().is_some());
+        assert!(
+            block_entity
+                .downcast_ref::<EndPortalBlockEntity>()
+                .is_some()
+        );
+        assert_eq!(
+            block_entity.get_type(),
+            &vanilla_block_entity_types::END_PORTAL
+        );
+        assert_eq!(block_entity.get_block_pos(), pos);
+        assert_eq!(block_entity.get_block_state(), state);
+        assert!(block_entity.get_update_tag().is_some());
     }
 
     #[test]
@@ -338,10 +338,12 @@ mod tests {
         let block_entity = behavior
             .new_block_entity(Weak::new(), pos, state)
             .expect("end gateway block entity");
-        let guard = block_entity.lock();
-
-        assert!(guard.downcast_ref::<EndGatewayBlockEntity>().is_some());
-        assert_eq!(guard.get_block_pos(), pos);
-        assert_eq!(guard.get_block_state(), state);
+        assert!(
+            block_entity
+                .downcast_ref::<EndGatewayBlockEntity>()
+                .is_some()
+        );
+        assert_eq!(block_entity.get_block_pos(), pos);
+        assert_eq!(block_entity.get_block_state(), state);
     }
 }

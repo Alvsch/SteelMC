@@ -7,7 +7,6 @@ use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, ComparatorMode, Direction};
 use steel_registry::{REGISTRY, sound_events, vanilla_blocks};
-use steel_utils::locks::SyncMutex;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _, WorldAabb};
 
@@ -47,7 +46,6 @@ impl ComparatorBlock {
         let Some(block_entity) = level.get_block_entity(pos) else {
             return 0;
         };
-        let block_entity = block_entity.lock();
         block_entity
             .downcast_ref::<ComparatorBlockEntity>()
             .map_or(0, ComparatorBlockEntity::output_signal)
@@ -57,8 +55,7 @@ impl ComparatorBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return 0;
         };
-        let mut block_entity = block_entity.lock();
-        let Some(comparator) = block_entity.downcast_mut::<ComparatorBlockEntity>() else {
+        let Some(comparator) = block_entity.downcast_ref::<ComparatorBlockEntity>() else {
             return 0;
         };
         let old_output = comparator.output_signal();
@@ -377,7 +374,7 @@ impl BlockBehavior for ComparatorBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return false;
         };
-        block_entity.lock().trigger_event(param_a, param_b)
+        block_entity.trigger_event(param_a, param_b)
     }
 
     fn has_block_entity(&self) -> bool {
@@ -390,9 +387,7 @@ impl BlockBehavior for ComparatorBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SyncMutex::new(ComparatorBlockEntity::new(
-            level, pos, state,
-        ))))
+        Some(Arc::new(ComparatorBlockEntity::new(level, pos, state)))
     }
 
     // `animateTick` emits client-local dust particles only.
@@ -454,11 +449,6 @@ mod tests {
                 vanilla_blocks::COMPARATOR.default_state(),
             )
             .expect("comparator should create its block entity");
-        assert!(
-            entity
-                .lock()
-                .downcast_ref::<ComparatorBlockEntity>()
-                .is_some()
-        );
+        assert!(entity.downcast_ref::<ComparatorBlockEntity>().is_some());
     }
 }

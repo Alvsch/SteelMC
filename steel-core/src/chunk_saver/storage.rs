@@ -748,12 +748,11 @@ impl ChunkStorage {
         let persistent_block_entities: Vec<PersistentBlockEntity> = block_entities
             .iter()
             .map(|entity| {
-                let guard = entity.lock();
-                let pos = guard.get_block_pos();
+                let pos = entity.get_block_pos();
 
                 // Serialize NBT data
                 let mut nbt = NbtCompound::new();
-                guard.save_additional(&mut nbt);
+                entity.save_additional(&mut nbt);
                 let mut nbt_bytes = Vec::new();
                 nbt.write(&mut nbt_bytes);
 
@@ -761,7 +760,7 @@ impl ChunkStorage {
                     x: (pos.0.x - chunk_pos.0.x * 16) as u8,
                     y: pos.0.y as i16,
                     z: (pos.0.z - chunk_pos.0.y * 16) as u8,
-                    entity_type: guard.get_type().key.clone(),
+                    entity_type: entity.get_type().key.clone(),
                     nbt_data: nbt_bytes,
                 }
             })
@@ -3703,13 +3702,11 @@ mod tests {
         };
 
         let mut saved = NbtCompound::new();
-        let guard = loaded_entity.lock();
         assert_eq!(
-            guard.get_type().id(),
+            loaded_entity.get_type().id(),
             vanilla_block_entity_types::MOB_SPAWNER.id()
         );
-        guard.save_additional(&mut saved);
-        drop(guard);
+        loaded_entity.save_additional(&mut saved);
 
         assert_eq!(
             saved.string("LootTable").map(ToString::to_string),

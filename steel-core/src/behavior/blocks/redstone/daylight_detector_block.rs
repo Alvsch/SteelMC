@@ -9,7 +9,7 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::vanilla_game_events;
 use steel_utils::types::UpdateFlags;
-use steel_utils::{BlockPos, BlockStateId, locks::SyncMutex};
+use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::{
     BlockBehavior, BlockHitResult, BlockPlaceContext, InteractionResult, InventoryAccess,
@@ -135,9 +135,9 @@ impl BlockBehavior for DaylightDetectorBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SyncMutex::new(DaylightDetectorBlockEntity::new(
+        Some(Arc::new(DaylightDetectorBlockEntity::new(
             level, pos, state,
-        ))))
+        )))
     }
 }
 
@@ -159,7 +159,6 @@ mod tests {
         let entity = DaylightDetectorBlock::new(&vanilla_blocks::DAYLIGHT_DETECTOR)
             .new_block_entity(Arc::downgrade(&world), BlockPos::ZERO, state)
             .expect("daylight detector should create block entity");
-        let entity = entity.lock();
         assert_eq!(
             entity.get_type(),
             &vanilla_block_entity_types::DAYLIGHT_DETECTOR

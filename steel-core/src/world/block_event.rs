@@ -234,7 +234,6 @@ mod tests {
             .expect("placing an end gateway should create its block entity");
         assert!(
             !gateway
-                .lock()
                 .downcast_ref::<EndGatewayBlockEntity>()
                 .expect("the gateway should have its concrete block entity")
                 .is_cooling_down()
@@ -245,7 +244,6 @@ mod tests {
         assert_eq!(world.block_events.lock().len(), 0);
         assert!(
             !gateway
-                .lock()
                 .downcast_ref::<EndGatewayBlockEntity>()
                 .expect("the gateway should remain concrete")
                 .is_cooling_down()
@@ -256,7 +254,6 @@ mod tests {
         assert_eq!(world.block_events.lock().len(), 0);
         assert!(
             !gateway
-                .lock()
                 .downcast_ref::<EndGatewayBlockEntity>()
                 .expect("the gateway should remain concrete")
                 .is_cooling_down()
@@ -270,7 +267,6 @@ mod tests {
         assert_eq!(world.block_events.lock().len(), 1);
         assert!(
             !gateway
-                .lock()
                 .downcast_ref::<EndGatewayBlockEntity>()
                 .expect("the gateway should remain concrete")
                 .is_cooling_down()
@@ -282,7 +278,6 @@ mod tests {
         assert_eq!(world.block_events.lock().len(), 0);
         assert!(
             gateway
-                .lock()
                 .downcast_ref::<EndGatewayBlockEntity>()
                 .expect("the gateway should remain concrete")
                 .is_cooling_down()

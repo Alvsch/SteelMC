@@ -66,9 +66,7 @@ impl PotentSulfurBlock {
             );
             if !is_geyser
                 && let Some(block_entity) = world.get_block_entity(pos)
-                && let Some(potent_sulfur) = block_entity
-                    .lock()
-                    .downcast_mut::<PotentSulfurBlockEntity>()
+                && let Some(potent_sulfur) = block_entity.downcast_ref::<PotentSulfurBlockEntity>()
             {
                 potent_sulfur.reset_countdown();
             }
@@ -153,11 +151,10 @@ impl BlockBehavior for PotentSulfurBlock {
         _param_a: i32,
         _param_b: i32,
     ) -> bool {
-        if let Some(block_entity) = world.get_block_entity(pos) {
-            let mut block_entity = block_entity.lock();
-            if let Some(sulfur) = block_entity.downcast_mut::<PotentSulfurBlockEntity>() {
-                sulfur.eruption_tick = world.game_time();
-            }
+        if let Some(block_entity) = world.get_block_entity(pos)
+            && let Some(sulfur) = block_entity.downcast_ref::<PotentSulfurBlockEntity>()
+        {
+            sulfur.set_eruption_tick(world.game_time());
         }
         true
     }

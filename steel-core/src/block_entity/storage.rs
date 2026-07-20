@@ -58,16 +58,16 @@ impl BlockEntityStorage {
     /// Replaces any existing block entity at the position (marking it as removed).
     /// Does NOT automatically register for ticking - use `add_and_register` instead.
     pub fn set(&self, block_entity: SharedBlockEntity) {
-        let pos = block_entity.lock().get_block_pos();
+        let pos = block_entity.get_block_pos();
         let mut entities = self.entities.write();
 
         // Remove old entity if present
         if let Some(old) = entities.remove(&pos) {
-            old.lock().set_removed();
+            old.set_removed();
             self.remove_from_tickers(pos);
         }
 
-        block_entity.lock().clear_removed();
+        block_entity.clear_removed();
         entities.insert(pos, block_entity);
     }
 
@@ -78,7 +78,7 @@ impl BlockEntityStorage {
         let mut entities = self.entities.write();
         let removed = entities.remove(&pos);
         if let Some(entity) = &removed {
-            entity.lock().set_removed();
+            entity.set_removed();
         }
         drop(entities);
         self.remove_from_tickers(pos);
@@ -89,7 +89,7 @@ impl BlockEntityStorage {
     ///
     /// This is the main entry point for adding block entities.
     pub fn add_and_register(&self, block_entity: SharedBlockEntity) {
-        let is_ticking = block_entity.lock().is_ticking();
+        let is_ticking = block_entity.is_ticking();
         self.set(block_entity.clone());
 
         if is_ticking {
@@ -101,18 +101,16 @@ impl BlockEntityStorage {
     ///
     /// Call this when a block entity's ticking status may have changed.
     pub fn update_ticker(&self, block_entity: &SharedBlockEntity) {
-        let guard = block_entity.lock();
-        let pos = guard.get_block_pos();
-        let should_tick = guard.is_ticking();
-        drop(guard);
+        let pos = block_entity.get_block_pos();
+        let should_tick = block_entity.is_ticking();
 
         let mut tickers = self.tickers.lock();
-        let already_ticking = tickers.iter().any(|e| e.lock().get_block_pos() == pos);
+        let already_ticking = tickers.iter().any(|entity| entity.get_block_pos() == pos);
 
         if should_tick && !already_ticking {
             tickers.push(block_entity.clone());
         } else if !should_tick && already_ticking {
-            tickers.retain(|e| e.lock().get_block_pos() != pos);
+            tickers.retain(|entity| entity.get_block_pos() != pos);
         }
     }
 
@@ -124,14 +122,14 @@ impl BlockEntityStorage {
         self.tickers
             .lock()
             .iter()
-            .filter(|e| !e.lock().is_removed())
+            .filter(|entity| !entity.is_removed())
             .cloned()
             .collect()
     }
 
     /// Cleans up removed entities from the ticking list.
     pub fn cleanup_tickers(&self) {
-        self.tickers.lock().retain(|e| !e.lock().is_removed());
+        self.tickers.lock().retain(|entity| !entity.is_removed());
     }
 
     /// Clears all block entities.
@@ -140,7 +138,7 @@ impl BlockEntityStorage {
     pub fn clear(&self) {
         let mut entities = self.entities.write();
         for entity in entities.values() {
-            entity.lock().set_removed();
+            entity.set_removed();
         }
         entities.clear();
         drop(entities);
@@ -152,7 +150,7 @@ impl BlockEntityStorage {
     fn remove_from_tickers(&self, pos: BlockPos) {
         self.tickers
             .lock()
-            .retain(|e| e.lock().get_block_pos() != pos);
+            .retain(|entity| entity.get_block_pos() != pos);
     }
 }
 
