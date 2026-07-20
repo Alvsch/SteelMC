@@ -112,6 +112,7 @@ fn create_test_world_with_difficulty(key: &'static str, difficulty: Difficulty) 
                 generation_settings,
                 view_distance: 2,
                 simulation_distance: 2,
+                max_chained_neighbor_updates: 1_000_000,
                 compression: None,
                 is_flat: false,
                 sea_level: 63,

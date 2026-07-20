@@ -2881,6 +2881,7 @@ mod tests {
             max_players: 1,
             view_distance: 2,
             simulation_distance: 2,
+            max_chained_neighbor_updates: 1_000_000,
             online_mode: false,
             auth_server: None,
             profile_server: None,

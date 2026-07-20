@@ -170,7 +170,7 @@ impl BlockBehavior for CactusBlock {
             );
             let new_state = state.set_value(&BlockStateProperties::AGE_15, 0);
             world.set_block(pos, new_state, UpdateFlags::UPDATE_NONE);
-            world.neighbor_changed(above_pos, &vanilla_blocks::CACTUS, false);
+            world.neighbor_changed(above_pos, &vanilla_blocks::CACTUS);
         }
 
         if age < 15 {

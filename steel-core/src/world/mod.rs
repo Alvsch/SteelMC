@@ -190,6 +190,7 @@ mod environment;
 pub mod game_event_context;
 pub mod game_event_listener;
 mod level_reader;
+mod neighbor_updater;
 mod player_area_map;
 mod player_map;
 pub(crate) mod player_spawn_finder;
@@ -205,6 +206,7 @@ use block_event::BlockEventQueue;
 pub use border::WorldBorderError;
 use border::{WorldBorder, WorldBorderSnapshot};
 pub use level_reader::{LevelAccessor, LevelReader, ScheduledTickAccess};
+use neighbor_updater::{CollectingNeighborUpdater, ShapeUpdate};
 pub use player_area_map::PlayerAreaMap;
 pub use player_map::PlayerMap;
 pub use signal_getter::{SignalGetter, SignalQueryContext};
@@ -349,6 +351,8 @@ pub struct WorldConfig {
     pub view_distance: u8,
     /// Server simulation distance.
     pub simulation_distance: u8,
+    /// Maximum queued neighbor-update tasks in one chained run; negative means unlimited.
+    pub max_chained_neighbor_updates: i32,
     /// Compression settings for encoding broadcast packets.
     pub compression: Option<CompressionInfo>,
     /// Whether the world should be marked as flat in login/respawn packets.
@@ -426,6 +430,8 @@ pub struct World {
     tick_runs_normally: AtomicBool,
     /// Ordered, duplicate-suppressing server block events awaiting execution.
     block_events: SyncMutex<BlockEventQueue>,
+    /// Vanilla collecting neighbor updater shared by all live block mutations.
+    neighbor_updater: CollectingNeighborUpdater,
     /// Central runtime entity ownership and lookup.
     entity_manager: WorldEntityManager,
     /// Entity tracker for managing which players can see which entities.
@@ -472,6 +478,7 @@ impl World {
     ) -> io::Result<Arc<Self>> {
         let view_distance = config.view_distance;
         let simulation_distance = config.simulation_distance;
+        let max_chained_neighbor_updates = config.max_chained_neighbor_updates;
         let compression = config.compression;
         let is_flat = config.is_flat;
         let sea_level = config.sea_level;
@@ -550,6 +557,7 @@ impl World {
                 default_gamemode,
                 tick_runs_normally: AtomicBool::new(true),
                 block_events: SyncMutex::new(BlockEventQueue::default()),
+                neighbor_updater: CollectingNeighborUpdater::new(max_chained_neighbor_updates),
                 entity_manager: WorldEntityManager::new(),
                 entity_tracker: EntityTracker::new(),
                 navigating_mobs: NavigatingMobTracker::new(),
@@ -2014,19 +2022,23 @@ impl World {
         if !flags.contains(UpdateFlags::UPDATE_KNOWN_SHAPE) && update_limit > 0 {
             let neighbor_flags =
                 flags & !(UpdateFlags::UPDATE_NEIGHBORS | UpdateFlags::UPDATE_SUPPRESS_DROPS);
-
-            for direction in Direction::UPDATE_SHAPE_ORDER {
-                let neighbor_pos = pos.relative(direction);
-
-                self.neighbor_shape_changed(
-                    direction.opposite(),
-                    neighbor_pos,
-                    pos,
-                    block_state,
-                    neighbor_flags,
-                    update_limit - 1,
-                );
-            }
+            let old_behavior = BLOCK_BEHAVIORS.get_behavior(old_state.get_block());
+            old_behavior.update_indirect_neighbour_shapes(
+                old_state,
+                self,
+                pos,
+                neighbor_flags,
+                update_limit - 1,
+            );
+            self.update_neighbour_shapes(block_state, pos, neighbor_flags, update_limit - 1);
+            let new_behavior = BLOCK_BEHAVIORS.get_behavior(block_state.get_block());
+            new_behavior.update_indirect_neighbour_shapes(
+                block_state,
+                self,
+                pos,
+                neighbor_flags,
+                update_limit - 1,
+            );
         }
 
         self.poi_storage
@@ -2101,24 +2113,26 @@ impl World {
             .get_collision_shape(state, self, pos, BlockCollisionContext::empty())
     }
 
-    /// Order in which neighbors are updated (matches vanilla's `NeighborUpdater.UPDATE_ORDER`).
-    const NEIGHBOR_UPDATE_ORDER: [Direction; 6] = [
-        Direction::West,
-        Direction::East,
-        Direction::Down,
-        Direction::Up,
-        Direction::North,
-        Direction::South,
-    ];
-
     /// Updates all neighbors of the given position about a block change.
     ///
     /// This is the Rust equivalent of vanilla's `Level.updateNeighborsAt()`.
     pub fn update_neighbors_at(self: &Arc<Self>, pos: BlockPos, source_block: BlockRef) {
-        for direction in Self::NEIGHBOR_UPDATE_ORDER {
-            let neighbor_pos = pos.relative(direction);
-            self.neighbor_changed(neighbor_pos, source_block, false);
-        }
+        self.neighbor_updater
+            .update_neighbors_at_except_from_facing(self, pos, source_block, None);
+    }
+
+    /// Updates all neighbors except the one in `skip_direction`.
+    ///
+    /// Mirrors vanilla `Level.updateNeighborsAtExceptFromFacing` without the
+    /// experimental redstone `Orientation` value.
+    pub fn update_neighbors_at_except_from_facing(
+        self: &Arc<Self>,
+        pos: BlockPos,
+        source_block: BlockRef,
+        skip_direction: Direction,
+    ) {
+        self.neighbor_updater
+            .update_neighbors_at_except_from_facing(self, pos, source_block, Some(skip_direction));
     }
 
     /// Updates comparators that can read analog output from `pos`.
@@ -2137,7 +2151,7 @@ impl World {
 
             let mut state = self.get_block_state(relative_pos);
             if state.get_block() == &vanilla_blocks::COMPARATOR {
-                self.neighbor_changed(relative_pos, changed_block, false);
+                self.neighbor_changed_with_state(state, relative_pos, changed_block, false);
                 continue;
             }
 
@@ -2151,15 +2165,57 @@ impl World {
             }
             state = self.get_block_state(relative_pos);
             if state.get_block() == &vanilla_blocks::COMPARATOR {
-                self.neighbor_changed(relative_pos, changed_block, false);
+                self.neighbor_changed_with_state(state, relative_pos, changed_block, false);
             }
+        }
+    }
+
+    fn update_neighbour_shapes(
+        self: &Arc<Self>,
+        state: BlockStateId,
+        pos: BlockPos,
+        flags: UpdateFlags,
+        update_limit: i32,
+    ) {
+        for direction in Direction::UPDATE_SHAPE_ORDER {
+            let neighbor_pos = pos.relative(direction);
+            self.neighbor_shape_changed(
+                direction.opposite(),
+                neighbor_pos,
+                pos,
+                state,
+                flags,
+                update_limit,
+            );
         }
     }
 
     /// Called when a neighbor's shape changes, to update this block's state.
     ///
     /// This is the Rust equivalent of vanilla's `NeighborUpdater.executeShapeUpdate()`.
-    fn neighbor_shape_changed(
+    pub(crate) fn neighbor_shape_changed(
+        self: &Arc<Self>,
+        direction: Direction,
+        pos: BlockPos,
+        neighbor_pos: BlockPos,
+        neighbor_state: BlockStateId,
+        flags: UpdateFlags,
+        update_limit: i32,
+    ) {
+        self.neighbor_updater.shape_update(
+            self,
+            ShapeUpdate::new(
+                direction,
+                neighbor_state,
+                pos,
+                neighbor_pos,
+                flags,
+                update_limit,
+            ),
+        );
+    }
+
+    fn execute_neighbor_shape_update(
         self: &Arc<Self>,
         direction: Direction,
         pos: BlockPos,
@@ -2237,8 +2293,30 @@ impl World {
     /// Notifies a block that one of its neighbors changed.
     ///
     /// This is the Rust equivalent of vanilla's `Level.neighborChanged()`.
-    pub(crate) fn neighbor_changed(
+    pub(crate) fn neighbor_changed(self: &Arc<Self>, pos: BlockPos, source_block: BlockRef) {
+        self.neighbor_updater
+            .neighbor_changed(self, pos, source_block);
+    }
+
+    pub(crate) fn neighbor_changed_with_state(
         self: &Arc<Self>,
+        state: BlockStateId,
+        pos: BlockPos,
+        source_block: BlockRef,
+        moved_by_piston: bool,
+    ) {
+        self.neighbor_updater.neighbor_changed_with_state(
+            self,
+            state,
+            pos,
+            source_block,
+            moved_by_piston,
+        );
+    }
+
+    fn execute_neighbor_update(
+        self: &Arc<Self>,
+        state: BlockStateId,
         pos: BlockPos,
         source_block: BlockRef,
         moved_by_piston: bool,
@@ -2246,8 +2324,6 @@ impl World {
         if !self.is_in_valid_bounds(pos) {
             return;
         }
-
-        let state = self.get_block_state(pos);
         let block_behaviors = &*BLOCK_BEHAVIORS;
         let behavior = block_behaviors.get_behavior(state.get_block());
         behavior.handle_neighbor_changed(state, self, pos, source_block, moved_by_piston);

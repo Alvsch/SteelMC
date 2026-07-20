@@ -694,12 +694,6 @@ impl LevelChunk {
             self.update_sky_light_sources(local_x, y, local_z);
         }
 
-        // Re-read the block to verify it wasn't changed concurrently
-        let current_state = section.read().states.get(local_x, local_y, local_z);
-        if current_state.get_block() != new_block {
-            return Some(LevelChunkBlockSetResult::Stale(current_state));
-        }
-
         if let Some(level) = self.get_level() {
             if light_properties_changed || empty_section_change.is_some() {
                 level.queue_light_change_after_block_set(
@@ -730,13 +724,22 @@ impl LevelChunk {
             }
 
             // Notify neighbors that we were removed (for rails, etc.)
-            if block_changed && (flags.contains(UpdateFlags::UPDATE_NEIGHBORS) || moved_by_piston) {
+            if (block_changed || new_behavior.is_rail())
+                && (flags.contains(UpdateFlags::UPDATE_NEIGHBORS) || moved_by_piston)
+            {
                 old_behavior.affect_neighbors_after_removal(
                     old_state,
                     &level,
                     pos,
                     moved_by_piston,
                 );
+            }
+
+            // Removal callbacks may synchronously replace this position. Vanilla
+            // re-reads here and does not place or create data for the stale request.
+            let current_state = section.read().states.get(local_x, local_y, local_z);
+            if current_state.get_block() != new_block {
+                return Some(LevelChunkBlockSetResult::Stale(current_state));
             }
 
             // Call on_place for the new block

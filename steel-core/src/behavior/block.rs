@@ -551,6 +551,24 @@ pub trait BlockBehavior: Send + Sync {
         state
     }
 
+    /// Queues indirect neighbor-shape updates after this state changes.
+    ///
+    /// Vanilla's default is a no-op. Redstone wire overrides this for vertical
+    /// corner connections.
+    #[expect(
+        unused_variables,
+        reason = "default trait implementation ignores all params"
+    )]
+    fn update_indirect_neighbour_shapes(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        flags: UpdateFlags,
+        update_limit: i32,
+    ) {
+    }
+
     /// Returns whether this block can survive at the given position.
     ///
     /// Vanilla parity: `BlockBehavior.canSurvive(BlockState, LevelReader, BlockPos)`.
@@ -742,6 +760,11 @@ pub trait BlockBehavior: Send + Sync {
     ///
     /// Vanilla uses its `DiodeBlock` class hierarchy for side-input filtering.
     fn is_diode(&self) -> bool {
+        false
+    }
+
+    /// Returns whether this behavior implements vanilla `BaseRailBlock` semantics.
+    fn is_rail(&self) -> bool {
         false
     }
 
