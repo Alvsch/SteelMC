@@ -67,6 +67,9 @@ pub trait BlockStateExt {
     fn is_solid_render(&self) -> bool;
     /// Returns vanilla `BlockState.isSuffocating`.
     fn is_suffocating(&self) -> bool;
+    /// Returns the extracted static `BlockState.isRedstoneConductor` value.
+    /// Dynamic behavior queries must also receive the live level and position.
+    fn is_static_redstone_conductor(&self) -> bool;
     /// Returns if a block can be replaced extracted from the minecraft data
     fn is_replaceable(&self) -> bool;
 }
@@ -228,6 +231,10 @@ impl BlockStateExt for BlockStateId {
         REGISTRY.blocks.is_suffocating(*self)
     }
 
+    fn is_static_redstone_conductor(&self) -> bool {
+        REGISTRY.blocks.is_static_redstone_conductor(*self)
+    }
+
     fn is_replaceable(&self) -> bool {
         self.get_block().config.replaceable
     }
@@ -315,6 +322,32 @@ mod tests {
             .blocks
             .get_default_state_id(&vanilla_blocks::FARMLAND);
         assert!(farmland.is_suffocating());
+    }
+
+    #[test]
+    fn static_redstone_conductor_uses_extracted_vanilla_state_predicate() {
+        init_test_registry();
+
+        assert!(
+            vanilla_blocks::STONE
+                .default_state()
+                .is_static_redstone_conductor()
+        );
+        assert!(
+            vanilla_blocks::SOUL_SAND
+                .default_state()
+                .is_static_redstone_conductor()
+        );
+        assert!(
+            !vanilla_blocks::REDSTONE_BLOCK
+                .default_state()
+                .is_static_redstone_conductor()
+        );
+        assert!(
+            !vanilla_blocks::PISTON
+                .default_state()
+                .is_static_redstone_conductor()
+        );
     }
 
     #[test]

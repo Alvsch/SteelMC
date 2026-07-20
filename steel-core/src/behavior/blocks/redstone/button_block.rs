@@ -22,7 +22,10 @@ use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
 use crate::entity::Entity;
 use crate::player::Player;
-use crate::world::{LevelReader, ScheduledTickAccess, World, game_event_context::GameEventContext};
+use crate::world::{
+    LevelReader, ScheduledTickAccess, SignalQueryContext, World,
+    game_event_context::GameEventContext,
+};
 
 /// Behavior for all button block variants.
 ///
@@ -207,5 +210,40 @@ impl BlockBehavior for ButtonBlock {
             return;
         }
         self.update_button_neighbors(state, world, pos);
+    }
+
+    fn is_signal_source(&self, _state: BlockStateId, _context: SignalQueryContext) -> bool {
+        true
+    }
+
+    fn get_own_signal(
+        &self,
+        state: BlockStateId,
+        _world: &dyn LevelReader,
+        _pos: BlockPos,
+        _context: SignalQueryContext,
+    ) -> i32 {
+        if state.get_value(&BlockStateProperties::POWERED) {
+            15
+        } else {
+            0
+        }
+    }
+
+    fn get_direct_signal(
+        &self,
+        state: BlockStateId,
+        _world: &dyn LevelReader,
+        _pos: BlockPos,
+        direction: Direction,
+        _context: SignalQueryContext,
+    ) -> i32 {
+        if state.get_value(&BlockStateProperties::POWERED)
+            && Self::get_connected_direction(state) == direction
+        {
+            15
+        } else {
+            0
+        }
     }
 }

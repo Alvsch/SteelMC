@@ -43,8 +43,8 @@ use steel_registry::biome::{BiomeRef, TemperatureModifier};
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{Axis, BlockStateProperties, Direction};
 use steel_registry::blocks::shapes::{
-    BooleanOp, OffsetVoxelShape, VoxelShape, is_offset_face_full, is_offset_shape_full_block,
-    is_shape_full_block, join_is_not_empty,
+    BooleanOp, OffsetVoxelShape, VoxelShape, is_offset_face_full, is_shape_full_block,
+    join_is_not_empty,
 };
 use steel_registry::fluid::{FluidRef, FluidState};
 use steel_registry::game_events::GameEventRef;
@@ -193,6 +193,7 @@ mod level_reader;
 mod player_area_map;
 mod player_map;
 pub(crate) mod player_spawn_finder;
+mod signal_getter;
 pub mod tick_scheduler;
 mod weather;
 mod world_entities;
@@ -206,6 +207,7 @@ use border::{WorldBorder, WorldBorderSnapshot};
 pub use level_reader::{LevelAccessor, LevelReader, ScheduledTickAccess};
 pub use player_area_map::PlayerAreaMap;
 pub use player_map::PlayerMap;
+pub use signal_getter::{SignalGetter, SignalQueryContext};
 pub use tick_scheduler::ScheduledTick;
 
 /// Generates a random value using triangle distribution.
@@ -2139,7 +2141,7 @@ impl World {
                 continue;
             }
 
-            if !Self::is_redstone_conductor(state, relative_pos) {
+            if !self.is_redstone_conductor(state, relative_pos) {
                 continue;
             }
 
@@ -2152,10 +2154,6 @@ impl World {
                 self.neighbor_changed(relative_pos, changed_block, false);
             }
         }
-    }
-
-    fn is_redstone_conductor(state: BlockStateId, pos: BlockPos) -> bool {
-        is_offset_shape_full_block(state.get_collision_shape_at(pos))
     }
 
     /// Called when a neighbor's shape changes, to update this block's state.

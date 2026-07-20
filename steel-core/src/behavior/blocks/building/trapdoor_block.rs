@@ -1,7 +1,6 @@
 //! Trapdoor block behavior implementation.
 //!
-//! Redstone signal queries are isolated in `has_neighbor_signal`
-//! until Steel has a redstone power graph.
+//! Trapdoors react to neighboring redstone signal sources and conductors.
 
 use crate::{
     behavior::{
@@ -11,7 +10,7 @@ use crate::{
     entity::Entity,
     entity::ai::path::PathComputationType,
     player::Player,
-    world::{LevelReader, ScheduledTickAccess, World, game_event_context::GameEventContext},
+    world::{ScheduledTickAccess, SignalGetter as _, World, game_event_context::GameEventContext},
 };
 use std::sync::Arc;
 use steel_macros::block_behavior;
@@ -73,11 +72,6 @@ impl TrapDoorBlock {
             sound_open,
             sound_close,
         }
-    }
-
-    const fn has_neighbor_signal<L: LevelReader + ?Sized>(_world: &L, _pos: BlockPos) -> bool {
-        // TODO: Query redstone neighbor signal once Steel has redstone power propagation.
-        false
     }
 
     fn play_sound(&self, player: Option<&Player>, world: &Arc<World>, pos: BlockPos, open: bool) {
@@ -143,7 +137,7 @@ impl BlockBehavior for TrapDoorBlock {
                 );
         }
 
-        if Self::has_neighbor_signal(context.world, context.place_pos()) {
+        if context.world.has_neighbor_signal(context.place_pos()) {
             state = state.set_value(OPEN, true).set_value(POWERED, true);
         }
 
@@ -191,7 +185,7 @@ impl BlockBehavior for TrapDoorBlock {
         _source_block: BlockRef,
         _moved_by_piston: bool,
     ) {
-        let signal = Self::has_neighbor_signal(world, pos);
+        let signal = world.has_neighbor_signal(pos);
         let mut block_state = state;
         if signal != state.get_value(POWERED) && signal != state.get_value(OPEN) {
             block_state = block_state.set_value(OPEN, signal);

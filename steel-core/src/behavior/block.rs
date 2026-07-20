@@ -32,7 +32,7 @@ use crate::physics::collide;
 use crate::player::Player;
 use crate::world::{
     ClipHitResult, ConditionalBlockSetResult, LevelAccessor, LevelReader, ScheduledTickAccess,
-    World,
+    SignalQueryContext, World,
 };
 use steel_registry::vanilla_fluids;
 
@@ -731,6 +731,66 @@ pub trait BlockBehavior: Send + Sync {
     ) {
         // Default: no-op
         // Override for redstone components, doors, etc.
+    }
+
+    /// Returns whether this state is a redstone signal source.
+    fn is_signal_source(&self, _state: BlockStateId, _context: SignalQueryContext) -> bool {
+        false
+    }
+
+    /// Returns whether this behavior is a vanilla diode block.
+    ///
+    /// Vanilla uses its `DiodeBlock` class hierarchy for side-input filtering.
+    fn is_diode(&self) -> bool {
+        false
+    }
+
+    /// Returns this state's direction-independent redstone signal strength.
+    fn get_own_signal(
+        &self,
+        _state: BlockStateId,
+        _world: &dyn LevelReader,
+        _pos: BlockPos,
+        _context: SignalQueryContext,
+    ) -> i32 {
+        0
+    }
+
+    /// Returns the weak redstone signal emitted toward `direction`.
+    fn get_signal(
+        &self,
+        state: BlockStateId,
+        world: &dyn LevelReader,
+        pos: BlockPos,
+        _direction: Direction,
+        context: SignalQueryContext,
+    ) -> i32 {
+        self.get_own_signal(state, world, pos, context)
+    }
+
+    /// Returns the direct redstone signal emitted toward `direction`.
+    fn get_direct_signal(
+        &self,
+        _state: BlockStateId,
+        _world: &dyn LevelReader,
+        _pos: BlockPos,
+        _direction: Direction,
+        _context: SignalQueryContext,
+    ) -> i32 {
+        0
+    }
+
+    /// Returns whether this state conducts direct redstone power through itself.
+    ///
+    /// Most blocks use extracted state data. Dynamic blocks can override this with
+    /// a live level/position query, matching vanilla's state predicate surface.
+    fn is_redstone_conductor(
+        &self,
+        state: BlockStateId,
+        _world: &dyn LevelReader,
+        _pos: BlockPos,
+    ) -> bool {
+        state.is_static_redstone_conductor()
     }
 
     /// Handles a queued server block event.

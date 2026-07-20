@@ -1,8 +1,7 @@
 //! Door block behavior implementation.
 //!
 //! Doors keep their upper and lower halves synchronized through vanilla
-//! neighbor-shape updates. Redstone signal queries are isolated in
-//! `has_neighbor_signal` until Steel has a redstone power graph.
+//! neighbor-shape updates and react to redstone power on either half.
 
 use std::sync::Arc;
 
@@ -33,7 +32,10 @@ use crate::{
     entity::ai::path::PathComputationType,
     fluid::fluid_state_to_block,
     player::Player,
-    world::{LevelReader, ScheduledTickAccess, World, game_event_context::GameEventContext},
+    world::{
+        LevelReader, ScheduledTickAccess, SignalGetter as _, World,
+        game_event_context::GameEventContext,
+    },
 };
 
 /// Behavior for vanilla door blocks.
@@ -135,11 +137,6 @@ impl DoorBlock {
         }
     }
 
-    const fn has_neighbor_signal<L: LevelReader + ?Sized>(_world: &L, _pos: BlockPos) -> bool {
-        // TODO: Query redstone neighbor signal once Steel has redstone power propagation.
-        false
-    }
-
     fn has_correct_tool_for_drops(player: &Player, state: BlockStateId) -> bool {
         let inv = player.inventory.lock();
         let main_hand = inv.get_item_in_hand(InteractionHand::MainHand);
@@ -195,8 +192,8 @@ impl BlockBehavior for DoorBlock {
             return None;
         }
 
-        let powered = Self::has_neighbor_signal(context.world, pos)
-            || Self::has_neighbor_signal(context.world, pos.above());
+        let powered = context.world.has_neighbor_signal(pos)
+            || context.world.has_neighbor_signal(pos.above());
         Some(
             self.block
                 .default_state()
@@ -372,8 +369,7 @@ impl BlockBehavior for DoorBlock {
         } else {
             pos.below()
         };
-        let signal = Self::has_neighbor_signal(world, pos)
-            || Self::has_neighbor_signal(world, other_half_pos);
+        let signal = world.has_neighbor_signal(pos) || world.has_neighbor_signal(other_half_pos);
         if signal == state.get_value(&BlockStateProperties::POWERED) {
             return;
         }

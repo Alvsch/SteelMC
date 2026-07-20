@@ -144,6 +144,7 @@ pub struct Block {
     pub visual_shapes: ShapeData,
     pub light_properties: LightPropertiesData,
     pub suffocating: StateBooleanData,
+    pub redstone_conductor: StateBooleanData,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -831,6 +832,17 @@ pub(crate) fn build() -> TokenStream {
                 quote! { StateBooleanOverwrite::new(#offset, #value) }
             })
             .collect::<Vec<_>>();
+        let redstone_conductor_default = block.redstone_conductor.default;
+        let redstone_conductor_overwrites = block
+            .redstone_conductor
+            .overwrites
+            .iter()
+            .map(|overwrite| {
+                let offset = overwrite.offset;
+                let value = overwrite.value;
+                quote! { StateBooleanOverwrite::new(#offset, #value) }
+            })
+            .collect::<Vec<_>>();
 
         // Shape function references (now using deduplicated function IDs)
         let collision_fn = Ident::new(
@@ -905,6 +917,11 @@ pub(crate) fn build() -> TokenStream {
                 StateBooleanData::new(
                     #suffocating_default,
                     &[#(#suffocating_overwrites),*],
+                ),
+            ).with_redstone_conductor(
+                StateBooleanData::new(
+                    #redstone_conductor_default,
+                    &[#(#redstone_conductor_overwrites),*],
                 ),
             ) #shape_offsets #default_state;
         });

@@ -89,6 +89,8 @@ pub struct Block {
     pub default_state_offset: u16,
     /// Vanilla `BlockState.isSuffocating` values indexed by block-local state offset.
     pub suffocating: StateBooleanData,
+    /// Vanilla `BlockState.isRedstoneConductor` values indexed by block-local state offset.
+    pub redstone_conductor: StateBooleanData,
     /// Extracted vanilla light properties indexed by block-local state offset.
     pub light_properties: LightPropertiesFn,
     /// Function to get collision shape for a state offset
@@ -146,6 +148,7 @@ impl Block {
             properties,
             default_state_offset: 0,
             suffocating: StateBooleanData::TRUE,
+            redstone_conductor: StateBooleanData::TRUE,
             light_properties: opaque_full_block_light_properties,
             collision_shape: full_block_shape,
             support_shape: full_block_shape,
@@ -180,6 +183,12 @@ impl Block {
     /// Sets the extracted vanilla `BlockState.isSuffocating` values for this block.
     pub const fn with_suffocating(mut self, suffocating: StateBooleanData) -> Self {
         self.suffocating = suffocating;
+        self
+    }
+
+    /// Sets the extracted per-state redstone-conductor predicate.
+    pub const fn with_redstone_conductor(mut self, redstone_conductor: StateBooleanData) -> Self {
+        self.redstone_conductor = redstone_conductor;
         self
     }
 
@@ -734,6 +743,17 @@ impl BlockRegistry {
             return false;
         };
         block.suffocating.value(offset)
+    }
+
+    /// Returns the extracted static `BlockState.isRedstoneConductor` value.
+    ///
+    /// Dynamic block behaviors may override this value using the live level and position.
+    #[must_use]
+    pub fn is_static_redstone_conductor(&self, state_id: BlockStateId) -> bool {
+        let Some((block, offset)) = self.block_and_state_offset(state_id) else {
+            return false;
+        };
+        block.redstone_conductor.value(offset)
     }
 
     #[must_use]
