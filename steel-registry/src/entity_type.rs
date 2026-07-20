@@ -284,6 +284,8 @@ pub struct EntityType {
     pub is_vehicle_entity: bool,
     /// Whether vanilla class hierarchy makes this entity a `Projectile`.
     pub is_projectile: bool,
+    /// Whether vanilla class hierarchy makes this entity an `AbstractArrow`.
+    pub is_abstract_arrow: bool,
 
     /// Behavioral flags for collision and interaction.
     pub flags: EntityFlags,
@@ -462,5 +464,10 @@ mod tests {
         assert!(vanilla_entities::WIND_CHARGE.is_projectile);
         assert!(vanilla_entities::FISHING_BOBBER.is_projectile);
         assert!(!vanilla_entities::ITEM.is_projectile);
+
+        assert!(vanilla_entities::ARROW.is_abstract_arrow);
+        assert!(vanilla_entities::SPECTRAL_ARROW.is_abstract_arrow);
+        assert!(vanilla_entities::TRIDENT.is_abstract_arrow);
+        assert!(!vanilla_entities::ENDER_PEARL.is_abstract_arrow);
     }
 }

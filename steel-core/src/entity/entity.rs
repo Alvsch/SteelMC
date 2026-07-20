@@ -1449,6 +1449,11 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         self.as_living_entity().is_some()
     }
 
+    /// Returns whether this entity belongs to vanilla's `AbstractArrow` hierarchy.
+    fn is_abstract_arrow(&self) -> bool {
+        self.entity_type().is_abstract_arrow
+    }
+
     /// Returns this entity as a projectile when it has projectile behavior.
     fn as_projectile(&self) -> Option<&dyn Projectile> {
         try_as_dyn::<Self, dyn Projectile>(self)
