@@ -16,7 +16,7 @@ use steel_protocol::packets::game::{
     CTeleportEntity, EquipmentSlotItem, RelativeMovement, SoundSource,
 };
 use steel_registry::blocks::{
-    block_state_ext::BlockStateExt as _, properties::BlockStateProperties,
+    behavior::PushReaction, block_state_ext::BlockStateExt as _, properties::BlockStateProperties,
     shapes::is_shape_full_block,
 };
 use steel_registry::data_components::vanilla_components::{

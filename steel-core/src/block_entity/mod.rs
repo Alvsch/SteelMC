@@ -23,6 +23,7 @@
 //! let entity = BLOCK_ENTITIES.create(block_entity_type, pos, state);
 //! ```
 
+pub(crate) mod block_state_nbt;
 pub mod entities;
 mod registry;
 mod storage;
@@ -32,6 +33,7 @@ use std::sync::Arc;
 use simdnbt::borrow::BaseNbtCompound as BorrowedNbtCompound;
 use simdnbt::owned::NbtCompound;
 use steel_registry::block_entity_type::BlockEntityTypeRef;
+use steel_registry::blocks::BlockRef;
 use steel_registry::game_events::GameEventRef;
 use steel_utils::{BlockPos, BlockStateId, ErasedType, locks::SyncMutex, types::UpdateFlags};
 
@@ -48,6 +50,8 @@ use crate::world::World;
 /// released. This keeps world mutation paths free to update the same block
 /// entity without recursively locking it
 pub enum BlockEntityTickAction {
+    /// Applies multiple actions in order.
+    Batch(Vec<BlockEntityTickAction>),
     /// Sets a block using [`World::set_block`]
     SetBlock {
         /// Position to update
@@ -58,6 +62,31 @@ pub enum BlockEntityTickAction {
         flags: UpdateFlags,
         /// Optional game event dispatched after the block update.
         game_event: Option<(GameEventRef, BlockStateId)>,
+    },
+    /// Removes the block entity at a position.
+    RemoveBlockEntity {
+        /// Position whose block entity is removed.
+        pos: BlockPos,
+    },
+    /// Applies vanilla `Block.updateOrDestroy` after an earlier ordered action.
+    UpdateOrDestroy {
+        /// State before shape updating.
+        old_state: BlockStateId,
+        /// State produced by shape updating.
+        new_state: BlockStateId,
+        /// Position to update.
+        pos: BlockPos,
+        /// Update flags passed to the world.
+        flags: UpdateFlags,
+        /// Remaining neighbor-update recursion budget.
+        update_limit: i32,
+    },
+    /// Notifies one block that a neighboring block changed.
+    NeighborChanged {
+        /// Position receiving the notification.
+        pos: BlockPos,
+        /// Block reported as the source of the change.
+        source_block: BlockRef,
     },
 }
 

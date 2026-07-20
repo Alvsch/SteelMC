@@ -7,19 +7,17 @@ use std::sync::Arc;
 
 use steel_protocol::packets::game::CBlockUpdate;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
-use steel_registry::loot_table::LootContext;
 use steel_registry::vanilla_attributes;
 use steel_registry::{
-    REGISTRY, RegistryExt, blocks::properties::Direction, vanilla_blocks, vanilla_game_events,
+    REGISTRY, blocks::properties::Direction, vanilla_blocks, vanilla_game_events,
 };
-use steel_utils::Identifier;
 use steel_utils::{
     BlockPos, BlockStateId,
     types::{GameType, InteractionHand, UpdateFlags},
 };
 
 use super::food_data::food_constants;
-use crate::behavior::{BLOCK_BEHAVIORS, BlockStateBehaviorExt};
+use crate::behavior::{BLOCK_BEHAVIORS, BlockLootContext, BlockStateBehaviorExt};
 use crate::entity::{Entity, LivingEntity};
 use crate::fluid::fluid_state_to_block;
 use crate::player::Player;
@@ -300,11 +298,16 @@ impl BlockBreakingManager {
         let replacement = fluid_state_to_block(state.get_fluid_state());
         // player_will_destroy may mutate the world itself, so block breaking remains globally
         // exclusive. The normal removal path still rejects a stale observed state.
-        let changed = changed_by_player_will_destroy
-            || world.set_block_if_unchanged(pos, state, replacement, UpdateFlags::UPDATE_ALL)
+        let removed_by_player_break = !changed_by_player_will_destroy
+            && world.set_block_if_unchanged(pos, state, replacement, UpdateFlags::UPDATE_ALL)
                 == ConditionalBlockSetResult::Changed;
+        let changed = changed_by_player_will_destroy || removed_by_player_break;
 
         if changed {
+            if removed_by_player_break {
+                behavior.destroy(adjusted_state, world, pos);
+            }
+
             // Play block destruction particles and sound (skip for fire blocks like vanilla)
             // Exclude the breaking player as they see the effect client-side
             let block = REGISTRY.blocks.by_state_id(adjusted_state);
@@ -453,18 +456,7 @@ fn get_destroy_progress(player: &Player, block_state: BlockStateId) -> f32 {
 }
 
 /// Drops loot for a destroyed block using its loot table.
-fn drop_block_loot(player: &Player, _world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
-    let block = state.get_block();
-
-    // Build the loot table key: "blocks/{block_name}"
-    let loot_table_key = Identifier::vanilla(format!("blocks/{}", block.key.path));
-
-    let Some(loot_table) = REGISTRY.loot_tables.by_key(&loot_table_key) else {
-        // No loot table for this block (e.g., air, bedrock)
-        return;
-    };
-
-    let mut rng = rand::rng();
+fn drop_block_loot(player: &Player, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
     let luck = player
         .attributes()
         .lock()
@@ -474,13 +466,10 @@ fn drop_block_loot(player: &Player, _world: &Arc<World>, pos: BlockPos, state: B
     let drops = {
         let inventory = player.inventory.lock();
         let tool = inventory.get_selected_item();
-        let mut ctx = LootContext::new(&mut rng)
+        BlockLootContext::new(world, pos)
             .with_luck(luck)
-            .with_block_state(state)
             .with_tool(tool)
-            .with_origin(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z()));
-
-        loot_table.get_random_items(&mut ctx)
+            .get_drops(state)
     };
 
     // Spawn each dropped item using the player's world reference (Arc<World>)

@@ -703,7 +703,9 @@ impl ChunkAccess {
     /// Removes a block entity at the given position.
     pub fn remove_block_entity(&self, pos: BlockPos) {
         match self {
-            Self::Full(chunk) => chunk.remove_block_entity(pos),
+            Self::Full(chunk) => {
+                chunk.remove_block_entity(pos);
+            }
             Self::Proto(proto_chunk) => proto_chunk.remove_block_entity(pos),
             Self::Unloaded => unreachable!(),
         }

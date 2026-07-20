@@ -98,8 +98,8 @@ use tokio::{runtime::Runtime, time::Instant};
 use crate::{
     ChunkMap,
     behavior::BlockStateBehaviorExt,
-    behavior::{BLOCK_BEHAVIORS, BlockCollisionContext, FLUID_BEHAVIORS},
-    block_entity::{SharedBlockEntity, entities::EndGatewayBlockEntity},
+    behavior::{BLOCK_BEHAVIORS, BlockCollisionContext, BlockLootContext, FLUID_BEHAVIORS},
+    block_entity::{BlockEntityTickAction, SharedBlockEntity, entities::EndGatewayBlockEntity},
     chunk::{heightmap::HeightmapType, player_chunk_view::PlayerChunkView},
     chunk_saver::{ChunkStorage, RamOnlyStorage, RegionManager},
     entity::{
@@ -432,6 +432,8 @@ pub struct World {
     /// Whether the tick rate is running normally (not frozen/paused).
     /// When false, movement validation checks are skipped.
     tick_runs_normally: AtomicBool,
+    /// Whether vanilla's scheduled/chunk/block-event tick phase is active.
+    handling_tick: AtomicBool,
     /// Ordered, duplicate-suppressing server block events awaiting execution.
     block_events: SyncMutex<BlockEventQueue>,
     /// Vanilla collecting neighbor updater shared by all live block mutations.
@@ -562,6 +564,7 @@ impl World {
                 sea_level,
                 default_gamemode,
                 tick_runs_normally: AtomicBool::new(true),
+                handling_tick: AtomicBool::new(false),
                 block_events: SyncMutex::new(BlockEventQueue::default()),
                 neighbor_updater: CollectingNeighborUpdater::new(max_chained_neighbor_updates),
                 entity_manager: WorldEntityManager::new(),
@@ -1704,6 +1707,12 @@ impl World {
             .store(runs_normally, Ordering::Relaxed);
     }
 
+    /// Mirrors `ServerLevel.isHandlingTick` for piston early-retraction rules.
+    #[must_use]
+    pub(crate) fn is_handling_tick(&self) -> bool {
+        self.handling_tick.load(Ordering::Relaxed)
+    }
+
     /// Gets the value of a game rule.
     /// WARNING: this function acquires a read lock on the level data.
     /// if you already have a write lock on level data, this will DEADLOCK
@@ -2179,7 +2188,7 @@ impl World {
         }
     }
 
-    fn update_neighbour_shapes(
+    pub(crate) fn update_neighbour_shapes(
         self: &Arc<Self>,
         state: BlockStateId,
         pos: BlockPos,
@@ -2197,6 +2206,23 @@ impl World {
                 update_limit,
             );
         }
+    }
+
+    /// Recomputes a state against all neighbors in vanilla shape-update order.
+    pub(crate) fn update_from_neighbor_shapes(
+        self: &Arc<Self>,
+        state: BlockStateId,
+        pos: BlockPos,
+    ) -> BlockStateId {
+        let mut updated = state;
+        for direction in Direction::UPDATE_SHAPE_ORDER {
+            let neighbor_pos = pos.relative(direction);
+            let neighbor_state = self.get_block_state(neighbor_pos);
+            updated = BLOCK_BEHAVIORS
+                .get_behavior(updated.get_block())
+                .update_shape(updated, self, pos, direction, neighbor_pos, neighbor_state);
+        }
+        updated
     }
 
     /// Called when a neighbor's shape changes, to update this block's state.
@@ -2271,7 +2297,7 @@ impl World {
         }
     }
 
-    fn update_or_destroy(
+    pub(crate) fn update_or_destroy(
         self: &Arc<World>,
         old_state: BlockStateId,
         new_state: BlockStateId,
@@ -2358,6 +2384,74 @@ impl World {
             .flatten()
     }
 
+    /// Adds a block entity to the loaded full chunk at its position.
+    pub(crate) fn set_block_entity(&self, block_entity: SharedBlockEntity) -> bool {
+        let pos = block_entity.lock().get_block_pos();
+        if !self.is_in_valid_bounds(pos) {
+            return false;
+        }
+
+        self.chunk_map
+            .with_full_chunk(Self::chunk_pos_for_block(pos), |chunk| {
+                chunk
+                    .as_full()
+                    .is_some_and(|chunk| chunk.try_add_and_register_block_entity(block_entity))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Removes a block entity from a loaded full chunk.
+    pub(crate) fn remove_block_entity(&self, pos: BlockPos) -> bool {
+        if !self.is_in_valid_bounds(pos) {
+            return false;
+        }
+
+        self.chunk_map
+            .with_full_chunk(Self::chunk_pos_for_block(pos), |chunk| {
+                chunk
+                    .as_full()
+                    .is_some_and(|chunk| chunk.remove_block_entity(pos))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Applies block-entity-requested world mutations after its mutex is released.
+    pub(crate) fn apply_block_entity_tick_action(self: &Arc<Self>, action: BlockEntityTickAction) {
+        match action {
+            BlockEntityTickAction::Batch(actions) => {
+                for action in actions {
+                    self.apply_block_entity_tick_action(action);
+                }
+            }
+            BlockEntityTickAction::SetBlock {
+                pos,
+                state,
+                flags,
+                game_event,
+            } => {
+                self.set_block(pos, state, flags);
+                if let Some((event, event_state)) = game_event {
+                    self.game_event(event, pos, &GameEventContext::new(None, Some(event_state)));
+                }
+            }
+            BlockEntityTickAction::RemoveBlockEntity { pos } => {
+                self.remove_block_entity(pos);
+            }
+            BlockEntityTickAction::UpdateOrDestroy {
+                old_state,
+                new_state,
+                pos,
+                flags,
+                update_limit,
+            } => {
+                self.update_or_destroy(old_state, new_state, pos, flags, update_limit);
+            }
+            BlockEntityTickAction::NeighborChanged { pos, source_block } => {
+                self.neighbor_changed(pos, source_block);
+            }
+        }
+    }
+
     /// Called when a block entity's data changes.
     ///
     /// Marks the containing chunk as unsaved so it will be persisted to disk.
@@ -2400,6 +2494,7 @@ impl World {
         runs_normally: bool,
     ) -> WorldGameTickTimings {
         let world_start = Instant::now();
+        self.handling_tick.store(true, Ordering::Relaxed);
         self.set_tick_runs_normally(runs_normally);
         if runs_normally {
             self.tick_world_border();
@@ -2417,6 +2512,9 @@ impl World {
             let _span = tracing::trace_span!("block_events").entered();
             self.run_block_events();
         }
+
+        // Vanilla clears this before ticking entities and block entities.
+        self.handling_tick.store(false, Ordering::Relaxed);
 
         let entity_tick = {
             let _span = tracing::trace_span!("entity_tick").entered();
@@ -4453,18 +4551,25 @@ impl World {
         pos: BlockPos,
         entity: Option<&dyn Entity>,
     ) {
-        for item in Self::block_drops(state, pos, entity) {
+        let context = BlockLootContext::new(self, pos).with_entity(entity);
+        for item in context.get_drops(state) {
             if !item.is_empty() {
                 self.pop_resource(pos, item);
             }
         }
     }
 
-    fn block_drops(
+    pub(crate) fn block_drops(
         state: BlockStateId,
-        pos: BlockPos,
-        entity: Option<&dyn Entity>,
+        context: &BlockLootContext<'_>,
     ) -> Vec<ItemStack> {
+        let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
+        behavior
+            .get_drops(state, context)
+            .unwrap_or_else(|| Self::default_block_drops(state, context))
+    }
+
+    fn default_block_drops(state: BlockStateId, context: &BlockLootContext<'_>) -> Vec<ItemStack> {
         let block = state.get_block();
         let loot_key = steel_utils::Identifier::vanilla(format!("blocks/{}", block.key.path));
 
@@ -4474,9 +4579,17 @@ impl World {
 
         let mut rng = rand::rng();
         let mut ctx = LootContext::new(&mut rng)
+            .with_luck(context.luck())
             .with_block_state(state)
-            .with_origin(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z()));
-        if let Some(entity) = entity {
+            .with_origin(
+                f64::from(context.pos().x()),
+                f64::from(context.pos().y()),
+                f64::from(context.pos().z()),
+            );
+        if let Some(tool) = context.tool() {
+            ctx = ctx.with_tool(tool);
+        }
+        if let Some(entity) = context.entity() {
             ctx = ctx.with_this_entity(entity_loot_ref(entity));
         }
 
@@ -5340,7 +5453,7 @@ mod tests {
     use crate::behavior::init_behaviors;
     use crate::chunk::chunk_ticket_manager::{ChunkTicket, ChunkTicketLevel};
     use crate::entity::{EntityBase, entities::PigEntity};
-    use crate::test_support::test_world;
+    use crate::test_support::{fresh_test_world, test_world};
 
     const FIRST_HALF: BlockLocalAabb = BlockLocalAabb::new(0.0, 0.0, 0.0, 0.5, 1.0, 1.0);
     const SECOND_HALF: BlockLocalAabb = BlockLocalAabb::new(0.5, 0.0, 0.0, 1.0, 1.0, 1.0);
@@ -5446,16 +5559,23 @@ mod tests {
     #[test]
     fn entity_breaker_is_available_to_chorus_flower_loot() {
         init_test_registry();
+        init_behaviors();
 
         let state = vanilla_blocks::CHORUS_FLOWER.default_state();
         let pos = BlockPos::new(1_312, 64, 1_312);
         let breaker = TrackerTestEntity::shared(987_654);
-        let drops = World::block_drops(state, pos, Some(breaker.as_ref()));
+        let world = fresh_test_world("entity_breaker_loot");
+        let context = BlockLootContext::new(&world, pos).with_entity(Some(breaker.as_ref()));
+        let drops = context.get_drops(state);
 
         assert_eq!(drops.len(), 1);
         assert_eq!(drops[0].item(), &*vanilla_items::CHORUS_FLOWER);
         assert_eq!(drops[0].count(), 1);
-        assert!(World::block_drops(state, pos, None).is_empty());
+        assert!(
+            BlockLootContext::new(&world, pos)
+                .get_drops(state)
+                .is_empty()
+        );
     }
 
     fn assert_vec3_close(left: DVec3, right: DVec3) {

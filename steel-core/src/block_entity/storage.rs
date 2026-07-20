@@ -74,13 +74,15 @@ impl BlockEntityStorage {
     /// Removes a block entity at the given position.
     ///
     /// Marks the entity as removed and removes it from the ticking list.
-    pub fn remove(&self, pos: BlockPos) {
+    pub fn remove(&self, pos: BlockPos) -> bool {
         let mut entities = self.entities.write();
-        if let Some(entity) = entities.remove(&pos) {
+        let removed = entities.remove(&pos);
+        if let Some(entity) = &removed {
             entity.lock().set_removed();
         }
         drop(entities);
         self.remove_from_tickers(pos);
+        removed.is_some()
     }
 
     /// Adds a block entity and registers it for ticking if needed.

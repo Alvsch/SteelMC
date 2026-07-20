@@ -23,7 +23,8 @@ use steel_utils::{
 
 use steel_utils::locks::SyncMutex;
 
-use crate::block_entity::{BlockEntityStorage, BlockEntityTickAction, SharedBlockEntity};
+use crate::behavior::{BLOCK_BEHAVIORS, BlockStateBehaviorExt, FLUID_BEHAVIORS};
+use crate::block_entity::{BlockEntityStorage, SharedBlockEntity};
 use crate::chunk::{
     heightmap::{ChunkHeightmaps, HeightmapType},
     light::{
@@ -36,10 +37,6 @@ use crate::chunk::{
 use crate::entity::SharedEntity;
 use crate::world::World;
 use crate::world::tick_scheduler::{BlockTickList, FluidTickList};
-use crate::{
-    behavior::{BLOCK_BEHAVIORS, BlockStateBehaviorExt, FLUID_BEHAVIORS},
-    world::game_event_context::GameEventContext,
-};
 use steel_worldgen::structure::{StructureReferenceMap, StructureStartMap};
 
 fn empty_postprocessing(height: i32) -> Box<[Vec<u16>]> {
@@ -489,9 +486,10 @@ impl LevelChunk {
     /// Removes a block entity at the given position.
     ///
     /// Marks the entity as removed and removes it from the ticking list.
-    pub fn remove_block_entity(&self, pos: BlockPos) {
-        self.block_entities.remove(pos);
+    pub fn remove_block_entity(&self, pos: BlockPos) -> bool {
+        let removed = self.block_entities.remove(pos);
         self.mark_unsaved();
+        removed
     }
 
     /// Adds a block entity and registers it for ticking if needed.
@@ -502,8 +500,55 @@ impl LevelChunk {
     ///
     /// Note: The world reference should be passed at block entity construction time.
     pub fn add_and_register_block_entity(&self, block_entity: SharedBlockEntity) {
+        let _ = self.try_add_and_register_block_entity(block_entity);
+    }
+
+    /// Adds a block entity if the live block state accepts it.
+    ///
+    /// Returns false when the entity's position or type does not match the
+    /// current block state.
+    pub fn try_add_and_register_block_entity(&self, block_entity: SharedBlockEntity) -> bool {
+        let (pos, cached_state, block_entity_type) = {
+            let guard = block_entity.lock();
+            (
+                guard.get_block_pos(),
+                guard.get_block_state(),
+                guard.get_type(),
+            )
+        };
+        let state = self.get_block_state(pos);
+        if !state.has_block_entity() {
+            log::warn!(
+                "Trying to set block entity {} at {pos:?}, but block {} does not allow one",
+                block_entity_type.key,
+                state.get_block().key,
+            );
+            return false;
+        }
+
+        if state != cached_state {
+            if !block_entity_type.is_valid(state.get_block()) {
+                log::warn!(
+                    "Trying to set block entity {} at {pos:?}, but block {} does not accept that type",
+                    block_entity_type.key,
+                    state.get_block().key,
+                );
+                return false;
+            }
+            if state.get_block() != cached_state.get_block() {
+                log::warn!(
+                    "Updating mismatched block entity {} state at {pos:?}: {} != {}",
+                    block_entity_type.key,
+                    state.get_block().key,
+                    cached_state.get_block().key,
+                );
+            }
+            block_entity.lock().set_block_state(state);
+        }
+
         self.block_entities.add_and_register(block_entity);
         self.mark_unsaved();
+        true
     }
 
     /// Updates the ticking status of a block entity.
@@ -555,23 +600,7 @@ impl LevelChunk {
             };
 
             if let Some(action) = action {
-                match action {
-                    BlockEntityTickAction::SetBlock {
-                        pos,
-                        state,
-                        flags,
-                        game_event,
-                    } => {
-                        world.set_block(pos, state, flags);
-                        if let Some((event, event_state)) = game_event {
-                            world.game_event(
-                                event,
-                                pos,
-                                &GameEventContext::new(None, Some(event_state)),
-                            );
-                        }
-                    }
-                }
+                world.apply_block_entity_tick_action(action);
             }
         }
 

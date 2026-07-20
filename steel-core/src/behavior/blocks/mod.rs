@@ -36,9 +36,10 @@ pub use portal::{
     SoulFireBlock,
 };
 pub use redstone::{
-    ButtonBlock, ComparatorBlock, LeverBlock, ObserverBlock, PoweredBlock, PressurePlateBlock,
-    PressurePlateSensitivity, RedStoneWireBlock, RedstoneLampBlock, RedstoneTorchBlock,
-    RedstoneWallTorchBlock, RepeaterBlock, WeightedPressurePlateBlock,
+    ButtonBlock, ComparatorBlock, LeverBlock, MovingPistonBlock, ObserverBlock, PistonBaseBlock,
+    PistonHeadBlock, PoweredBlock, PressurePlateBlock, PressurePlateSensitivity, RedStoneWireBlock,
+    RedstoneLampBlock, RedstoneTorchBlock, RedstoneWallTorchBlock, RepeaterBlock,
+    WeightedPressurePlateBlock,
 };
 pub use vegetation::{
     AzaleaBlock, BambooSaplingBlock, BambooStalkBlock, BeetrootBlock, CactusBlock,

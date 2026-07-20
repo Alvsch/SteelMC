@@ -3,6 +3,7 @@
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use smallvec::SmallVec;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction};
@@ -17,7 +18,7 @@ use steel_registry::vanilla_entities;
 use steel_registry::{REGISTRY, RegistryEntry, RegistryExt, sound_events, vanilla_blocks};
 use steel_registry::{vanilla_damage_types, vanilla_items};
 use steel_utils::types::{GameType, InteractionHand, UpdateFlags};
-use steel_utils::{BlockPos, BlockStateId, WorldAabb, axis::Axis};
+use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId, WorldAabb, axis::Axis};
 
 use crate::behavior::blocks::vegetation::bonemealable::Bonemealable;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
@@ -50,6 +51,91 @@ pub(crate) fn default_can_be_replaced(
 pub struct PickupResult {
     pub filled_bucket: ItemStack,
     pub sound: Option<SoundEventRef>,
+}
+
+/// Resolved block-local collision boxes for a live block state.
+///
+/// Most blocks materialize their extracted static voxel shape here. Dynamic
+/// blocks such as moving pistons can instead return boxes computed from live
+/// world data without forcing runtime shapes into the static registry.
+pub type BlockCollisionBoxes = SmallVec<[BlockLocalAabb; 4]>;
+
+/// Live parameters used to resolve a block's loot.
+///
+/// This is the Steel counterpart to vanilla's block `LootParams`. Behaviors can
+/// override loot generation while retaining the original tool, entity, luck,
+/// and position when delegating to another block state.
+pub struct BlockLootContext<'a> {
+    world: &'a Arc<World>,
+    pos: BlockPos,
+    entity: Option<&'a dyn Entity>,
+    tool: Option<&'a ItemStack>,
+    luck: f32,
+}
+
+impl<'a> BlockLootContext<'a> {
+    /// Creates a no-tool block loot context.
+    #[must_use]
+    pub const fn new(world: &'a Arc<World>, pos: BlockPos) -> Self {
+        Self {
+            world,
+            pos,
+            entity: None,
+            tool: None,
+            luck: 0.0,
+        }
+    }
+
+    /// Adds the entity responsible for destroying the block.
+    #[must_use]
+    pub const fn with_entity(mut self, entity: Option<&'a dyn Entity>) -> Self {
+        self.entity = entity;
+        self
+    }
+
+    /// Adds the tool used to destroy the block.
+    #[must_use]
+    pub const fn with_tool(mut self, tool: &'a ItemStack) -> Self {
+        self.tool = Some(tool);
+        self
+    }
+
+    /// Adds the luck used to evaluate the loot table.
+    #[must_use]
+    pub const fn with_luck(mut self, luck: f32) -> Self {
+        self.luck = luck;
+        self
+    }
+
+    /// Returns the world containing the block.
+    #[must_use]
+    pub const fn world(&self) -> &'a Arc<World> {
+        self.world
+    }
+
+    /// Returns the block position whose loot is being resolved.
+    #[must_use]
+    pub const fn pos(&self) -> BlockPos {
+        self.pos
+    }
+
+    /// Resolves loot for another state with the same vanilla loot parameters.
+    #[must_use]
+    pub fn get_drops(&self, state: BlockStateId) -> Vec<ItemStack> {
+        World::block_drops(state, self)
+    }
+
+    pub(crate) const fn entity(&self) -> Option<&'a dyn Entity> {
+        self.entity
+    }
+
+    pub(crate) const fn tool(&self) -> Option<&'a ItemStack> {
+        self.tool
+    }
+
+    pub(crate) const fn luck(&self) -> f32 {
+        self.luck
+    }
 }
 
 #[must_use]
@@ -657,6 +743,34 @@ pub trait BlockBehavior: Send + Sync {
         state
     }
 
+    /// Called after a player successfully removes this block.
+    ///
+    /// Mirrors vanilla `Block.destroy(LevelAccessor, BlockPos, BlockState)`.
+    #[expect(
+        unused_variables,
+        reason = "default trait implementation ignores all params"
+    )]
+    fn destroy(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
+        // Default: no-op
+    }
+
+    /// Overrides the loot generated for this block state.
+    ///
+    /// Returning `None` evaluates the state's normal loot table. Returning
+    /// `Some` uses the provided items, including an empty list. This mirrors
+    /// vanilla's per-block `getDrops` override point.
+    #[expect(
+        unused_variables,
+        reason = "default trait implementation ignores all params"
+    )]
+    fn get_drops(
+        &self,
+        state: BlockStateId,
+        context: &BlockLootContext<'_>,
+    ) -> Option<Vec<ItemStack>> {
+        None
+    }
+
     /// Called after this block is removed from the world, to affect neighbors.
     ///
     /// This is used for things like rails notifying neighbors when removed.
@@ -773,6 +887,11 @@ pub trait BlockBehavior: Send + Sync {
 
     /// Returns whether this behavior implements vanilla `BaseRailBlock` semantics.
     fn is_rail(&self) -> bool {
+        false
+    }
+
+    /// Returns whether this behavior implements vanilla `PistonBaseBlock` semantics.
+    fn is_piston_base(&self) -> bool {
         false
     }
 
@@ -975,6 +1094,29 @@ pub trait BlockBehavior: Send + Sync {
         }
 
         DVec3::ZERO
+    }
+
+    /// Resolves this block state's collision shape to owned block-local boxes.
+    ///
+    /// Vanilla dynamic-shape blocks may override this directly. Static blocks
+    /// inherit the collision shape and positional offset hooks above.
+    fn get_collision_boxes(
+        &self,
+        state: BlockStateId,
+        world: &dyn LevelReader,
+        pos: BlockPos,
+        context: BlockCollisionContext,
+    ) -> BlockCollisionBoxes {
+        let shape = self.get_collision_shape(state, world, pos, context);
+        if shape.is_empty() {
+            return BlockCollisionBoxes::new();
+        }
+
+        let offset = self.get_collision_shape_offset(state, world, pos, context);
+        shape
+            .into_iter()
+            .map(|aabb| aabb.translate(offset))
+            .collect()
     }
 
     /// Returns this block state's shape used by vanilla entity-inside effects.

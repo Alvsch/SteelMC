@@ -12,6 +12,8 @@ use crate::world::{
     LevelReader, SignalQueryContext, World, get_best_neighbor_signal, is_redstone_conductor,
 };
 
+use super::java_hash::sort_small_map_positions;
+
 /// Persistent evaluator used by `RedStoneWireBlock` when redstone experiments are disabled.
 pub(super) struct DefaultRedstoneWireEvaluator {
     wire_block: BlockRef,
@@ -107,28 +109,9 @@ fn java_hash_set_update_order(pos: BlockPos) -> [BlockPos; 7] {
         pos.east(),
     ];
 
-    for index in 1..positions.len() {
-        let position = positions[index];
-        let bucket = java_hash_map_bucket(position);
-        let mut insertion_index = index;
-        while insertion_index > 0 && java_hash_map_bucket(positions[insertion_index - 1]) > bucket {
-            positions[insertion_index] = positions[insertion_index - 1];
-            insertion_index -= 1;
-        }
-        positions[insertion_index] = position;
-    }
+    sort_small_map_positions(&mut positions);
 
     positions
-}
-
-const fn java_hash_map_bucket(pos: BlockPos) -> u32 {
-    let hash = pos
-        .z()
-        .wrapping_mul(31)
-        .wrapping_add(pos.y())
-        .wrapping_mul(31)
-        .wrapping_add(pos.x()) as u32;
-    (hash ^ (hash >> 16)) & 15
 }
 
 #[cfg(test)]

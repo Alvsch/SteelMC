@@ -2,7 +2,7 @@ use glam::DVec3;
 use rustc_hash::FxHashMap;
 use steel_utils::Identifier;
 
-use crate::RegistryTags;
+use crate::{RegistryTags, blocks::behavior::PushReaction};
 
 /// Mob category for spawn classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -246,6 +246,8 @@ pub struct EntityFlags {
     pub is_sensitive_to_water: bool,
     pub can_breathe_underwater: bool,
     pub can_be_seen_as_enemy: bool,
+    /// Default response returned by this vanilla entity type when pushed by a piston.
+    pub piston_push_reaction: PushReaction,
 }
 
 #[derive(Debug)]

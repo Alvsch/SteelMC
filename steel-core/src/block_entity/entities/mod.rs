@@ -5,6 +5,7 @@ mod beehive;
 mod comparator;
 mod end_gateway;
 mod end_portal;
+mod piston_moving;
 mod potent_sulfur;
 mod raw;
 mod sign;
@@ -16,6 +17,7 @@ pub use beehive::{
 pub use comparator::ComparatorBlockEntity;
 pub use end_gateway::EndGatewayBlockEntity;
 pub use end_portal::EndPortalBlockEntity;
+pub use piston_moving::PistonMovingBlockEntity;
 pub use potent_sulfur::PotentSulfurBlockEntity;
 pub use raw::RawBlockEntity;
 pub use sign::{SIGN_LINES, SignBlockEntity, SignText};

@@ -394,6 +394,20 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         false
     }
 
+    /// Returns how vanilla lets this entity respond to piston movement.
+    fn piston_push_reaction(&self) -> PushReaction {
+        if self.is_marker_armor_stand() {
+            PushReaction::Ignore
+        } else {
+            self.entity_type().flags.piston_push_reaction
+        }
+    }
+
+    /// Returns whether this entity's main supporting block is `pos`.
+    fn is_supported_by(&self, pos: BlockPos) -> bool {
+        self.base().supporting_block() == Some(pos)
+    }
+
     /// Returns whether vanilla lets this entity interact with its loaded level.
     fn can_interact_with_level(&self) -> bool {
         self.is_alive() && !self.is_removed() && !self.is_spectator()
@@ -2315,6 +2329,15 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         let entity = self.as_entity_event_source();
         let movements = self.base().take_movements_for_block_effects();
         apply_effects_from_block_movements(entity, &movements);
+    }
+
+    /// Applies block-contact effects for one explicit movement segment.
+    ///
+    /// Mirrors vanilla's `Entity.applyEffectsFromBlocks(Vec3, Vec3)` overload,
+    /// which does not finalize or clear the entity's normal movement trace.
+    fn apply_effects_from_blocks_between(&self, from: DVec3, to: DVec3) {
+        let entity = self.as_entity_event_source();
+        apply_effects_from_block_movements(entity, &[EntityMovement::new(from, to)]);
     }
 
     /// Replays the last finalized block-contact movement list.
