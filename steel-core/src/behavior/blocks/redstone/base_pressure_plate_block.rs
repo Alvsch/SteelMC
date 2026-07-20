@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use steel_registry::blocks::BlockRef;
-use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::Direction;
 use steel_registry::blocks::shapes::SupportType;
 use steel_registry::sound_event::SoundEventRef;
@@ -33,8 +32,8 @@ impl BasePressurePlateBlock {
     pub(super) fn can_survive(level: &dyn LevelReader, pos: BlockPos) -> bool {
         let below_pos = pos.below();
         let below_state = level.get_block_state(below_pos);
-        below_state.is_face_sturdy_for_at(below_pos, Direction::Up, SupportType::Rigid)
-            || below_state.is_face_sturdy_for_at(below_pos, Direction::Up, SupportType::Center)
+        level.is_face_sturdy_for(below_state, below_pos, Direction::Up, SupportType::Rigid)
+            || level.is_face_sturdy_for(below_state, below_pos, Direction::Up, SupportType::Center)
     }
 
     pub(super) fn state_for_placement(

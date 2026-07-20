@@ -74,7 +74,7 @@ impl BlockBehavior for TallSeagrassBlock {
         } else {
             get_fluid_state_from_block(current)
         };
-        below.is_face_sturdy_at(below_pos, Direction::Up)
+        world.is_face_sturdy(below, below_pos, Direction::Up)
             && !below
                 .get_block()
                 .has_tag(&BlockTag::CANNOT_SUPPORT_SEAGRASS)

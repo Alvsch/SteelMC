@@ -29,11 +29,16 @@ impl DiodeBlock {
     }
 
     pub(super) fn can_survive_on(
-        _level: &dyn LevelReader,
+        level: &dyn LevelReader,
         neighbor_pos: BlockPos,
         neighbor_state: BlockStateId,
     ) -> bool {
-        neighbor_state.is_face_sturdy_for_at(neighbor_pos, Direction::Up, SupportType::Rigid)
+        level.is_face_sturdy_for(
+            neighbor_state,
+            neighbor_pos,
+            Direction::Up,
+            SupportType::Rigid,
+        )
     }
 
     pub(super) fn can_survive(level: &dyn LevelReader, pos: BlockPos) -> bool {

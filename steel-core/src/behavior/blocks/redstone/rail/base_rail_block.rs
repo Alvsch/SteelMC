@@ -36,9 +36,12 @@ impl BaseRailBlock {
     }
 
     fn can_support_rigid_block(level: &dyn LevelReader, pos: BlockPos) -> bool {
-        level
-            .get_block_state(pos)
-            .is_face_sturdy_for_at(pos, Direction::Up, SupportType::Rigid)
+        level.is_face_sturdy_for(
+            level.get_block_state(pos),
+            pos,
+            Direction::Up,
+            SupportType::Rigid,
+        )
     }
 
     #[must_use]

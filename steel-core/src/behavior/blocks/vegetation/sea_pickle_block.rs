@@ -5,6 +5,7 @@ use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::BlockPlaceContext;
+use crate::behavior::{BLOCK_BEHAVIORS, BlockCollisionContext};
 use crate::world::LevelReader;
 
 use super::{BlockRef, default_surviving_state};
@@ -23,19 +24,20 @@ impl SeaPickleBlock {
         Self { block }
     }
 
-    fn may_place_on(state: BlockStateId, pos: BlockPos) -> bool {
-        state
-            .get_collision_shape_at(pos)
+    fn may_place_on(world: &dyn LevelReader, state: BlockStateId, pos: BlockPos) -> bool {
+        BLOCK_BEHAVIORS
+            .get_behavior(state.get_block())
+            .get_collision_boxes(state, world, pos, BlockCollisionContext::empty())
             .iter()
             .any(|aabb| !aabb.is_empty() && aabb.max_y() >= 1.0)
-            || state.is_face_sturdy_at(pos, Direction::Up)
+            || world.is_face_sturdy(state, pos, Direction::Up)
     }
 }
 
 impl BlockBehavior for SeaPickleBlock {
     fn can_survive(&self, _state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> bool {
         let below_pos = pos.below();
-        Self::may_place_on(world.get_block_state(below_pos), below_pos)
+        Self::may_place_on(world, world.get_block_state(below_pos), below_pos)
     }
 
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {

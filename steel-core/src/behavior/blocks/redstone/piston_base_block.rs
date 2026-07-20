@@ -594,6 +594,7 @@ mod tests {
     use std::sync::Arc;
 
     use glam::DVec3;
+    use steel_registry::blocks::properties::AttachFace;
     use steel_registry::item_stack::ItemStack;
     use steel_registry::test_support::init_test_registry;
     use steel_registry::vanilla_items;
@@ -789,6 +790,58 @@ mod tests {
                 .get_block_state(piston_pos.relative_n(Direction::East, 2))
                 .get_block(),
             &vanilla_blocks::STONE
+        );
+    }
+
+    #[test]
+    fn retracting_piston_keeps_rear_face_attachments_supported() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("piston_rear_face_support");
+        let piston_pos = BlockPos::new(8, 64, 8);
+        let button_pos = piston_pos.west();
+        let power_pos = piston_pos.north();
+        let holder = insert_ready_full_chunk(&world, ChunkPos::from_block_pos(piston_pos));
+        let piston_state = vanilla_blocks::PISTON
+            .default_state()
+            .set_value(&BlockStateProperties::FACING, Direction::East)
+            .set_value(&BlockStateProperties::EXTENDED, false);
+        let button_state = vanilla_blocks::OAK_BUTTON
+            .default_state()
+            .set_value(&BlockStateProperties::ATTACH_FACE, AttachFace::Wall)
+            .set_value(&BlockStateProperties::HORIZONTAL_FACING, Direction::West);
+
+        assert!(world.set_block(piston_pos, piston_state, UpdateFlags::UPDATE_NONE));
+        assert!(world.set_block(button_pos, button_state, UpdateFlags::UPDATE_NONE));
+        assert!(world.set_block(
+            power_pos,
+            vanilla_blocks::REDSTONE_BLOCK.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        ));
+        world.run_block_events();
+        assert_eq!(
+            world.get_block_state(button_pos).get_block(),
+            &vanilla_blocks::OAK_BUTTON
+        );
+
+        tick_block_entities(&holder, 3);
+        assert!(world.remove_block(power_pos, false));
+        world.run_block_events();
+
+        let moving = world.get_block_state(piston_pos);
+        assert_eq!(moving.get_block(), &vanilla_blocks::MOVING_PISTON);
+        assert!(world.is_face_sturdy(moving, piston_pos, Direction::West));
+        assert!(!world.is_face_sturdy(moving, piston_pos, Direction::East));
+        assert!(!world.is_face_sturdy(moving, piston_pos, Direction::Up));
+        assert_eq!(
+            world.get_block_state(button_pos).get_block(),
+            &vanilla_blocks::OAK_BUTTON
+        );
+
+        tick_block_entities(&holder, 3);
+        assert_eq!(
+            world.get_block_state(button_pos).get_block(),
+            &vanilla_blocks::OAK_BUTTON
         );
     }
 

@@ -17,14 +17,15 @@ use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use simdnbt::owned::NbtCompound;
 use steel_registry::{
     REGISTRY, block_entity_type::BlockEntityTypeRef, blocks::BlockRef,
-    blocks::block_state_ext::BlockStateExt as _, fluid::FluidRef, vanilla_blocks,
+    blocks::block_state_ext::BlockStateExt as _, blocks::properties::Direction,
+    blocks::shapes::SupportType, fluid::FluidRef, vanilla_blocks,
 };
 use steel_utils::random::RandomSource;
 use steel_utils::{
     BlockPos, BlockStateId, ChunkPos, PackedSectionBlockPos, SectionPos, types::UpdateFlags,
 };
 
-use crate::behavior::FLUID_BEHAVIORS;
+use crate::behavior::{BLOCK_BEHAVIORS, FLUID_BEHAVIORS};
 use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
 use crate::chunk::{
     chunk_access::{ChunkAccess, ChunkStatus},
@@ -1243,6 +1244,22 @@ const fn abs_diff(left: i32, right: i32) -> i32 {
 impl LevelReader for WorldGenRegion<'_> {
     fn get_block_state(&self, pos: BlockPos) -> BlockStateId {
         self.block_state(pos)
+    }
+
+    fn get_block_entity(&self, pos: BlockPos) -> Option<SharedBlockEntity> {
+        self.block_entity(pos)
+    }
+
+    fn is_face_sturdy_for(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+        support_type: SupportType,
+    ) -> bool {
+        BLOCK_BEHAVIORS
+            .get_behavior(state.get_block())
+            .is_face_sturdy(state, self, pos, direction, support_type)
     }
 
     fn raw_brightness(&self, pos: BlockPos, sky_darkening: u8) -> u8 {

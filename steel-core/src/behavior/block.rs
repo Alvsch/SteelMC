@@ -8,7 +8,8 @@ use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction};
 use steel_registry::blocks::shapes::{
-    BooleanOp, ShapeChannel, VoxelShape, is_shape_full_block, join_unoptimized_boxes,
+    BooleanOp, ShapeChannel, SupportType, VoxelShape, is_block_local_face_sturdy,
+    is_shape_full_block, join_unoptimized_boxes,
 };
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::fluid::{FluidRef, FluidState};
@@ -1127,6 +1128,65 @@ pub trait BlockBehavior: Send + Sync {
             .into_iter()
             .map(|aabb| aabb.translate(offset))
             .collect()
+    }
+
+    /// Resolves vanilla `BlockState.getBlockSupportShape` to owned block-local boxes.
+    ///
+    /// Most states use extracted support shapes. Dynamic blocks can override this
+    /// hook to consult live world data, as vanilla does when its state cache is
+    /// disabled by `dynamicShape()`.
+    #[expect(
+        unused_variables,
+        reason = "the default support shape is extracted and independent of world data"
+    )]
+    fn get_block_support_boxes(
+        &self,
+        state: BlockStateId,
+        world: &dyn LevelReader,
+        pos: BlockPos,
+    ) -> BlockCollisionBoxes {
+        let shape = state.get_static_support_shape();
+        if shape.is_empty() {
+            return BlockCollisionBoxes::new();
+        }
+
+        let offset = if state
+            .get_block()
+            .shape_offsets
+            .uses_offset(ShapeChannel::Support)
+        {
+            state.get_offset(pos)
+        } else {
+            DVec3::ZERO
+        };
+        shape
+            .into_iter()
+            .map(|aabb| aabb.translate(offset))
+            .collect()
+    }
+
+    /// Mirrors vanilla `BlockState.isFaceSturdy(level, pos, direction, supportType)`.
+    ///
+    /// Static states retain their registry fast path. Dynamic states evaluate
+    /// the live support boxes so block entities and other world-dependent
+    /// shapes remain observable to attachment logic.
+    fn is_face_sturdy(
+        &self,
+        state: BlockStateId,
+        world: &dyn LevelReader,
+        pos: BlockPos,
+        direction: Direction,
+        support_type: SupportType,
+    ) -> bool {
+        if !state.get_block().config.dynamic_shape {
+            return state.is_face_sturdy_for_at(pos, direction, support_type);
+        }
+
+        is_block_local_face_sturdy(
+            &self.get_block_support_boxes(state, world, pos),
+            direction,
+            support_type,
+        )
     }
 
     /// Returns this block state's shape used by vanilla entity-inside effects.

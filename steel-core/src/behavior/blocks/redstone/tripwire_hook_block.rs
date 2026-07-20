@@ -221,9 +221,7 @@ impl BlockBehavior for TripWireHookBlock {
         let direction = state.get_value(&BlockStateProperties::HORIZONTAL_FACING);
         let support_pos = pos.relative(direction.opposite());
         direction.axis() != Axis::Y
-            && world
-                .get_block_state(support_pos)
-                .is_face_sturdy_at(support_pos, direction)
+            && world.is_face_sturdy(world.get_block_state(support_pos), support_pos, direction)
     }
 
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {

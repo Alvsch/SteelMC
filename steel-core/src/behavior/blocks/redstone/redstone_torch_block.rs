@@ -118,7 +118,8 @@ impl RedstoneTorchBlock {
 impl BlockBehavior for RedstoneTorchBlock {
     fn can_survive(&self, _state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> bool {
         let below_pos = pos.below();
-        world.get_block_state(below_pos).is_face_sturdy_for_at(
+        world.is_face_sturdy_for(
+            world.get_block_state(below_pos),
             below_pos,
             Direction::Up,
             SupportType::Center,
@@ -271,9 +272,7 @@ impl BlockBehavior for RedstoneWallTorchBlock {
     fn can_survive(&self, state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> bool {
         let facing = state.get_value(&BlockStateProperties::HORIZONTAL_FACING);
         let support_pos = pos.relative(facing.opposite());
-        world
-            .get_block_state(support_pos)
-            .is_face_sturdy_at(support_pos, facing)
+        world.is_face_sturdy(world.get_block_state(support_pos), support_pos, facing)
     }
 
     fn update_shape(

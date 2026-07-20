@@ -68,6 +68,15 @@ impl BlockBehavior for MovingPistonBlock {
             })
     }
 
+    fn get_block_support_boxes(
+        &self,
+        state: BlockStateId,
+        world: &dyn LevelReader,
+        pos: BlockPos,
+    ) -> BlockCollisionBoxes {
+        self.get_collision_boxes(state, world, pos, BlockCollisionContext::empty())
+    }
+
     fn destroy(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
         let base_pos = pos.relative(state.get_value(&BlockStateProperties::FACING).opposite());
         let base_state = world.get_block_state(base_pos);

@@ -43,7 +43,7 @@ use steel_registry::biome::{BiomeRef, TemperatureModifier};
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{Axis, BlockStateProperties, Direction};
 use steel_registry::blocks::shapes::{
-    BooleanOp, OffsetVoxelShape, VoxelShape, is_offset_face_full, is_shape_full_block,
+    BooleanOp, OffsetVoxelShape, SupportType, VoxelShape, is_offset_face_full, is_shape_full_block,
     join_is_not_empty,
 };
 use steel_registry::fluid::{FluidRef, FluidState};
@@ -5341,6 +5341,18 @@ impl LevelReader for World {
         Self::get_block_entity(self, pos)
     }
 
+    fn is_face_sturdy_for(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+        support_type: SupportType,
+    ) -> bool {
+        BLOCK_BEHAVIORS
+            .get_behavior(state.get_block())
+            .is_face_sturdy(state, self, pos, direction, support_type)
+    }
+
     fn raw_brightness(&self, pos: BlockPos, sky_darkening: u8) -> u8 {
         let sky_light = if self.dimension_type.has_skylight {
             self.light_value_at(LightLayer::Sky, pos)
@@ -5380,6 +5392,17 @@ impl LevelReader for Arc<World> {
 
     fn get_block_entity(&self, pos: BlockPos) -> Option<SharedBlockEntity> {
         self.as_ref().get_block_entity(pos)
+    }
+
+    fn is_face_sturdy_for(
+        &self,
+        state: BlockStateId,
+        pos: BlockPos,
+        direction: Direction,
+        support_type: SupportType,
+    ) -> bool {
+        self.as_ref()
+            .is_face_sturdy_for(state, pos, direction, support_type)
     }
 
     fn raw_brightness(&self, pos: BlockPos, sky_darkening: u8) -> u8 {

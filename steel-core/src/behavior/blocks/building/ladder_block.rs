@@ -90,7 +90,7 @@ impl BlockBehavior for LadderBlock {
 /// Returns whether a ladder can be placed on a particular face of a block located at a certain position.
 fn can_attach_to(world: &dyn LevelReader, pos: BlockPos, direction: Direction) -> bool {
     let state = world.get_block_state(pos);
-    state.is_face_sturdy_at(pos, direction)
+    world.is_face_sturdy(state, pos, direction)
 }
 
 #[cfg(test)]

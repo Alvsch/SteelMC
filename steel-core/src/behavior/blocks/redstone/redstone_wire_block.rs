@@ -175,7 +175,7 @@ impl RedStoneWireBlock {
             if is_placeable_above
                 && self.should_connect_to(level.get_block_state(relative_pos.above()), None)
             {
-                if relative_state.is_face_sturdy_at(relative_pos, direction.opposite()) {
+                if level.is_face_sturdy(relative_state, relative_pos, direction.opposite()) {
                     return RedstoneSide::Up;
                 }
                 return RedstoneSide::Side;
@@ -210,8 +210,9 @@ impl RedStoneWireBlock {
                 .is_signal_source(state, SignalQueryContext::DEFAULT)
     }
 
-    fn can_survive_on(_level: &dyn LevelReader, pos: BlockPos, state: BlockStateId) -> bool {
-        state.is_face_sturdy_at(pos, Direction::Up) || state.get_block() == &vanilla_blocks::HOPPER
+    fn can_survive_on(level: &dyn LevelReader, pos: BlockPos, state: BlockStateId) -> bool {
+        level.is_face_sturdy(state, pos, Direction::Up)
+            || state.get_block() == &vanilla_blocks::HOPPER
     }
 
     fn check_corner_change_at(&self, world: &Arc<World>, pos: BlockPos) {

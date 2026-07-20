@@ -255,7 +255,7 @@ pub(super) fn multiface_can_survive(
 pub(super) fn coral_plant_can_survive(world: &dyn LevelReader, pos: BlockPos) -> bool {
     let below_pos = pos.below();
     let below = world.get_block_state(below_pos);
-    below.is_face_sturdy_at(below_pos, Direction::Up)
+    world.is_face_sturdy(below, below_pos, Direction::Up)
 }
 
 /// Vanilla `BaseCoralWallFanBlock.canSurvive`.
@@ -269,7 +269,7 @@ pub(super) fn coral_wall_fan_can_survive(
 ) -> bool {
     let relative_pos = pos.relative(facing.opposite());
     let relative_state = world.get_block_state(relative_pos);
-    relative_state.is_face_sturdy_at(relative_pos, facing)
+    world.is_face_sturdy(relative_state, relative_pos, facing)
 }
 
 /// Vanilla `BaseCoralPlantTypeBlock.scanForWater`.
@@ -322,7 +322,7 @@ pub(super) fn growing_plant_can_survive(
     let attached_block = attached_state.get_block();
     attached_block == head
         || attached_block == body
-        || attached_state.is_face_sturdy_at(attached_pos, growth_direction)
+        || world.is_face_sturdy(attached_state, attached_pos, growth_direction)
 }
 
 pub(super) fn kelp_can_survive(world: &dyn LevelReader, pos: BlockPos) -> bool {
@@ -337,5 +337,5 @@ pub(super) fn kelp_can_survive(world: &dyn LevelReader, pos: BlockPos) -> bool {
 
     attached_state.get_block() == &vanilla_blocks::KELP
         || attached_state.get_block() == &vanilla_blocks::KELP_PLANT
-        || attached_state.is_face_sturdy_at(attached_pos, Direction::Up)
+        || world.is_face_sturdy(attached_state, attached_pos, Direction::Up)
 }

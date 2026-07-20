@@ -31,9 +31,11 @@ impl FaceAttachedHorizontalDirectionalBlock {
 
     pub(super) fn can_attach(level: &dyn LevelReader, pos: BlockPos, direction: Direction) -> bool {
         let support_pos = pos.relative(direction);
-        level
-            .get_block_state(support_pos)
-            .is_face_sturdy_at(support_pos, direction.opposite())
+        level.is_face_sturdy(
+            level.get_block_state(support_pos),
+            support_pos,
+            direction.opposite(),
+        )
     }
 
     pub(super) fn can_survive(state: BlockStateId, level: &dyn LevelReader, pos: BlockPos) -> bool {

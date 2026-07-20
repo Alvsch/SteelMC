@@ -249,7 +249,7 @@ impl BlockBehavior for DoorBlock {
         let below_pos = pos.below();
         let below_state = world.get_block_state(below_pos);
         if state.get_value(&BlockStateProperties::DOUBLE_BLOCK_HALF) == DoubleBlockHalf::Lower {
-            below_state.is_face_sturdy_at(below_pos, Direction::Up)
+            world.is_face_sturdy(below_state, below_pos, Direction::Up)
         } else {
             below_state.get_block() == self.block
         }
