@@ -2840,6 +2840,24 @@ impl World {
         environment::sky_darkening(self.sky_light_level())
     }
 
+    /// Returns the current vanilla `SUN_ANGLE` environment attribute in degrees.
+    pub fn sun_angle_degrees(&self) -> f32 {
+        let level_data = self.level_data.read();
+        environment::sun_angle_degrees(self.dimension_type, level_data.world_clocks())
+    }
+
+    /// Returns sky-layer light after the current sky darkening is subtracted.
+    ///
+    /// Mirrors vanilla `LevelReader.getEffectiveSkyBrightness` without allowing
+    /// block light to raise the result.
+    pub fn effective_sky_brightness(&self, pos: BlockPos) -> u8 {
+        if !self.dimension_type.has_skylight {
+            return 0;
+        }
+        self.light_value_at(LightLayer::Sky, pos)
+            .saturating_sub(self.sky_darkening())
+    }
+
     /// Returns vanilla `Level.isBrightOutside`.
     pub fn is_bright_outside(&self) -> bool {
         self.dimension_type.fixed_time.is_none() && self.sky_darkening() < 4
