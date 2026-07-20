@@ -194,6 +194,7 @@ mod neighbor_updater;
 mod player_area_map;
 mod player_map;
 pub(crate) mod player_spawn_finder;
+mod redstone;
 mod signal_getter;
 pub mod tick_scheduler;
 mod weather;
@@ -210,7 +211,7 @@ use neighbor_updater::{CollectingNeighborUpdater, ShapeUpdate};
 pub use player_area_map::PlayerAreaMap;
 pub use player_map::PlayerMap;
 pub use signal_getter::{SignalGetter, SignalQueryContext};
-pub(crate) use signal_getter::{get_best_neighbor_signal, is_redstone_conductor};
+pub(crate) use signal_getter::{get_best_neighbor_signal, get_signal, is_redstone_conductor};
 pub use tick_scheduler::ScheduledTick;
 
 /// Generates a random value using triangle distribution.
@@ -441,6 +442,8 @@ pub struct World {
     navigating_mobs: NavigatingMobTracker,
     /// Weather Data needed for animating starting and stopping of rain clientside
     pub weather: SyncMutex<Weather>,
+    /// Per-level recent toggle history used by vanilla redstone-torch burnout.
+    redstone_torch_toggles: SyncMutex<redstone::RedstoneTorchToggleTracker>,
     /// Monotonic counter for `sub_tick_order` on scheduled ticks.
     /// Provides stable ordering when multiple ticks fire on the same game tick
     /// with the same priority.
@@ -563,6 +566,9 @@ impl World {
                 entity_tracker: EntityTracker::new(),
                 navigating_mobs: NavigatingMobTracker::new(),
                 weather: SyncMutex::new(weather),
+                redstone_torch_toggles: SyncMutex::new(
+                    redstone::RedstoneTorchToggleTracker::default(),
+                ),
                 sub_tick_count: AtomicI64::new(0),
                 scheduled_block_ticks_this_tick: SyncMutex::new(
                     tick_scheduler::ScheduledTickRunSet::default(),
