@@ -593,13 +593,14 @@ impl BlockBehavior for PistonBaseBlock {
 mod tests {
     use std::sync::Arc;
 
+    use glam::DVec3;
     use steel_registry::item_stack::ItemStack;
     use steel_registry::test_support::init_test_registry;
     use steel_registry::vanilla_items;
-    use steel_utils::ChunkPos;
+    use steel_utils::{ChunkPos, types::InteractionHand};
 
     use super::*;
-    use crate::behavior::{BlockLootContext, init_behaviors};
+    use crate::behavior::{BlockHitResult, BlockLootContext, PlacementOrientation, init_behaviors};
     use crate::chunk::chunk_access::ChunkStatus;
     use crate::chunk::chunk_holder::ChunkHolder;
     use crate::test_support::{TestLevel, fresh_test_world, insert_ready_full_chunk};
@@ -676,6 +677,53 @@ mod tests {
             false,
             Direction::East,
         ));
+    }
+
+    #[test]
+    fn placement_uses_player_look_direction_not_clicked_face() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("piston_look_placement");
+        let support_pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(&world, ChunkPos::from_block_pos(support_pos));
+        assert!(world.set_block(
+            support_pos,
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_NONE,
+        ));
+
+        let mut stack = ItemStack::new(&vanilla_items::PISTON);
+        let source = PlacementSource::direct(
+            None,
+            InteractionHand::MainHand,
+            &mut stack,
+            PlacementOrientation::Player {
+                rotation: 0.0,
+                pitch: 80.0,
+            },
+            false,
+        );
+        let context = BlockPlaceContext::new(
+            &world,
+            source,
+            &BlockHitResult {
+                location: DVec3::new(9.0, 64.5, 8.5),
+                direction: Direction::East,
+                block_pos: support_pos,
+                miss: false,
+                inside: false,
+                world_border_hit: false,
+            },
+        );
+
+        let state = PistonBaseBlock::new(&vanilla_blocks::PISTON, false)
+            .get_state_for_placement(&context)
+            .expect("piston placement should produce a state");
+        assert_eq!(context.clicked_face(), Direction::East);
+        assert_eq!(
+            state.get_value(&BlockStateProperties::FACING),
+            Direction::Up,
+        );
     }
 
     #[test]
