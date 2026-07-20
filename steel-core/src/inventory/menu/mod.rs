@@ -2,6 +2,7 @@
 
 mod behavior;
 mod builder;
+mod grid;
 mod kind;
 pub mod kinds;
 mod layout;
@@ -11,6 +12,7 @@ pub use builder::{
     ContainerSlots, DataSlot, FillDirection, MenuBuilder, PlayerInventorySections, Section,
     SectionSource,
 };
+pub use grid::{GridPlacer, Rect, Region};
 pub use kind::{MenuKind, MenuKindType};
 pub(crate) use layout::MenuLayout;
 

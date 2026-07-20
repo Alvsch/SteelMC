@@ -615,13 +615,28 @@ impl MenuBuilder {
         Menu::from_parts(behavior, layout, kind.into())
     }
 
+    /// The identity of the menu being built.
+    pub(crate) const fn instance(&self) -> MenuInstanceId {
+        self.instance
+    }
+
+    /// The number of slots added so far.
+    pub(crate) const fn slot_count(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Appends a single slot without minting a section.
+    pub(crate) fn push_slot(&mut self, slot: SlotType) {
+        self.slots.push(slot);
+    }
+
     /// Records (in debug builds) that a section covers the container-local
     /// `range` of `container`
     ///
     /// # Panics
     /// In debug builds, if the range was already covered by another `Range`
     #[cfg(debug_assertions)]
-    fn claim(&mut self, container: &ContainerRef, range: Range<usize>) {
+    pub(crate) fn claim(&mut self, container: &ContainerRef, range: Range<usize>) {
         let id = container.container_id();
         for (other_id, other) in &self.claimed {
             debug_assert!(
@@ -634,7 +649,7 @@ impl MenuBuilder {
     }
 
     /// Records a container to lock.
-    fn register_container(&mut self, container: impl Into<ContainerRef>) {
+    pub(crate) fn register_container(&mut self, container: impl Into<ContainerRef>) {
         let container_ref = container.into();
         let id = container_ref.container_id();
         if !self.container_refs.iter().any(|c| c.container_id() == id) {
