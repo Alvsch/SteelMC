@@ -13,7 +13,7 @@ use std::{
     time::Instant,
 };
 
-use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::RwLockReadGuard;
 use simdnbt::owned::NbtCompound;
 use steel_registry::{
     REGISTRY, block_entity_type::BlockEntityTypeRef, blocks::BlockRef,
@@ -33,7 +33,7 @@ use crate::chunk::{
     chunk_holder::ChunkHolder,
     chunk_pyramid::ChunkStep,
     heightmap::{Heightmap, HeightmapType},
-    section::{ChunkSection, SectionHolder},
+    section::{ChunkSection, SectionHolder, SectionWriteGuard},
 };
 use crate::entity::SharedEntity;
 use crate::world::tick_scheduler::TickPriority;
@@ -1030,7 +1030,7 @@ impl<'region, 'world, 'profile> WorldGenBulkSectionAccess<'region, 'world, 'prof
             profile.record_section_read_attempt(chunk_x, chunk_z, section_index);
         });
         let section_guard = if let Some(profile) = ore_profile {
-            if let Some(guard) = section.section.try_read() {
+            if let Some(guard) = section.try_read() {
                 guard
             } else {
                 if let Ok(mut profile) = profile.try_borrow_mut() {
@@ -1139,12 +1139,12 @@ impl<'region, 'world, 'profile> WorldGenBulkSectionAccess<'region, 'world, 'prof
         ore_profile: Option<&RefCell<OreFeatureStats>>,
         section: &'section SectionHolder,
         key: WritableSectionKey,
-    ) -> RwLockWriteGuard<'section, ChunkSection> {
+    ) -> SectionWriteGuard<'section> {
         Self::with_ore_profile_ref(ore_profile, |profile| {
             profile.record_section_write_attempt(key.chunk_x, key.chunk_z, key.section_index);
         });
         if let Some(profile) = ore_profile {
-            if let Some(guard) = section.section.try_write() {
+            if let Some(guard) = section.try_write() {
                 guard
             } else {
                 if let Ok(mut profile) = profile.try_borrow_mut() {

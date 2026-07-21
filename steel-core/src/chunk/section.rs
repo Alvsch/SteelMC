@@ -1,6 +1,15 @@
 //! This module contains the `Sections` and `ChunkSection` structs.
-use std::{fmt::Debug, io::Cursor, sync::LazyLock};
+use std::{
+    fmt::Debug,
+    io::Cursor,
+    ops::{Deref, DerefMut},
+    sync::{
+        LazyLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
+use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::vanilla_biomes;
 use steel_registry::{REGISTRY, RegistryEntry};
@@ -13,42 +22,101 @@ use crate::chunk::paletted_container::{BiomePalette, BlockPalette};
 #[derive(Debug)]
 pub struct SectionHolder {
     /// The chunk section data (requires lock to access).
-    pub section: SyncRwLock<ChunkSection>,
+    section: SyncRwLock<ChunkSection>,
+    /// Lock-free mirror of whether the section contains randomly-ticking blocks.
+    randomly_ticking: AtomicBool,
 }
 
 impl SectionHolder {
     /// Creates a new section holder.
     #[must_use]
     pub const fn new(section: ChunkSection) -> Self {
+        let randomly_ticking = section.is_randomly_ticking();
         Self {
             section: SyncRwLock::new(section),
+            randomly_ticking: AtomicBool::new(randomly_ticking),
         }
     }
 
     /// Returns true if this section contains any randomly-ticking blocks.
     ///
-    /// Performs an unsynchronized read of the ticking block count to avoid
-    /// lock overhead on every section during random ticks. A stale read is
-    /// acceptable: worst case we acquire an unnecessary lock.
+    /// The mirror may briefly be stale relative to a concurrent section writer.
+    /// Section contents and the authoritative counter remain protected by the
+    /// section lock.
     #[inline]
     #[must_use]
     pub fn is_randomly_ticking(&self) -> bool {
-        // SAFETY: `ticking_block_count` is a `u16` — reads are atomic on all
-        // supported platforms. A torn/stale value only causes a harmless
-        // false-positive (we take the lock when we didn't need to).
-        unsafe { (*self.section.data_ptr()).ticking_block_count > 0 }
+        // The atomic does not publish section contents, so no synchronization
+        // beyond atomicity is required here.
+        self.randomly_ticking.load(Ordering::Relaxed)
     }
 
     /// Acquires a read lock on the section.
     #[inline]
-    pub fn read(&self) -> parking_lot::RwLockReadGuard<'_, ChunkSection> {
+    pub fn read(&self) -> RwLockReadGuard<'_, ChunkSection> {
         self.section.read()
+    }
+
+    /// Attempts to acquire a read lock on the section.
+    #[inline]
+    pub fn try_read(&self) -> Option<RwLockReadGuard<'_, ChunkSection>> {
+        self.section.try_read()
     }
 
     /// Acquires a write lock on the section.
     #[inline]
-    pub fn write(&self) -> parking_lot::RwLockWriteGuard<'_, ChunkSection> {
-        self.section.write()
+    pub fn write(&self) -> SectionWriteGuard<'_> {
+        SectionWriteGuard::new(self.section.write(), &self.randomly_ticking)
+    }
+
+    /// Attempts to acquire a write lock on the section.
+    #[inline]
+    pub fn try_write(&self) -> Option<SectionWriteGuard<'_>> {
+        self.section
+            .try_write()
+            .map(|guard| SectionWriteGuard::new(guard, &self.randomly_ticking))
+    }
+}
+
+/// A chunk-section write guard that republishes derived lock-free metadata.
+pub struct SectionWriteGuard<'a> {
+    guard: RwLockWriteGuard<'a, ChunkSection>,
+    randomly_ticking: &'a AtomicBool,
+    was_randomly_ticking: bool,
+}
+
+impl<'a> SectionWriteGuard<'a> {
+    fn new(guard: RwLockWriteGuard<'a, ChunkSection>, randomly_ticking: &'a AtomicBool) -> Self {
+        let was_randomly_ticking = guard.is_randomly_ticking();
+        Self {
+            guard,
+            randomly_ticking,
+            was_randomly_ticking,
+        }
+    }
+}
+
+impl Deref for SectionWriteGuard<'_> {
+    type Target = ChunkSection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+impl DerefMut for SectionWriteGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+impl Drop for SectionWriteGuard<'_> {
+    fn drop(&mut self) {
+        let is_randomly_ticking = self.guard.is_randomly_ticking();
+        if is_randomly_ticking != self.was_randomly_ticking {
+            self.randomly_ticking
+                .store(is_randomly_ticking, Ordering::Relaxed);
+        }
     }
 }
 
@@ -716,6 +784,34 @@ mod tests {
         assert_eq!(section.non_empty_block_count(), 6);
         assert_eq!(section.fluid_count(), 4);
         assert_eq!(section.ticking_block_count(), 1);
+    }
+
+    #[test]
+    fn holder_keeps_random_tick_eligibility_in_sync() {
+        init_test_behaviors();
+
+        let mut loaded_section = ChunkSection::new_with_biomes(
+            BlockPalette::Homogeneous(vanilla_blocks::LAVA.default_state()),
+            plains_biomes(),
+        );
+        loaded_section.recalculate_counts();
+        let loaded_holder = SectionHolder::new(loaded_section);
+        assert!(loaded_holder.is_randomly_ticking());
+
+        let holder = SectionHolder::new(ChunkSection::new_empty());
+        {
+            let mut section = holder.write();
+            section.set_block_state(0, 0, 0, vanilla_blocks::LAVA.default_state());
+        }
+        assert!(holder.is_randomly_ticking());
+
+        {
+            let Some(mut section) = holder.try_write() else {
+                panic!("uncontended section write lock was unavailable");
+            };
+            section.set_block_state(0, 0, 0, vanilla_blocks::AIR.default_state());
+        }
+        assert!(!holder.is_randomly_ticking());
     }
 
     #[test]
