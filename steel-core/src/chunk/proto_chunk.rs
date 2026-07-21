@@ -132,8 +132,8 @@ impl ProtoChunk {
             structure_references: SyncRwLock::new(FxHashMap::default()),
             carving_mask: SyncRwLock::new(None),
             postprocessing: SyncRwLock::new(empty_postprocessing(height)),
-            block_ticks: SyncMutex::new(BlockTickList::new()),
-            fluid_ticks: SyncMutex::new(FluidTickList::new()),
+            block_ticks: SyncMutex::new(BlockTickList::new_pending()),
+            fluid_ticks: SyncMutex::new(FluidTickList::new_pending()),
             sky_light_sources: SyncRwLock::new(ChunkSkyLightSources::for_valid_world_height(
                 min_y, height,
             )),
@@ -516,7 +516,11 @@ impl ProtoChunk {
     /// so worldgen-scheduled proto ticks run after promotion instead of preserving the
     /// requested delay from generation time.
     pub fn schedule_block_tick(&self, pos: BlockPos, block: BlockRef, priority: TickPriority) {
-        if self.block_ticks.lock().schedule(block, pos, 0, priority, 0) {
+        if self
+            .block_ticks
+            .lock()
+            .schedule_pending(block, pos, priority)
+        {
             self.mark_unsaved();
         }
     }
@@ -525,7 +529,11 @@ impl ProtoChunk {
     ///
     /// See [`Self::schedule_block_tick`] for why proto ticks use delay `0`.
     pub fn schedule_fluid_tick(&self, pos: BlockPos, fluid: FluidRef, priority: TickPriority) {
-        if self.fluid_ticks.lock().schedule(fluid, pos, 0, priority, 0) {
+        if self
+            .fluid_ticks
+            .lock()
+            .schedule_pending(fluid, pos, priority)
+        {
             self.mark_unsaved();
         }
     }
@@ -829,7 +837,7 @@ mod tests {
 
         proto.schedule_block_tick(pos, &vanilla_blocks::DIRT, TickPriority::Normal);
 
-        let ticks = proto.block_ticks.lock().pack();
+        let ticks = proto.block_ticks.lock().pack(0);
         let Some(tick) = ticks.first() else {
             panic!("proto chunk should store scheduled block tick");
         };

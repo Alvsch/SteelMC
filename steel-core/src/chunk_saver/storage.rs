@@ -625,8 +625,10 @@ impl ChunkStorage {
                 (bt, ft)
             }
             ChunkAccess::Proto(c) => {
-                let bt = Self::block_ticks_to_persistent(c.block_ticks.lock().pack(), pos);
-                let ft = Self::fluid_ticks_to_persistent(c.fluid_ticks.lock().pack(), pos);
+                // Proto ticks are pending, so Vanilla ignores the current game
+                // time when serializing their already-relative delays.
+                let bt = Self::block_ticks_to_persistent(c.block_ticks.lock().pack(0), pos);
+                let ft = Self::fluid_ticks_to_persistent(c.fluid_ticks.lock().pack(0), pos);
                 (bt, ft)
             }
             ChunkAccess::Unloaded => unreachable!(),
@@ -1323,8 +1325,12 @@ impl ChunkStorage {
 
         if status == ChunkStatus::Full {
             // Reconstruct scheduled ticks from persistent data
-            let block_ticks = Self::persistent_to_block_ticks(&persistent.block_ticks, pos);
-            let fluid_ticks = Self::persistent_to_fluid_ticks(&persistent.fluid_ticks, pos);
+            let block_ticks = BlockTickList::from_saved_ticks(
+                Self::persistent_to_block_saved_ticks(&persistent.block_ticks, pos),
+            );
+            let fluid_ticks = FluidTickList::from_saved_ticks(
+                Self::persistent_to_fluid_saved_ticks(&persistent.fluid_ticks, pos),
+            );
 
             // Reconstruct heightmaps from persistent data
             let heightmaps = Self::persistent_to_heightmaps(&persistent.heightmaps, min_y, height);
@@ -1394,8 +1400,12 @@ impl ChunkStorage {
                 pending_entities,
             }
         } else {
-            let block_ticks = Self::persistent_to_block_ticks(&persistent.block_ticks, pos);
-            let fluid_ticks = Self::persistent_to_fluid_ticks(&persistent.fluid_ticks, pos);
+            let block_ticks = BlockTickList::from_proto_saved_ticks(
+                Self::persistent_to_block_saved_ticks(&persistent.block_ticks, pos),
+            );
+            let fluid_ticks = FluidTickList::from_proto_saved_ticks(
+                Self::persistent_to_fluid_saved_ticks(&persistent.fluid_ticks, pos),
+            );
             let carving_mask = persistent
                 .carving_mask
                 .as_deref()
@@ -1694,12 +1704,12 @@ impl ChunkStorage {
             .collect()
     }
 
-    /// Reconstructs block tick list from persistent data.
-    fn persistent_to_block_ticks(
+    /// Reconstructs saved block ticks from persistent data.
+    fn persistent_to_block_saved_ticks(
         persistent: &[PersistentTick],
         chunk_pos: ChunkPos,
-    ) -> BlockTickList {
-        let ticks: Vec<_> = persistent
+    ) -> Vec<SavedTick<BlockRef>> {
+        persistent
             .iter()
             .filter_map(|pt| {
                 let block = REGISTRY.blocks.by_key(&pt.tick_type)?;
@@ -1716,16 +1726,15 @@ impl ChunkStorage {
                     priority,
                 })
             })
-            .collect();
-        BlockTickList::from_saved_ticks(ticks)
+            .collect()
     }
 
-    /// Reconstructs fluid tick list from persistent data.
-    fn persistent_to_fluid_ticks(
+    /// Reconstructs saved fluid ticks from persistent data.
+    fn persistent_to_fluid_saved_ticks(
         persistent: &[PersistentTick],
         chunk_pos: ChunkPos,
-    ) -> FluidTickList {
-        let ticks: Vec<_> = persistent
+    ) -> Vec<SavedTick<FluidRef>> {
+        persistent
             .iter()
             .filter_map(|pt| {
                 let fluid = REGISTRY.fluids.by_key(&pt.tick_type)?;
@@ -1742,8 +1751,7 @@ impl ChunkStorage {
                     priority,
                 })
             })
-            .collect();
-        FluidTickList::from_saved_ticks(ticks)
+            .collect()
     }
 
     /// Converts chunk heightmaps to persistent format for saving.
@@ -3139,6 +3147,76 @@ mod tests {
         let light = chunk.light.read();
         assert_eq!(visible_homogeneous_value(light.block.section(0)), Some(12));
         assert_eq!(light.block.section_empty(0), Some(true));
+    }
+
+    #[test]
+    fn persisted_proto_ticks_deduplicate_while_full_ticks_retain_saved_entries() {
+        init_test_registry();
+        init_runtime_registries();
+        let pos = ChunkPos::new(0, 0);
+        let duplicate_ticks = vec![
+            PersistentTick {
+                x: 1,
+                y: 2,
+                z: 3,
+                delay: 7,
+                priority: TickPriority::High as i8,
+                tick_type: vanilla_blocks::DIRT.key.clone(),
+            },
+            PersistentTick {
+                x: 1,
+                y: 2,
+                z: 3,
+                delay: 2,
+                priority: TickPriority::Low as i8,
+                tick_type: vanilla_blocks::DIRT.key.clone(),
+            },
+        ];
+        let persistent = ChunkStorage::to_persistent(
+            &single_empty_section(),
+            &[],
+            &[],
+            &[],
+            duplicate_ticks,
+            Vec::new(),
+            Vec::new(),
+            ChunkStorage::light_to_persistent(&ChunkLightData::for_valid_world_height(0, 16)),
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            pos,
+        );
+
+        let proto_loaded = ChunkStorage::persistent_to_chunk(
+            &persistent,
+            pos,
+            ChunkStatus::Carvers,
+            0,
+            16,
+            Weak::new(),
+        );
+        let ChunkAccess::Proto(proto) = proto_loaded.chunk else {
+            panic!("non-Full status should load a proto chunk");
+        };
+        let proto_ticks = proto.block_ticks.lock().pack(0);
+        assert_eq!(proto_ticks.len(), 1);
+        assert_eq!(proto_ticks[0].delay, 7);
+        assert_eq!(proto_ticks[0].priority, TickPriority::High);
+
+        let full_loaded = ChunkStorage::persistent_to_chunk(
+            &persistent,
+            pos,
+            ChunkStatus::Full,
+            0,
+            16,
+            Weak::new(),
+        );
+        let ChunkAccess::Full(full) = full_loaded.chunk else {
+            panic!("Full status should load a full chunk");
+        };
+        assert_eq!(full.scheduled_tick_snapshot().block.len(), 2);
     }
 
     #[test]

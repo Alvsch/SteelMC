@@ -37,7 +37,7 @@ use steel_protocol::{
     packets::game::CSetTime,
 };
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use simdnbt::owned::NbtCompound;
 use steel_registry::biome::{BiomeRef, TemperatureModifier};
 use steel_registry::blocks::block_state_ext::BlockStateExt;
@@ -2971,7 +2971,8 @@ impl World {
 
     /// Schedules a block tick at the given position.
     ///
-    /// The tick will fire after `delay` block-ticking chunk ticks with the given priority.
+    /// The tick will fire after `delay` world game ticks with the given priority.
+    /// Its deadline continues to age while the loaded chunk is outside simulation distance.
     /// Only one tick per `(pos, block)` pair can be active at a time — duplicates
     /// are silently ignored.
     pub fn schedule_block_tick(
@@ -2981,11 +2982,12 @@ impl World {
         delay: i32,
         priority: tick_scheduler::TickPriority,
     ) {
+        let trigger_tick = self.game_time().wrapping_add(i64::from(delay));
         let order = self.scheduled_ticks.next_sub_tick_order();
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map.with_full_chunk(chunk_pos, |chunk_access| {
             if let Some(chunk) = chunk_access.as_full() {
-                chunk.schedule_block_tick(pos, block, delay, priority, order);
+                chunk.schedule_block_tick(pos, block, trigger_tick, priority, order);
             }
         });
     }
@@ -2997,7 +2999,8 @@ impl World {
 
     /// Schedules a fluid tick at the given position.
     ///
-    /// The tick will fire after `delay` block-ticking chunk ticks with the given priority.
+    /// The tick will fire after `delay` world game ticks with the given priority.
+    /// Its deadline continues to age while the loaded chunk is outside simulation distance.
     /// Only one tick per `(pos, fluid)` pair can be active at a time.
     pub fn schedule_fluid_tick(
         &self,
@@ -3006,11 +3009,12 @@ impl World {
         delay: i32,
         priority: tick_scheduler::TickPriority,
     ) {
+        let trigger_tick = self.game_time().wrapping_add(i64::from(delay));
         let order = self.scheduled_ticks.next_sub_tick_order();
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map.with_full_chunk(chunk_pos, |chunk_access| {
             if let Some(chunk) = chunk_access.as_full() {
-                chunk.schedule_fluid_tick(pos, fluid, delay, priority, order);
+                chunk.schedule_fluid_tick(pos, fluid, trigger_tick, priority, order);
             }
         });
     }
@@ -3082,17 +3086,28 @@ impl World {
         self.scheduled_ticks.has_registered_chunk(pos)
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_indexed_scheduled_tick_head(&self, pos: ChunkPos) -> bool {
+        self.scheduled_ticks.has_indexed_head(pos)
+    }
+
     pub(crate) fn schedule_block_tick_for_chunk(
         &self,
         chunk: &LevelChunk,
         pos: BlockPos,
         block: BlockRef,
-        delay: i32,
+        trigger_tick: i64,
         priority: tick_scheduler::TickPriority,
         sub_tick_order: i64,
     ) -> Result<bool, tick_scheduler::TickSchedulerError> {
-        self.scheduled_ticks
-            .schedule_block(chunk, block, pos, delay, priority, sub_tick_order)
+        self.scheduled_ticks.schedule_block(
+            chunk,
+            block,
+            pos,
+            trigger_tick,
+            priority,
+            sub_tick_order,
+        )
     }
 
     pub(crate) fn schedule_fluid_tick_for_chunk(
@@ -3100,37 +3115,59 @@ impl World {
         chunk: &LevelChunk,
         pos: BlockPos,
         fluid: FluidRef,
-        delay: i32,
+        trigger_tick: i64,
         priority: tick_scheduler::TickPriority,
         sub_tick_order: i64,
     ) -> Result<bool, tick_scheduler::TickSchedulerError> {
-        self.scheduled_ticks
-            .schedule_fluid(chunk, fluid, pos, delay, priority, sub_tick_order)
+        self.scheduled_ticks.schedule_fluid(
+            chunk,
+            fluid,
+            pos,
+            trigger_tick,
+            priority,
+            sub_tick_order,
+        )
     }
 
     pub(crate) fn scheduled_tick_snapshot(
         &self,
         chunk: &LevelChunk,
     ) -> Result<tick_scheduler::ScheduledTickSnapshot, tick_scheduler::TickSchedulerError> {
-        self.scheduled_ticks.snapshot(chunk)
+        self.scheduled_ticks.snapshot(chunk, self.game_time())
+    }
+
+    pub(crate) fn unpack_scheduled_ticks(
+        &self,
+        pos: ChunkPos,
+    ) -> Result<(), tick_scheduler::TickSchedulerError> {
+        self.scheduled_ticks.unpack_chunk(pos, self.game_time())
+    }
+
+    pub(crate) fn verify_registered_scheduled_tick_chunks(
+        &self,
+        active_chunks: &FxHashMap<ChunkPos, usize>,
+    ) -> Result<(), tick_scheduler::TickSchedulerError> {
+        self.scheduled_ticks.verify_registered_chunks(active_chunks)
     }
 
     pub(crate) fn begin_scheduled_tick_phase(
         &self,
-        active_chunks: &[ChunkPos],
+        current_tick: i64,
+        active_chunks: &FxHashMap<ChunkPos, usize>,
         max_ticks: usize,
-    ) -> Result<tick_scheduler::ScheduledTickBatch<BlockRef>, tick_scheduler::TickSchedulerError>
-    {
-        self.scheduled_ticks.begin_tick(active_chunks, max_ticks)
+    ) -> tick_scheduler::ScheduledTickBatch<BlockRef> {
+        self.scheduled_ticks
+            .begin_tick(current_tick, active_chunks, max_ticks)
     }
 
     pub(crate) fn collect_scheduled_fluid_tick_batch(
         &self,
-        active_chunks: &[ChunkPos],
+        current_tick: i64,
+        active_chunks: &FxHashMap<ChunkPos, usize>,
         max_ticks: usize,
-    ) -> Result<Vec<tick_scheduler::FluidTick>, tick_scheduler::TickSchedulerError> {
+    ) -> tick_scheduler::ScheduledTickBatch<FluidRef> {
         self.scheduled_ticks
-            .collect_fluid_ticks(active_chunks, max_ticks)
+            .collect_fluid_ticks(current_tick, active_chunks, max_ticks)
     }
 
     /// Returns whether a selected block tick at `(pos, block)` has not started yet.

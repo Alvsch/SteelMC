@@ -784,13 +784,13 @@ impl ChunkAccess {
         &self,
         pos: BlockPos,
         block: BlockRef,
-        delay: i32,
+        trigger_tick: i64,
         priority: TickPriority,
         sub_tick_order: i64,
     ) {
         match self {
             Self::Full(chunk) => {
-                chunk.schedule_block_tick(pos, block, delay, priority, sub_tick_order);
+                chunk.schedule_block_tick(pos, block, trigger_tick, priority, sub_tick_order);
             }
             Self::Proto(proto_chunk) => proto_chunk.schedule_block_tick(pos, block, priority),
             Self::Unloaded => unreachable!(),
@@ -802,13 +802,13 @@ impl ChunkAccess {
         &self,
         pos: BlockPos,
         fluid: FluidRef,
-        delay: i32,
+        trigger_tick: i64,
         priority: TickPriority,
         sub_tick_order: i64,
     ) {
         match self {
             Self::Full(chunk) => {
-                chunk.schedule_fluid_tick(pos, fluid, delay, priority, sub_tick_order);
+                chunk.schedule_fluid_tick(pos, fluid, trigger_tick, priority, sub_tick_order);
             }
             Self::Proto(proto_chunk) => proto_chunk.schedule_fluid_tick(pos, fluid, priority),
             Self::Unloaded => unreachable!(),

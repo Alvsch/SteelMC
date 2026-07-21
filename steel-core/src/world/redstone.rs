@@ -58,8 +58,8 @@ impl World {
 
     /// Counts recent toggles for `pos`, optionally recording one first.
     ///
-    /// This bookkeeping uses game time like vanilla. Scheduled tick deadlines
-    /// continue to use Steel's per-chunk active-time clocks.
+    /// This bookkeeping and scheduled tick deadlines both use world game time,
+    /// matching Vanilla's loaded-world timing model.
     pub(crate) fn redstone_torch_toggled_too_frequently(&self, pos: BlockPos, add: bool) -> bool {
         let game_time = self.game_time();
         self.redstone_torch_toggles

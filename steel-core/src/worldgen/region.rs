@@ -560,10 +560,15 @@ impl<'a> WorldGenRegion<'a> {
         delay: i32,
         priority: TickPriority,
     ) -> bool {
-        let (chunk_x, chunk_z, status) = self.dependency_chunk_for_pos(pos, "schedule block tick");
+        let trigger_tick = self
+            .context
+            .world()
+            .game_time()
+            .wrapping_add(i64::from(delay));
         let sub_tick_order = self.sub_tick_count.fetch_add(1, Ordering::Relaxed);
+        let (chunk_x, chunk_z, status) = self.dependency_chunk_for_pos(pos, "schedule block tick");
         self.with_cached_chunk(chunk_x, chunk_z, status, |chunk| {
-            chunk.schedule_block_tick(pos, block, delay, priority, sub_tick_order);
+            chunk.schedule_block_tick(pos, block, trigger_tick, priority, sub_tick_order);
         });
         true
     }
@@ -585,10 +590,15 @@ impl<'a> WorldGenRegion<'a> {
         delay: i32,
         priority: TickPriority,
     ) -> bool {
-        let (chunk_x, chunk_z, status) = self.dependency_chunk_for_pos(pos, "schedule fluid tick");
+        let trigger_tick = self
+            .context
+            .world()
+            .game_time()
+            .wrapping_add(i64::from(delay));
         let sub_tick_order = self.sub_tick_count.fetch_add(1, Ordering::Relaxed);
+        let (chunk_x, chunk_z, status) = self.dependency_chunk_for_pos(pos, "schedule fluid tick");
         self.with_cached_chunk(chunk_x, chunk_z, status, |chunk| {
-            chunk.schedule_fluid_tick(pos, fluid, delay, priority, sub_tick_order);
+            chunk.schedule_fluid_tick(pos, fluid, trigger_tick, priority, sub_tick_order);
         });
         true
     }

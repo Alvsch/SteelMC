@@ -237,10 +237,10 @@ impl LevelChunk {
         let structure_starts = proto_chunk.structure_starts.into_inner();
         let structure_references = proto_chunk.structure_references.into_inner();
         let postprocessing = proto_chunk.postprocessing.into_inner();
-        let mut block_ticks = proto_chunk.block_ticks.into_inner();
-        let mut fluid_ticks = proto_chunk.fluid_ticks.into_inner();
-        block_ticks.unpack();
-        fluid_ticks.unpack();
+        // Vanilla keeps proto ticks pending through Full promotion. Their delays
+        // are anchored only when this chunk first becomes block-ticking.
+        let block_ticks = proto_chunk.block_ticks.into_inner();
+        let fluid_ticks = proto_chunk.fluid_ticks.into_inner();
         let pending_entities = proto_chunk.entities.get_all();
         let sky_light_sources = proto_chunk.sky_light_sources.into_inner();
         let mut light = proto_chunk.light.into_inner();
@@ -530,14 +530,14 @@ impl LevelChunk {
         &self,
         block: BlockRef,
         pos: BlockPos,
-        delay: i32,
+        trigger_tick: i64,
         priority: TickPriority,
         sub_tick_order: i64,
     ) -> Option<bool> {
         self.unregistered_tick_lists.lock().as_mut().map(|ticks| {
             ticks
                 .block_mut()
-                .schedule(block, pos, delay, priority, sub_tick_order)
+                .schedule(block, pos, trigger_tick, priority, sub_tick_order)
         })
     }
 
@@ -545,14 +545,14 @@ impl LevelChunk {
         &self,
         fluid: FluidRef,
         pos: BlockPos,
-        delay: i32,
+        trigger_tick: i64,
         priority: TickPriority,
         sub_tick_order: i64,
     ) -> Option<bool> {
         self.unregistered_tick_lists.lock().as_mut().map(|ticks| {
             ticks
                 .fluid_mut()
-                .schedule(fluid, pos, delay, priority, sub_tick_order)
+                .schedule(fluid, pos, trigger_tick, priority, sub_tick_order)
         })
     }
 
@@ -578,11 +578,14 @@ impl LevelChunk {
             .map(|ticks| ticks.fluid().has_tick(pos, fluid))
     }
 
-    pub(crate) fn snapshot_unregistered_tick_lists(&self) -> Option<ScheduledTickSnapshot> {
+    pub(crate) fn snapshot_unregistered_tick_lists(
+        &self,
+        current_tick: i64,
+    ) -> Option<ScheduledTickSnapshot> {
         self.unregistered_tick_lists
             .lock()
             .as_ref()
-            .map(ChunkTickLists::snapshot)
+            .map(|ticks| ticks.snapshot(current_tick))
     }
 
     /// Schedules through the world owner, or through local pre-publication
@@ -591,15 +594,28 @@ impl LevelChunk {
         &self,
         pos: BlockPos,
         block: BlockRef,
-        delay: i32,
+        trigger_tick: i64,
         priority: TickPriority,
         sub_tick_order: i64,
     ) {
         let result = if let Some(world) = self.get_level() {
-            world.schedule_block_tick_for_chunk(self, pos, block, delay, priority, sub_tick_order)
+            world.schedule_block_tick_for_chunk(
+                self,
+                pos,
+                block,
+                trigger_tick,
+                priority,
+                sub_tick_order,
+            )
         } else {
-            self.schedule_unregistered_block_tick(block, pos, delay, priority, sub_tick_order)
-                .ok_or(TickSchedulerError::MissingContainer(self.pos))
+            self.schedule_unregistered_block_tick(
+                block,
+                pos,
+                trigger_tick,
+                priority,
+                sub_tick_order,
+            )
+            .ok_or(TickSchedulerError::MissingContainer(self.pos))
         };
 
         match result {
@@ -613,15 +629,28 @@ impl LevelChunk {
         &self,
         pos: BlockPos,
         fluid: FluidRef,
-        delay: i32,
+        trigger_tick: i64,
         priority: TickPriority,
         sub_tick_order: i64,
     ) {
         let result = if let Some(world) = self.get_level() {
-            world.schedule_fluid_tick_for_chunk(self, pos, fluid, delay, priority, sub_tick_order)
+            world.schedule_fluid_tick_for_chunk(
+                self,
+                pos,
+                fluid,
+                trigger_tick,
+                priority,
+                sub_tick_order,
+            )
         } else {
-            self.schedule_unregistered_fluid_tick(fluid, pos, delay, priority, sub_tick_order)
-                .ok_or(TickSchedulerError::MissingContainer(self.pos))
+            self.schedule_unregistered_fluid_tick(
+                fluid,
+                pos,
+                trigger_tick,
+                priority,
+                sub_tick_order,
+            )
+            .ok_or(TickSchedulerError::MissingContainer(self.pos))
         };
 
         match result {
@@ -636,7 +665,7 @@ impl LevelChunk {
         let result = if let Some(world) = self.get_level() {
             world.scheduled_tick_snapshot(self)
         } else {
-            self.snapshot_unregistered_tick_lists()
+            self.snapshot_unregistered_tick_lists(0)
                 .ok_or(TickSchedulerError::MissingContainer(self.pos))
         };
         match result {
