@@ -13,9 +13,7 @@ use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_game_events;
 use steel_utils::{BlockPos, BlockStateId, Direction, Downcast as _};
 
-use crate::behavior::{
-    BlockBehavior, BlockEntityCreation, BlockPlaceContext, BlockStateBehaviorExt as _,
-};
+use crate::behavior::{BlockBehavior, BlockEntityCreation, BlockPlaceContext};
 use crate::block_entity::entities::PotentSulfurBlockEntity;
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
 use crate::fluid::FluidStateExt as _;

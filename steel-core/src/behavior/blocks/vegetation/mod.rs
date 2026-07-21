@@ -163,7 +163,7 @@ use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::context::BlockPlaceContext;
 use crate::behavior::{
-    BLOCK_BEHAVIORS, BlockCollisionContext, BlockStateBehaviorExt as _,
+    BLOCK_BEHAVIORS, BlockCollisionContext,
     block::{BlockBehavior, schedule_water_tick_if_waterlogged},
 };
 use crate::world::{LevelReader, ScheduledTickAccess};

@@ -17,7 +17,7 @@ use steel_utils::{
 };
 
 use super::food_data::food_constants;
-use crate::behavior::{BLOCK_BEHAVIORS, BlockLootContext, BlockStateBehaviorExt};
+use crate::behavior::{BLOCK_BEHAVIORS, BlockLootContext};
 use crate::entity::{Entity, LivingEntity};
 use crate::fluid::fluid_state_to_block;
 use crate::player::Player;

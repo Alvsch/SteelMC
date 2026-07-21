@@ -13,7 +13,7 @@ use crate::behavior::blocks::vegetation::bonemealable::Bonemealable;
 use crate::behavior::context::BlockPlaceContext;
 use crate::world::{LevelAccessor, LevelReader, ScheduledTickAccess, World};
 
-use super::{BlockRef, water_source_fluid_state};
+use super::BlockRef;
 
 /// Behavior for seagrass blocks.
 #[block_behavior]
@@ -66,10 +66,6 @@ impl BlockBehavior for SeagrassBlock {
         let state = self.block.default_state();
         (context.is_full_water() && self.can_survive(state, context.world, context.place_pos()))
             .then_some(state)
-    }
-
-    fn get_fluid_state(&self, _state: BlockStateId) -> FluidState {
-        water_source_fluid_state()
     }
 
     fn is_liquid_container(&self, _state: BlockStateId) -> bool {

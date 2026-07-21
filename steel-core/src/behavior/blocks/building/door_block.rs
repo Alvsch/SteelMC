@@ -25,8 +25,8 @@ use steel_utils::{
 use super::weathering_block::{WeatherState, WeatheringCopper};
 use crate::{
     behavior::{
-        BlockBehavior, BlockHitResult, BlockPlaceContext, BlockStateBehaviorExt, InteractionResult,
-        InventoryAccess, PlacementSource,
+        BlockBehavior, BlockHitResult, BlockPlaceContext, InteractionResult, InventoryAccess,
+        PlacementSource,
     },
     entity::Entity,
     entity::ai::path::PathComputationType,
@@ -519,10 +519,6 @@ impl BlockBehavior for WeatheringCopperDoorBlock {
     ) {
         self.door()
             .handle_neighbor_changed(state, world, pos, source_block, moved_by_piston);
-    }
-
-    fn is_randomly_ticking(&self, _state: BlockStateId) -> bool {
-        self.weathering.is_randomly_ticking()
     }
 
     fn random_tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {

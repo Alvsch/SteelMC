@@ -9,9 +9,7 @@ use steel_registry::{
 use steel_utils::{BlockPos, Direction, types::UpdateFlags};
 
 use crate::{
-    behavior::{
-        BLOCK_BEHAVIORS, BlockStateBehaviorExt, InteractionResult, ItemBehavior, UseOnContext,
-    },
+    behavior::{BLOCK_BEHAVIORS, InteractionResult, ItemBehavior, UseOnContext},
     world::{LevelReader as _, World},
 };
 

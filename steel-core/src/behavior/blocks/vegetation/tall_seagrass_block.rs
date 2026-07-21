@@ -113,10 +113,6 @@ impl BlockBehavior for TallSeagrassBlock {
         Some(ItemStack::new(&vanilla_items::SEAGRASS))
     }
 
-    fn get_fluid_state(&self, _state: BlockStateId) -> FluidState {
-        water_source_fluid_state()
-    }
-
     fn is_liquid_container(&self, _state: BlockStateId) -> bool {
         true
     }

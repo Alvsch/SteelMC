@@ -15,7 +15,6 @@ use steel_registry::vanilla_damage_types;
 use steel_registry::vanilla_fluid_tags;
 use steel_utils::{BlockPos, BlockStateId, types::UpdateFlags};
 
-use crate::behavior::BlockStateBehaviorExt;
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::BlockPlaceContext;
 use crate::entity::ai::path::PathComputationType;
@@ -118,10 +117,6 @@ impl BlockBehavior for CactusBlock {
         if !self.can_survive(state, world, pos) {
             world.destroy_block(pos, true);
         }
-    }
-
-    fn is_randomly_ticking(&self, _state: BlockStateId) -> bool {
-        true
     }
 
     fn random_tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {

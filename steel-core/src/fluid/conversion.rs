@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use crate::behavior::BlockStateBehaviorExt;
 use crate::behavior::FLUID_BEHAVIORS;
 use crate::fluid::can_pass_through_wall;
 use crate::fluid::collision::{can_hold_fluid, can_hold_specific_fluid, can_pass_horizontally};

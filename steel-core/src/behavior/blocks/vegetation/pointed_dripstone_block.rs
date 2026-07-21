@@ -11,11 +11,11 @@ use steel_registry::{
 };
 use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId, Direction, types::UpdateFlags};
 
+use crate::behavior::BLOCK_BEHAVIORS;
 use crate::behavior::block::{
     BlockBehavior, BlockCollisionContext, EntityFallDamage, EntityFallOnContext,
 };
 use crate::behavior::context::BlockPlaceContext;
-use crate::behavior::{BLOCK_BEHAVIORS, BlockStateBehaviorExt as _};
 use crate::entity::damage::DamageSource;
 use crate::entity::projectile::Projectile;
 use crate::fluid::FluidStateExt as _;
@@ -93,10 +93,6 @@ impl BlockBehavior for PointedDripstoneBlock {
         self.speleothem().tick(state, world, pos);
     }
 
-    fn is_randomly_ticking(&self, _state: BlockStateId) -> bool {
-        true
-    }
-
     fn random_tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
         self.speleothem().random_tick(state, world, pos);
     }
@@ -168,10 +164,6 @@ impl BlockBehavior for SulfurSpikeBlock {
 
     fn tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
         self.speleothem().tick(state, world, pos);
-    }
-
-    fn is_randomly_ticking(&self, _state: BlockStateId) -> bool {
-        true
     }
 
     fn random_tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {

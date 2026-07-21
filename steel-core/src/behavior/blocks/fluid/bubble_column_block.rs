@@ -4,7 +4,6 @@ use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction};
-use steel_registry::fluid::FluidState;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_events;
 use steel_registry::vanilla_block_tags::BlockTag;
@@ -17,8 +16,7 @@ use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::context::BlockPlaceContext;
 use crate::behavior::{
-    BLOCK_BEHAVIORS, BlockCollisionContext, BlockStateBehaviorExt, block::BlockBehavior,
-    block::PickupResult,
+    BLOCK_BEHAVIORS, BlockCollisionContext, block::BlockBehavior, block::PickupResult,
 };
 use crate::entity::{Entity, InsideBlockEffectCollector};
 use crate::player::Player;
@@ -180,10 +178,6 @@ impl BlockBehavior for BubbleColumnBlock {
 
     fn tick(&self, _state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
         Self::update_column(self.block, world, pos, world.get_block_state(pos.below()));
-    }
-
-    fn get_fluid_state(&self, _state: BlockStateId) -> FluidState {
-        FluidState::source(&vanilla_fluids::WATER)
     }
 
     fn entity_inside(

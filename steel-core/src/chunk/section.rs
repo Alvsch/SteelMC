@@ -4,7 +4,7 @@ use std::{
     io::Cursor,
     ops::{Deref, DerefMut},
     sync::{
-        Arc, LazyLock,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -15,7 +15,6 @@ use steel_registry::vanilla_biomes;
 use steel_registry::{REGISTRY, RegistryEntry};
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, locks::SyncRwLock, serial::WriteTo};
 
-use crate::behavior::{BLOCK_BEHAVIORS, BlockBehaviorRegistry, FLUID_BEHAVIORS};
 use crate::chunk::paletted_container::{BiomePalette, BlockPalette};
 
 /// Lock-free index of sections containing randomly-ticking blocks or fluids.
@@ -237,20 +236,6 @@ pub(crate) struct BlockStateSectionCounts {
 
 const BLOCKS_PER_SECTION: u16 = 16 * 16 * 16;
 
-static BLOCK_STATE_SECTION_COUNTS: LazyLock<Box<[BlockStateSectionCounts]>> = LazyLock::new(|| {
-    let mut counts = Vec::with_capacity(REGISTRY.blocks.state_to_block_lookup.len());
-    for state_index in 0..REGISTRY.blocks.state_to_block_lookup.len() {
-        let Ok(raw_state_id) = u16::try_from(state_index) else {
-            panic!("block state registry exceeded BlockStateId range");
-        };
-        counts.push(ChunkSection::block_state_section_counts_with(
-            BlockStateId(raw_state_id),
-            &BLOCK_BEHAVIORS,
-        ));
-    }
-    counts.into_boxed_slice()
-});
-
 impl Sections {
     /// Creates a new `Sections` from a box of owned `ChunkSection`s.
     #[must_use]
@@ -422,7 +407,7 @@ impl Sections {
     /// Each touched section enters worldgen Building mode (raw cube, no palette
     /// tracking) so writes are O(1) stores. Per-write goes through a flat
     /// `&mut [V]` view of the cube — bypasses the 3-arm `set` match and the
-    /// unused old-value load. `recalculate_counts_with` finalizes.
+    /// unused old-value load. `recalculate_counts` finalizes.
     pub fn write_block_batch(&self, blocks: &[(usize, usize, usize, BlockStateId)]) {
         const DIM: usize = BlockPalette::SIZE;
         let mut i = 0;
@@ -624,18 +609,7 @@ impl ChunkSection {
         self.ticking_fluid_count
     }
 
-    /// Recalculates cached counters from the global per-state counter table.
-    ///
-    /// This should be called after chunk loading or generation to initialize
-    /// the counters. It requires the block behavior registry to be initialized.
-    ///
-    /// # Panics
-    /// Panics if the block behavior registry has not been initialized.
-    pub fn recalculate_counts(&mut self) {
-        self.recalculate_counts_from_palette(Self::block_state_section_counts);
-    }
-
-    /// Recalculates all cached counters using the provided behavior registry.
+    /// Recalculates cached counters from extracted per-state metadata.
     ///
     /// Iterates the palette (`O(palette_size)`) rather than every cube cell
     /// (`O(4096)`): each block-state appears at most once in the palette and
@@ -643,10 +617,8 @@ impl ChunkSection {
     /// and multiply by its count. Mirrors Moonrise's `BlockCountingBitStorage`.
     /// For a `Homogeneous` section that's a single classify; for typical
     /// `Heterogeneous` sections palette is well under 16 entries.
-    pub fn recalculate_counts_with(&mut self, block_behaviors: &BlockBehaviorRegistry) {
-        self.recalculate_counts_from_palette(|state| {
-            Self::block_state_section_counts_with(state, block_behaviors)
-        });
+    pub fn recalculate_counts(&mut self) {
+        self.recalculate_counts_from_palette(Self::block_state_section_counts);
     }
 
     fn recalculate_counts_from_palette(
@@ -741,8 +713,6 @@ impl ChunkSection {
     ///
     /// Returns the old block state.
     ///
-    /// # Panics
-    /// Panics if the block behavior registry has not been initialized.
     pub fn set_block_state(
         &mut self,
         x: usize,
@@ -750,26 +720,12 @@ impl ChunkSection {
         z: usize,
         new_state: BlockStateId,
     ) -> BlockStateId {
-        self.set_block_state_with(x, y, z, new_state, &BLOCK_BEHAVIORS)
-    }
-
-    /// Sets a block state and updates the cached counters using the provided behavior registry.
-    ///
-    /// Returns the old block state.
-    pub fn set_block_state_with(
-        &mut self,
-        x: usize,
-        y: usize,
-        z: usize,
-        new_state: BlockStateId,
-        block_behaviors: &BlockBehaviorRegistry,
-    ) -> BlockStateId {
-        self.ensure_counter_ready_for_delta_with(block_behaviors);
+        self.ensure_counter_ready_for_delta();
         let old_state = self.states.set(x, y, z, new_state);
 
         if old_state != new_state {
-            let old_counts = Self::block_state_section_counts_with(old_state, block_behaviors);
-            let new_counts = Self::block_state_section_counts_with(new_state, block_behaviors);
+            let old_counts = Self::block_state_section_counts(old_state);
+            let new_counts = Self::block_state_section_counts(new_state);
             self.apply_count_change(old_counts, new_counts);
         }
 
@@ -792,13 +748,15 @@ impl ChunkSection {
         self.states.set(x, y, z, new_state)
     }
 
-    /// Returns the cached-counter traits for a block state using the global
-    /// behavior registry.
+    /// Returns the cached-counter traits for a block state.
     pub(crate) fn block_state_section_counts(state: BlockStateId) -> BlockStateSectionCounts {
-        let Some(&counts) = BLOCK_STATE_SECTION_COUNTS.get(state.0 as usize) else {
-            panic!("invalid block state id {}", state.0);
-        };
-        counts
+        let metadata = state.get_ticking_metadata();
+        BlockStateSectionCounts {
+            is_air: metadata.is_air(),
+            has_fluid: metadata.has_fluid(),
+            randomly_ticking_block: metadata.randomly_ticking_block(),
+            randomly_ticking_fluid: metadata.randomly_ticking_fluid(),
+        }
     }
 
     pub(crate) fn finalize_generation_counts_if_needed(&mut self) {
@@ -807,31 +765,13 @@ impl ChunkSection {
         }
     }
 
-    fn ensure_counter_ready_for_delta_with(&mut self, block_behaviors: &BlockBehaviorRegistry) {
+    fn ensure_counter_ready_for_delta(&mut self) {
         if matches!(&self.states, BlockPalette::Building(_)) {
             log::debug!(
                 "finalizing worldgen Building palette before applying a counter-aware \
                  block-state delta"
             );
-            self.recalculate_counts_with(block_behaviors);
-        }
-    }
-
-    fn block_state_section_counts_with(
-        state: BlockStateId,
-        block_behaviors: &BlockBehaviorRegistry,
-    ) -> BlockStateSectionCounts {
-        let behavior = block_behaviors.get_behavior(state.get_block());
-        let fluid_state = behavior.get_fluid_state(state);
-        let has_fluid = !fluid_state.is_empty();
-        BlockStateSectionCounts {
-            is_air: state.is_air(),
-            has_fluid,
-            randomly_ticking_block: behavior.is_randomly_ticking(state),
-            randomly_ticking_fluid: has_fluid
-                && FLUID_BEHAVIORS
-                    .get_behavior(fluid_state.fluid_id)
-                    .is_randomly_ticking(),
+            self.recalculate_counts();
         }
     }
 

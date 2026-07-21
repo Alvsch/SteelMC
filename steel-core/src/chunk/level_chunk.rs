@@ -27,10 +27,7 @@ use steel_utils::{
 
 use steel_utils::locks::SyncMutex;
 
-use crate::behavior::{
-    BLOCK_BEHAVIORS, BlockBehaviorRegistry, BlockEntityCreation, BlockStateBehaviorExt,
-    FLUID_BEHAVIORS, FluidBehaviorRegistry,
-};
+use crate::behavior::{BLOCK_BEHAVIORS, BlockEntityCreation, FLUID_BEHAVIORS};
 use crate::block_entity::{
     BlockEntity, BlockEntityInsert, BlockEntityLifecycleExt as _, BlockEntityLookup,
     BlockEntityStorage, ClearedBlockEntities, DetachedBlockEntity, LifecycleDispatchers,
@@ -136,19 +133,12 @@ enum PendingPromotionCommit {
     },
 }
 
-fn random_tick_kinds(
-    state: BlockStateId,
-    block_behaviors: &BlockBehaviorRegistry,
-    fluid_behaviors: &FluidBehaviorRegistry,
-) -> Option<(bool, Option<FluidRef>)> {
-    let block_behavior = block_behaviors.get_behavior(state.get_block());
-    let fluid_state = block_behavior.get_fluid_state(state);
-    let tick_block = block_behavior.is_randomly_ticking(state);
-    let tick_fluid = (!fluid_state.is_empty()
-        && fluid_behaviors
-            .get_behavior(fluid_state.fluid_id)
-            .is_randomly_ticking())
-    .then_some(fluid_state.fluid_id);
+fn random_tick_kinds(state: BlockStateId) -> Option<(bool, Option<FluidRef>)> {
+    let metadata = state.get_ticking_metadata();
+    let tick_block = metadata.randomly_ticking_block();
+    let tick_fluid = metadata
+        .randomly_ticking_fluid()
+        .then_some(metadata.fluid_state().fluid_id);
     (tick_block || tick_fluid.is_some()).then_some((tick_block, tick_fluid))
 }
 
@@ -181,9 +171,7 @@ impl LevelChunk {
                 // Copy the sampled state and release the guard before either
                 // callback; the block callback may mutate this section.
                 let state = section.read().states.get(local_x, local_y, local_z);
-                let Some((tick_block, tick_fluid)) =
-                    random_tick_kinds(state, block_behaviors, fluid_behaviors)
-                else {
+                let Some((tick_block, tick_fluid)) = random_tick_kinds(state) else {
                     continue;
                 };
                 let pos = BlockPos::new(
@@ -216,7 +204,8 @@ impl LevelChunk {
     /// * `level` - Weak reference to the world (mirrors Java's `LevelChunk.level`)
     ///
     /// # Panics
-    /// Panics if the block behavior registry has not been initialized.
+    /// Panics if the proto chunk's light-section count does not match its world height.
+    ///
     #[must_use]
     pub fn from_proto(
         proto_chunk: ProtoChunk,
@@ -317,7 +306,8 @@ impl LevelChunk {
     /// * `light` - Chunk-owned light data loaded from disk
     ///
     /// # Panics
-    /// Panics if the block behavior registry has not been initialized.
+    /// Panics if the loaded light-section count does not match the chunk's world height.
+    ///
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
@@ -1864,24 +1854,15 @@ mod tests {
     fn lava_random_tick_classification_includes_block_and_fluid_hooks() {
         init_test_registry();
         init_behaviors();
-        let Some((tick_block, tick_fluid)) = random_tick_kinds(
-            vanilla_blocks::LAVA.default_state(),
-            &BLOCK_BEHAVIORS,
-            &FLUID_BEHAVIORS,
-        ) else {
+        let Some((tick_block, tick_fluid)) =
+            random_tick_kinds(vanilla_blocks::LAVA.default_state())
+        else {
             panic!("lava should be eligible for random ticking");
         };
 
         assert!(tick_block);
         assert_eq!(tick_fluid, Some(&vanilla_fluids::LAVA));
-        assert!(
-            random_tick_kinds(
-                vanilla_blocks::WATER.default_state(),
-                &BLOCK_BEHAVIORS,
-                &FLUID_BEHAVIORS,
-            )
-            .is_none()
-        );
+        assert!(random_tick_kinds(vanilla_blocks::WATER.default_state()).is_none());
     }
 
     struct ActivationRecordingBlockEntity {

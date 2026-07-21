@@ -99,7 +99,6 @@ use tokio::{runtime::Runtime, time::Instant};
 
 use crate::{
     ChunkMap,
-    behavior::BlockStateBehaviorExt,
     behavior::{BLOCK_BEHAVIORS, BlockCollisionContext, BlockLootContext, FLUID_BEHAVIORS},
     block_entity::{BlockEntity, SharedBlockEntity, entities::EndGatewayBlockEntity},
     chunk::{heightmap::HeightmapType, player_chunk_view::PlayerChunkView},

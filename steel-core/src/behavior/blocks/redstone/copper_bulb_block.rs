@@ -163,10 +163,6 @@ impl BlockBehavior for WeatheringCopperBulbBlock {
         CopperBulbBlock::check_and_flip(state, world, pos);
     }
 
-    fn is_randomly_ticking(&self, _state: BlockStateId) -> bool {
-        self.weathering.is_randomly_ticking()
-    }
-
     fn random_tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
         self.weathering.change_over_time(state, world, pos);
     }

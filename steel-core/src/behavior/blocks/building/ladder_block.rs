@@ -166,12 +166,11 @@ mod tests {
     #[test]
     fn waterlogged_ladder_contains_non_falling_source_water() {
         init_test_registry();
-        let behavior = LadderBlock::new(&vanilla_blocks::LADDER);
         let state = vanilla_blocks::LADDER
             .default_state()
             .set_value(&WATERLOGGED, true);
 
-        let fluid = behavior.get_fluid_state(state);
+        let fluid = state.get_fluid_state();
 
         assert_eq!(fluid.fluid_id, &vanilla_fluids::WATER);
         assert!(fluid.is_source());

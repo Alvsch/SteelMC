@@ -23,9 +23,9 @@ use steel_registry::{vanilla_damage_types, vanilla_items};
 use steel_utils::types::{GameType, InteractionHand, UpdateFlags};
 use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId, Identifier, WorldAabb, axis::Axis};
 
+use crate::behavior::BLOCK_BEHAVIORS;
 use crate::behavior::blocks::vegetation::bonemealable::Bonemealable;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
-use crate::behavior::{BLOCK_BEHAVIORS, BlockStateBehaviorExt};
 use crate::behavior::{InventoryAccess, PlacementSource};
 use crate::block_entity::{BlockEntity, BlockEntityTicker, SharedBlockEntity};
 use crate::entity::ai::path::PathComputationType;
@@ -1046,19 +1046,6 @@ pub trait BlockBehavior: Send + Sync {
         REGISTRY.items.by_key(&block.key).map(ItemStack::new)
     }
 
-    /// Returns whether this block should receive random ticks.
-    ///
-    /// Override to return true for blocks like crops, grass, ice, fire, etc.
-    /// This is used to optimize chunk ticking by skipping sections with no
-    /// randomly-ticking blocks.
-    #[expect(
-        unused_variables,
-        reason = "default trait implementation ignores all params"
-    )]
-    fn is_randomly_ticking(&self, state: BlockStateId) -> bool {
-        false
-    }
-
     /// Returns whether this block state is pathfindable for the supplied vanilla path computation.
     ///
     /// Vanilla baseline for `BlockBehaviour.isPathfindable`.
@@ -1269,7 +1256,7 @@ pub trait BlockBehavior: Send + Sync {
 
     /// Called on random tick for blocks that support random ticking.
     ///
-    /// This is only called if `is_randomly_ticking()` returns true.
+    /// This is only called when the block state's extracted metadata marks it as randomly ticking.
     /// Used for crop growth, grass spread, ice melting, fire behavior, etc.
     ///
     /// # Arguments
@@ -1579,20 +1566,6 @@ pub trait BlockBehavior: Send + Sync {
         0
     }
 
-    /// Returns the fluid state for this block state.
-    ///
-    /// Default (`SimpleWaterloggedBlock`): returns water source when `WATERLOGGED = true`,
-    /// otherwise `FluidState::EMPTY`.
-    ///
-    /// Override for liquid blocks (water/lava) to return the appropriate fluid based on LEVEL.
-    fn get_fluid_state(&self, state: BlockStateId) -> FluidState {
-        if let Some(true) = state.try_get_value(&BlockStateProperties::WATERLOGGED) {
-            FluidState::source(&vanilla_fluids::WATER)
-        } else {
-            FluidState::EMPTY
-        }
-    }
-
     /// Vanilla parity: whether this block implements `LiquidBlockContainer`.
     ///
     /// This is a block behavior capability, not just a state property. Most
@@ -1854,13 +1827,13 @@ mod tests {
             .default_state()
             .set_value(&BlockStateProperties::WATERLOGGED, false);
         let wet_ladder = dry_ladder.set_value(&BlockStateProperties::WATERLOGGED, true);
-        let behavior = DefaultBlockBehavior::new(&vanilla_blocks::LADDER);
         let level = TestLevel::default();
 
         assert_eq!(
-            behavior.get_fluid_state(wet_ladder),
+            wet_ladder.get_fluid_state(),
             FluidState::source(&vanilla_fluids::WATER)
         );
+        let behavior = DefaultBlockBehavior::new(&vanilla_blocks::LADDER);
         assert!(behavior.is_liquid_container(dry_ladder));
         assert!(behavior.can_place_liquid(dry_ladder, &vanilla_fluids::WATER));
         assert!(behavior.place_liquid(
