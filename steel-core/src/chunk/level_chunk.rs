@@ -9,6 +9,7 @@ use std::{
 };
 
 use rand::{Rng, RngExt};
+use rustc_hash::FxHashSet;
 use steel_protocol::packets::game::{
     BlockEntityInfo, ChunkPacketData, HeightmapType as ProtocolHeightmapType, Heightmaps,
     LightUpdatePacketData,
@@ -36,6 +37,7 @@ use crate::block_entity::{
     SharedBlockEntity,
 };
 use crate::chunk::{
+    block_entity_listener::{LevelChunkGameEventListeners, ListenerSelectionCommit},
     chunk_holder::ChunkHolder,
     heightmap::{ChunkHeightmaps, HeightmapType},
     light::{
@@ -46,11 +48,11 @@ use crate::chunk::{
     section::Sections,
 };
 use crate::entity::SharedEntity;
-use crate::world::World;
 use crate::world::tick_scheduler::{
     BlockTickList, ChunkTickLists, FluidTickList, ScheduledTickSnapshot, TickPriority,
     TickSchedulerError,
 };
+use crate::world::{World, game_event_listener::GameEventListenerCount};
 use steel_worldgen::structure::{StructureReferenceMap, StructureStartMap};
 
 fn empty_postprocessing(height: i32) -> Box<[Vec<u16>]> {
@@ -82,6 +84,8 @@ pub struct LevelChunk {
     level: Weak<World>,
     /// Block entities stored in this chunk.
     block_entities: BlockEntityStorage,
+    /// Section registries and exact listener selections owned by this retained chunk.
+    pub(crate) game_event_listeners: LevelChunkGameEventListeners,
     /// Main-boundary activation state and callbacks staged by background loading.
     block_entity_activation: SyncMutex<BlockEntityActivation>,
     /// Scheduled ticks awaiting transfer to the world owner before Full publication.
@@ -256,6 +260,11 @@ impl LevelChunk {
         }
 
         Self::populate_poi(&level, &proto_chunk.sections, proto_chunk.pos, min_y);
+        let game_event_listener_count = level
+            .upgrade()
+            .map_or_else(GameEventListenerCount::shared, |world| {
+                world.game_event_listener_count()
+            });
 
         let chunk = Self {
             sections: proto_chunk.sections,
@@ -266,6 +275,7 @@ impl LevelChunk {
             height,
             level,
             block_entities: BlockEntityStorage::new(),
+            game_event_listeners: LevelChunkGameEventListeners::new(game_event_listener_count),
             block_entity_activation: SyncMutex::new(BlockEntityActivation::default()),
             unregistered_tick_lists: SyncMutex::new(Some(ChunkTickLists::new(
                 block_ticks,
@@ -343,6 +353,11 @@ impl LevelChunk {
         };
 
         Self::populate_poi(&level, &sections, pos, min_y);
+        let game_event_listener_count = level
+            .upgrade()
+            .map_or_else(GameEventListenerCount::shared, |world| {
+                world.game_event_listener_count()
+            });
 
         Self {
             sections,
@@ -353,6 +368,7 @@ impl LevelChunk {
             height,
             level,
             block_entities: BlockEntityStorage::new(),
+            game_event_listeners: LevelChunkGameEventListeners::new(game_event_listener_count),
             block_entity_activation: SyncMutex::new(BlockEntityActivation::default()),
             unregistered_tick_lists: SyncMutex::new(Some(ChunkTickLists::new(
                 block_ticks,
@@ -403,12 +419,22 @@ impl LevelChunk {
             mem::take(&mut activation.pending_lifecycle_dispatchers)
         };
 
-        let positions = self
+        let mut known_positions = FxHashSet::default();
+        let mut positions = self
             .block_entities
             .get_all_without_lifecycle_filter()
             .into_iter()
             .map(|block_entity| block_entity.get_block_pos())
-            .collect();
+            .inspect(|pos| {
+                known_positions.insert(*pos);
+            })
+            .collect::<Vec<_>>();
+        positions.extend(
+            self.game_event_listeners
+                .block_entity_positions()
+                .into_iter()
+                .filter(|pos| known_positions.insert(*pos)),
+        );
         Some(BlockEntityActivationBatch {
             lifecycle_dispatchers,
             positions,
@@ -483,10 +509,76 @@ impl LevelChunk {
                 return;
             }
         }
+        let current = self
+            .block_entities
+            .get(pos)
+            .filter(|block_entity| !block_entity.is_removed());
+        self.game_event_listeners
+            .remove_obsolete(pos, current.as_ref());
         for block_entity in lifecycle_dispatchers {
             block_entity.dispatch_lifecycle_events();
         }
+        self.reconcile_block_entity_game_event_listener(pos);
         self.refresh_block_entity_ticker(pos);
+    }
+
+    /// Re-selects one listener without retaining section, storage, or binding locks across the
+    /// block/provider callback.
+    pub(crate) fn reconcile_block_entity_game_event_listener(&self, pos: BlockPos) {
+        loop {
+            let current = self
+                .block_entities
+                .get(pos)
+                .filter(|block_entity| !block_entity.is_removed());
+            self.game_event_listeners
+                .remove_obsolete(pos, current.as_ref());
+            let Some(block_entity) = current else {
+                return;
+            };
+            if self.game_event_listeners.is_selected(&block_entity) {
+                return;
+            }
+
+            let Some((state, live_entity)) = self.block_entity_tick_target(pos) else {
+                continue;
+            };
+            if !Arc::ptr_eq(&block_entity, &live_entity) || live_entity.is_removed() {
+                continue;
+            }
+            let Some(world) = self.get_level() else {
+                return;
+            };
+            let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
+            let listener = behavior.get_game_event_listener(&world, live_entity.as_ref());
+
+            let still_owned = self.with_locked_block_state(pos, |live_state| {
+                live_state == state
+                    && !live_entity.is_removed()
+                    && self.block_entities.contains_same(pos, &live_entity)
+            });
+            if !still_owned {
+                continue;
+            }
+            if self
+                .block_entity_activation
+                .lock()
+                .holder
+                .upgrade()
+                .is_none()
+            {
+                return;
+            }
+
+            match self
+                .game_event_listeners
+                .commit_selection(live_entity, listener)
+            {
+                ListenerSelectionCommit::Committed | ListenerSelectionCommit::AlreadySelected => {
+                    return;
+                }
+                ListenerSelectionCommit::Occupied => {}
+            }
+        }
     }
 
     fn refresh_block_entity_ticker(&self, pos: BlockPos) {
@@ -843,7 +935,7 @@ impl LevelChunk {
                             .block_entities
                             .remove_if_same_and_removed(pos, &block_entity)
                         {
-                            self.refresh_block_entity_ticker(pos);
+                            self.finish_block_entity_change(pos, LifecycleDispatchers::new());
                             return None;
                         }
                         continue;
@@ -872,7 +964,7 @@ impl LevelChunk {
                             .block_entities
                             .remove_if_same_and_removed(pos, &block_entity)
                         {
-                            self.refresh_block_entity_ticker(pos);
+                            self.finish_block_entity_change(pos, LifecycleDispatchers::new());
                         }
                         continue;
                     }
@@ -951,7 +1043,7 @@ impl LevelChunk {
                             .block_entities
                             .remove_if_same_and_removed(pos, &block_entity)
                         {
-                            self.refresh_block_entity_ticker(pos);
+                            self.finish_block_entity_change(pos, LifecycleDispatchers::new());
                         }
                         continue;
                     }
@@ -1738,6 +1830,9 @@ impl LevelChunk {
         build_chunk_light_update_packet(&light, has_skylight)
     }
 }
+
+#[cfg(test)]
+mod game_event_tests;
 
 #[cfg(test)]
 mod tests {

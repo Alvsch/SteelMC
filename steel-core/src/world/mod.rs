@@ -19,7 +19,9 @@ use crate::chunk::light::{
 use crate::poi::OccupationStatus;
 use crate::portal::WorldChangeRequest;
 use crate::world::game_event_context::GameEventContext;
-use crate::world::game_event_listener::{GameEventListenerStorage, SharedGameEventListener};
+use crate::world::game_event_listener::{
+    GameEventDispatcher, GameEventListenerCount, SharedGameEventListener,
+};
 use crate::{chunk::chunk_map::ChunkMapGameTickTimings, world::weather::Weather};
 use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
 
@@ -443,6 +445,8 @@ pub struct World {
     entity_manager: WorldEntityManager,
     /// World-global ordered block-entity ticker phase.
     block_entity_tickers: block_entity_ticker::WorldBlockEntityTickers,
+    /// Physical entries retained by this world's chunk-owned game-event registries.
+    game_event_listener_count: Arc<GameEventListenerCount>,
     /// Entity tracker for managing which players can see which entities.
     entity_tracker: EntityTracker,
     /// Runtime IDs for pathfinder mobs currently visible to the active world.
@@ -459,8 +463,6 @@ pub struct World {
     scheduled_fluid_ticks_this_tick: SyncMutex<tick_scheduler::ScheduledTickRunSet>,
     /// Point of interest storage for efficient spatial queries of special blocks.
     pub poi_storage: SyncMutex<PointOfInterestStorage>,
-    /// Section-indexed listeners for vanilla game events.
-    game_event_listeners: GameEventListenerStorage,
     /// World-change requests queued by world-local ticks for server safe-point processing.
     pending_world_changes: SyncMutex<Vec<(SharedEntity, WorldChangeRequest)>>,
 }
@@ -570,6 +572,7 @@ impl World {
                 neighbor_updater: CollectingNeighborUpdater::new(max_chained_neighbor_updates),
                 entity_manager: WorldEntityManager::new(),
                 block_entity_tickers: block_entity_ticker::WorldBlockEntityTickers::new(),
+                game_event_listener_count: GameEventListenerCount::shared(),
                 entity_tracker: EntityTracker::new(),
                 navigating_mobs: NavigatingMobTracker::new(),
                 weather: SyncMutex::new(weather),
@@ -584,7 +587,6 @@ impl World {
                     tick_scheduler::ScheduledTickRunSet::default(),
                 ),
                 poi_storage: SyncMutex::new(PointOfInterestStorage::new()),
-                game_event_listeners: GameEventListenerStorage::new(),
                 pending_world_changes: SyncMutex::new(Vec::new()),
             }
         }))
@@ -4819,6 +4821,12 @@ impl World {
         &self.block_entity_tickers
     }
 
+    /// Shares the counter used to skip game-event dispatch when no chunk has listeners.
+    #[must_use]
+    pub(crate) fn game_event_listener_count(&self) -> Arc<GameEventListenerCount> {
+        Arc::clone(&self.game_event_listener_count)
+    }
+
     /// Returns the entity tracker for managing player-entity visibility.
     #[must_use]
     pub const fn entity_tracker(&self) -> &EntityTracker {
@@ -5373,7 +5381,16 @@ impl World {
         section_pos: SectionPos,
         listener: SharedGameEventListener,
     ) {
-        self.game_event_listeners.register(section_pos, listener);
+        let chunk_pos = ChunkPos::new(section_pos.x(), section_pos.z());
+        let _ = self.chunk_map.with_full_chunk(chunk_pos, |chunk| {
+            let Some(chunk) = chunk.as_full() else {
+                return;
+            };
+            chunk
+                .game_event_listeners
+                .registry
+                .register(section_pos.y(), listener);
+        });
     }
 
     /// Unregisters a game event listener from a chunk section.
@@ -5382,7 +5399,17 @@ impl World {
         section_pos: SectionPos,
         listener: &SharedGameEventListener,
     ) -> bool {
-        self.game_event_listeners.unregister(section_pos, listener)
+        let chunk_pos = ChunkPos::new(section_pos.x(), section_pos.z());
+        self.chunk_map
+            .with_full_chunk(chunk_pos, |chunk| {
+                chunk.as_full().is_some_and(|chunk| {
+                    chunk
+                        .game_event_listeners
+                        .registry
+                        .unregister(section_pos.y(), listener)
+                })
+            })
+            .unwrap_or(false)
     }
 
     /// Dispatches a game event to all listeners in range.
@@ -5410,8 +5437,37 @@ impl World {
         source_pos: DVec3,
         context: &GameEventContext,
     ) {
-        self.game_event_listeners
-            .dispatch(self, event, source_pos, context);
+        if !self.game_event_listener_count.has_any() {
+            return;
+        }
+        let radius = event.notification_radius.max(0);
+        let center = BlockPos::from(source_pos);
+        let section_min_x = SectionPos::block_to_section_coord(center.x() - radius);
+        let section_min_y = SectionPos::block_to_section_coord(center.y() - radius);
+        let section_min_z = SectionPos::block_to_section_coord(center.z() - radius);
+        let section_max_x = SectionPos::block_to_section_coord(center.x() + radius);
+        let section_max_y = SectionPos::block_to_section_coord(center.y() + radius);
+        let section_max_z = SectionPos::block_to_section_coord(center.z() + radius);
+        let mut dispatcher = GameEventDispatcher::new(self, event, source_pos, context);
+
+        for section_x in section_min_x..=section_max_x {
+            for section_z in section_min_z..=section_max_z {
+                let _ =
+                    self.chunk_map
+                        .with_full_chunk(ChunkPos::new(section_x, section_z), |chunk| {
+                            let Some(chunk) = chunk.as_full() else {
+                                return;
+                            };
+                            dispatcher.visit_chunk(
+                                &chunk.game_event_listeners.registry,
+                                section_min_y,
+                                section_max_y,
+                            );
+                        });
+            }
+        }
+
+        dispatcher.finish();
     }
 }
 

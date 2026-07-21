@@ -53,6 +53,7 @@ use crate::inventory::lock::ContainerRef;
 use crate::player::Player;
 
 use crate::world::World;
+use crate::world::game_event_listener::SharedGameEventListener;
 
 /// Erased block-state-selected ticker for one concrete block-entity type.
 ///
@@ -435,6 +436,14 @@ pub trait BlockEntity: ErasedType + Send + Sync {
 
     /// Returns the independently lockable container capability owned by this entity.
     fn container_ref(&self) -> Option<ContainerRef> {
+        None
+    }
+
+    /// Returns this entity's fixed game-event listener, if it provides one.
+    ///
+    /// Mirrors Vanilla `GameEventListener.Provider.getListener`. The owning block behavior keeps
+    /// final selection authority through `BlockBehavior::get_game_event_listener`.
+    fn game_event_listener(&self) -> Option<SharedGameEventListener> {
         None
     }
 }

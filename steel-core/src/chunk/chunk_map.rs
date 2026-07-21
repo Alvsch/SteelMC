@@ -638,6 +638,11 @@ impl ChunkMap {
         F: FnOnce(&ChunkAccess) -> R,
     {
         let chunk_holder = self.chunks.read_sync(&pos, |_, chunk| chunk.clone())?;
+        // Holders retain completed higher-status data for saving and quick revival. Gameplay
+        // lookups must still honor the currently permitted generation status.
+        if chunk_holder.is_status_disallowed(status) {
+            return None;
+        }
         let guard = chunk_holder.try_chunk(status)?;
         Some(f(&guard))
     }
@@ -2304,6 +2309,15 @@ impl ChunkMap {
                 block_entity.dispatch_lifecycle_events();
             }
             for pos in batch.positions {
+                {
+                    let Some(chunk) = holder.try_chunk(ChunkStatus::Full) else {
+                        break;
+                    };
+                    let Some(chunk) = chunk.as_full() else {
+                        break;
+                    };
+                    chunk.reconcile_block_entity_game_event_listener(pos);
+                }
                 self.reconcile_block_entity_ticker(holder, pos);
             }
         }

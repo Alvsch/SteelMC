@@ -22,7 +22,7 @@ use steel_utils::Downcast as _;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
 use steel_utils::{
-    BlockPos, BlockStateId, Direction, Identifier, SectionPos, WorldAabb, axis::Axis,
+    BlockPos, BlockStateId, ChunkPos, Direction, Identifier, SectionPos, WorldAabb, axis::Axis,
     block_util::FoundRectangle,
 };
 use text_components::{Modifier as _, TextComponent, format::Color, interactivity::ClickEvent};
@@ -35,7 +35,9 @@ use crate::entity::entities::PigEntity;
 use crate::entity::mob::Mob;
 use crate::inventory::equipment::EquipmentSlot;
 use crate::portal::PortalKind;
-use crate::test_support::{cross_world_damage_test_world, test_world};
+use crate::test_support::{
+    cross_world_damage_test_world, fresh_test_world, insert_ready_full_chunk, test_world,
+};
 use crate::world::game_event_context::GameEventContext;
 use crate::world::game_event_listener::{GameEventListener, SharedGameEventListener};
 use crate::world::{LevelReader, World};
@@ -294,13 +296,20 @@ fn command_data_compare_nbt_contains_implemented_living_data() {
 
 #[test]
 fn kill_uses_vanilla_living_and_non_living_paths() {
-    let source_world = test_world();
-    let target_world = cross_world_damage_test_world();
+    init_test_registry();
+    init_behaviors();
+    let source_world_storage = fresh_test_world("kill_game_event_source");
+    let target_world_storage = fresh_test_world("kill_game_event_target");
+    let source_world = &source_world_storage;
+    let target_world = &target_world_storage;
     assert!(!Arc::ptr_eq(source_world, target_world));
     let non_living_position = DVec3::new(0.25, 64.75, -0.125);
     let living_position = DVec3::new(1.25, 64.75, -0.125);
     let listener_position = DVec3::new(0.75, 64.75, -0.125);
     let listener_section = SectionPos::from_block_pos(BlockPos::from(listener_position));
+    let listener_chunk = ChunkPos::new(listener_section.x(), listener_section.z());
+    insert_ready_full_chunk(source_world, listener_chunk);
+    insert_ready_full_chunk(target_world, listener_chunk);
     let target_listener = Arc::new(RecordingGameEventListener::new(listener_position));
     let target_shared_listener: SharedGameEventListener = target_listener.clone();
     let _target_registration = RegisteredGameEventListener::new(

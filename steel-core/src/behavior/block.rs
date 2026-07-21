@@ -27,13 +27,14 @@ use crate::behavior::blocks::vegetation::bonemealable::Bonemealable;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
 use crate::behavior::{BLOCK_BEHAVIORS, BlockStateBehaviorExt};
 use crate::behavior::{InventoryAccess, PlacementSource};
-use crate::block_entity::{BlockEntityTicker, SharedBlockEntity};
+use crate::block_entity::{BlockEntity, BlockEntityTicker, SharedBlockEntity};
 use crate::entity::ai::path::PathComputationType;
 use crate::entity::projectile::Projectile;
 use crate::entity::{Entity, InsideBlockEffectCollector, damage::DamageSource};
 use crate::fluid::is_water_fluid;
 use crate::physics::collide;
 use crate::player::Player;
+use crate::world::game_event_listener::SharedGameEventListener;
 use crate::world::{
     ClipHitResult, ConditionalBlockSetResult, LevelAccessor, LevelReader, ScheduledTickAccess,
     SignalQueryContext, World,
@@ -1488,6 +1489,22 @@ pub trait BlockBehavior: Send + Sync {
         block_entity_type: BlockEntityTypeRef,
     ) -> Option<BlockEntityTicker> {
         None
+    }
+
+    /// Returns the game-event listener exposed by this block entity.
+    ///
+    /// Mirrors Vanilla `EntityBlock.getListener`. Block implementations may override the
+    /// provider result; the default delegates to the block entity's listener capability.
+    #[expect(
+        unused_variables,
+        reason = "default trait implementation only delegates to the block entity"
+    )]
+    fn get_game_event_listener(
+        &self,
+        world: &Arc<World>,
+        block_entity: &dyn BlockEntity,
+    ) -> Option<SharedGameEventListener> {
+        block_entity.game_event_listener()
     }
 
     /// Returns whether this new block should keep the old state's block entity.

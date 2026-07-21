@@ -1,5 +1,6 @@
 //! This module contains all the chunk related structures and logic.
 
+mod block_entity_listener;
 pub mod chunk_access;
 pub mod chunk_generation_task;
 pub mod chunk_holder;
