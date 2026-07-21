@@ -10,14 +10,13 @@ use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty, Dir
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_utils::{BlockPos, BlockStateId};
 
-use crate::behavior::block::BlockBehavior;
+use crate::behavior::block::{BlockBehavior, schedule_water_tick_if_waterlogged};
 use crate::behavior::blocks::WeatherState;
 use crate::behavior::blocks::building::WeatheringCopper;
 use crate::behavior::blocks::utils::is_excluded_for_connection;
 use crate::behavior::context::BlockPlaceContext;
 use crate::entity::ai::path::PathComputationType;
 use crate::world::{LevelReader, ScheduledTickAccess, World};
-use steel_registry::vanilla_fluids;
 
 /// Behavior for bar blocks.
 ///
@@ -140,17 +139,6 @@ impl BlockBehavior for WeatheringCopperBarsBlock {
         _computation_type: PathComputationType,
     ) -> bool {
         false
-    }
-}
-
-fn schedule_water_tick_if_waterlogged(
-    state: BlockStateId,
-    world: &dyn ScheduledTickAccess,
-    pos: BlockPos,
-) {
-    if state.get_value(&WATERLOGGED) {
-        let delay = world.fluid_tick_delay(&vanilla_fluids::WATER);
-        world.schedule_fluid_tick_default(pos, &vanilla_fluids::WATER, delay);
     }
 }
 

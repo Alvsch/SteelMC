@@ -17,7 +17,9 @@ use steel_registry::{vanilla_block_entity_types, vanilla_blocks};
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::InventoryAccess;
-use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
+use crate::behavior::block::{
+    BlockBehavior, BlockEntityCreation, schedule_water_tick_if_waterlogged,
+};
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
 use crate::block_entity::{BlockEntityTicker, entities::SignBlockEntity};
 use crate::entity::Entity;
@@ -302,6 +304,7 @@ impl BlockBehavior for StandingSignBlock {
         if direction == Direction::Down && !can_support_standing_sign(world, pos) {
             return REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
         }
+        schedule_water_tick_if_waterlogged(state, world, pos);
         state
     }
 
@@ -388,6 +391,7 @@ impl BlockBehavior for WallSignBlock {
         {
             return REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
         }
+        schedule_water_tick_if_waterlogged(state, world, pos);
         state
     }
 
@@ -475,6 +479,7 @@ impl BlockBehavior for CeilingHangingSignBlock {
         if direction == Direction::Up && !can_ceiling_hanging_sign_survive(world, pos) {
             return REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
         }
+        schedule_water_tick_if_waterlogged(state, world, pos);
         state
     }
 
@@ -622,6 +627,7 @@ impl BlockBehavior for WallHangingSignBlock {
                 return REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
             }
         }
+        schedule_water_tick_if_waterlogged(state, world, pos);
         state
     }
 
@@ -691,7 +697,46 @@ mod tests {
     use steel_registry::test_support::init_test_registry;
 
     use super::*;
-    use crate::test_support::fresh_test_world;
+    use crate::test_support::{TestLevel, fresh_test_world};
+
+    #[test]
+    fn standing_sign_only_schedules_water_when_support_survives() {
+        init_test_registry();
+        let pos = BlockPos::new(0, 64, 0);
+        let sign = StandingSignBlock::new(&vanilla_blocks::OAK_SIGN);
+        let state = vanilla_blocks::OAK_SIGN
+            .default_state()
+            .set_value(&BlockStateProperties::WATERLOGGED, true);
+        let supported =
+            TestLevel::default().with_block(pos.below(), vanilla_blocks::STONE.default_state());
+
+        assert_eq!(
+            sign.update_shape(
+                state,
+                &supported,
+                pos,
+                Direction::North,
+                pos.north(),
+                vanilla_blocks::AIR.default_state(),
+            ),
+            state
+        );
+        assert!(supported.scheduled_water_tick());
+
+        let unsupported = TestLevel::default();
+        assert!(
+            sign.update_shape(
+                state,
+                &unsupported,
+                pos,
+                Direction::Down,
+                pos.below(),
+                vanilla_blocks::AIR.default_state(),
+            )
+            .is_air()
+        );
+        assert!(!unsupported.scheduled_water_tick());
+    }
 
     #[test]
     fn sign_variants_select_their_matching_vanilla_tickers() {

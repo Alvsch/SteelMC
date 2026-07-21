@@ -2292,18 +2292,6 @@ impl World {
         );
 
         self.update_or_destroy(current_state, new_state, pos, flags, update_limit);
-
-        // Vanilla parity: `SimpleWaterloggedBlock.updateShape` / `Level.neighborShapeChanged` —
-        // always reschedule the fluid tick when a block with fluid has a neighbor shape change,
-        // regardless of whether the block state itself changed. This ensures waterlogged blocks
-        // (fences, slabs, stairs…) propagate their fluid when adjacent blocks are removed.
-        let fluid_state = new_state.get_fluid_state();
-        if !fluid_state.is_empty() {
-            let delay = FLUID_BEHAVIORS
-                .get_behavior(fluid_state.fluid_id)
-                .tick_delay(self);
-            self.schedule_fluid_tick_default(pos, fluid_state.fluid_id, delay);
-        }
     }
 
     pub(crate) fn update_or_destroy(
@@ -5640,7 +5628,7 @@ mod tests {
     use crate::behavior::init_behaviors;
     use crate::chunk::chunk_ticket_manager::{ChunkTicket, ChunkTicketLevel};
     use crate::entity::{EntityBase, entities::PigEntity};
-    use crate::test_support::{fresh_test_world, test_world};
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk, test_world};
 
     const FIRST_HALF: BlockLocalAabb = BlockLocalAabb::new(0.0, 0.0, 0.0, 0.5, 1.0, 1.0);
     const SECOND_HALF: BlockLocalAabb = BlockLocalAabb::new(0.5, 0.0, 0.0, 1.0, 1.0, 1.0);
@@ -5664,6 +5652,32 @@ mod tests {
 
         assert!(sound_is_within_range(sound, 0.75, 255.0));
         assert!(!sound_is_within_range(sound, 0.75, 256.0));
+    }
+
+    #[test]
+    fn generic_shape_update_does_not_schedule_non_source_fluid() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("shape_update_fluid_ownership");
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        let pos = BlockPos::new(0, 64, 0);
+        let flowing_water = vanilla_blocks::WATER
+            .default_state()
+            .set_value(&BlockStateProperties::LEVEL, 1);
+
+        assert!(world.set_block(pos, flowing_water, UpdateFlags::UPDATE_SKIP_ON_PLACE));
+        assert!(!world.has_scheduled_fluid_tick(pos, &vanilla_fluids::FLOWING_WATER));
+
+        world.execute_neighbor_shape_update(
+            Direction::North,
+            pos,
+            pos.north(),
+            flowing_water,
+            UpdateFlags::UPDATE_NONE,
+            512,
+        );
+
+        assert!(!world.has_scheduled_fluid_tick(pos, &vanilla_fluids::FLOWING_WATER));
     }
 
     #[test]

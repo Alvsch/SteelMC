@@ -236,6 +236,19 @@ pub(crate) fn schedule_placed_liquid_tick(
     level.schedule_fluid_tick_default(pos, fluid_state.fluid_id, delay);
 }
 
+/// Mirrors the water-tick side effect shared by Vanilla waterlogged block
+/// `updateShape` implementations.
+pub(crate) fn schedule_water_tick_if_waterlogged(
+    state: BlockStateId,
+    level: &dyn ScheduledTickAccess,
+    pos: BlockPos,
+) {
+    if state.try_get_value(&BlockStateProperties::WATERLOGGED) == Some(true) {
+        let delay = level.fluid_tick_delay(&vanilla_fluids::WATER);
+        level.schedule_fluid_tick_default(pos, &vanilla_fluids::WATER, delay);
+    }
+}
+
 pub(crate) fn place_simple_waterlogged_liquid(
     level: &dyn LevelAccessor,
     pos: BlockPos,
@@ -670,6 +683,8 @@ pub trait BlockBehavior: Send + Sync {
     }
     /// Called when a neighboring block changes shape.
     /// Returns the new state for this block after considering the neighbor change.
+    /// Implementations also own any block or fluid ticks that Vanilla schedules
+    /// from `updateShape`; the world dispatcher does not infer them from the result.
     fn update_shape(
         &self,
         state: BlockStateId,
@@ -1664,7 +1679,7 @@ pub trait BlockBehavior: Send + Sync {
     }
 }
 
-/// Default block behavior that returns the block's default state for placement.
+/// Default placement plus the common water tick used by unported waterlogged blocks.
 pub struct DefaultBlockBehavior {
     block: BlockRef,
 }
@@ -1678,9 +1693,21 @@ impl DefaultBlockBehavior {
 }
 
 impl BlockBehavior for DefaultBlockBehavior {
-    // TODO: This fallback only preserves generic block placement. Unported
-    // SimpleWaterloggedBlock implementations still need vanilla placement and
-    // update_shape water tick handling when they get real behaviors.
+    fn update_shape(
+        &self,
+        state: BlockStateId,
+        world: &dyn ScheduledTickAccess,
+        pos: BlockPos,
+        _direction: Direction,
+        _neighbor_pos: BlockPos,
+        _neighbor_state: BlockStateId,
+    ) -> BlockStateId {
+        schedule_water_tick_if_waterlogged(state, world, pos);
+        state
+    }
+
+    // This fallback only preserves generic block placement. Blocks with
+    // class-specific placement rules still need their own behavior.
     fn get_state_for_placement(&self, _context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         Some(self.block.default_state())
     }
@@ -1844,6 +1871,52 @@ mod tests {
         ));
         assert_eq!(level.last_placed_state(), Some(wet_ladder));
         assert!(level.scheduled_water_tick());
+    }
+
+    #[test]
+    fn default_behavior_schedules_shape_ticks_only_for_waterlogged_states() {
+        init_test_registry();
+        let behavior = DefaultBlockBehavior::new(&vanilla_blocks::OAK_SLAB);
+        let level = TestLevel::default();
+        let pos = BlockPos::new(3, 64, 5);
+        let dry_state = vanilla_blocks::OAK_SLAB
+            .default_state()
+            .set_value(&BlockStateProperties::WATERLOGGED, false);
+        let wet_state = dry_state.set_value(&BlockStateProperties::WATERLOGGED, true);
+
+        assert_eq!(
+            behavior.update_shape(
+                dry_state,
+                &level,
+                pos,
+                Direction::North,
+                pos.north(),
+                vanilla_blocks::STONE.default_state(),
+            ),
+            dry_state
+        );
+        assert!(level.scheduled_fluid_ticks.borrow().is_empty());
+
+        assert_eq!(
+            behavior.update_shape(
+                wet_state,
+                &level,
+                pos,
+                Direction::North,
+                pos.north(),
+                vanilla_blocks::STONE.default_state(),
+            ),
+            wet_state
+        );
+        assert_eq!(
+            level
+                .scheduled_fluid_ticks
+                .borrow()
+                .iter()
+                .map(|tick| (tick.pos, tick.fluid, tick.delay))
+                .collect::<Vec<_>>(),
+            vec![(pos, &vanilla_fluids::WATER, 5)]
+        );
     }
 
     #[test]
