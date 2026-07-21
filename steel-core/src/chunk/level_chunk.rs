@@ -14,7 +14,10 @@ use steel_protocol::packets::game::{
     LightUpdatePacketData,
 };
 use steel_registry::{
-    REGISTRY, RegistryEntry, blocks::block_state_ext::BlockStateExt, vanilla_blocks,
+    REGISTRY, RegistryEntry,
+    blocks::{BlockRef, block_state_ext::BlockStateExt},
+    fluid::FluidRef,
+    vanilla_blocks,
 };
 use steel_utils::{
     BlockPos, BlockStateId, ChunkPos, Direction, PackedChunkLocalXZ, SectionPos, locks::SyncRwLock,
@@ -36,7 +39,10 @@ use crate::chunk::{
 };
 use crate::entity::SharedEntity;
 use crate::world::World;
-use crate::world::tick_scheduler::{BlockTickList, FluidTickList};
+use crate::world::tick_scheduler::{
+    BlockTickList, ChunkTickLists, FluidTickList, ScheduledTickSnapshot, TickPriority,
+    TickSchedulerError,
+};
 use steel_worldgen::structure::{StructureReferenceMap, StructureStartMap};
 
 fn empty_postprocessing(height: i32) -> Box<[Vec<u16>]> {
@@ -68,10 +74,10 @@ pub struct LevelChunk {
     level: Weak<World>,
     /// Block entities stored in this chunk.
     block_entities: BlockEntityStorage,
-    /// Scheduled block ticks pending in this chunk.
-    pub block_ticks: SyncMutex<BlockTickList>,
-    /// Scheduled fluid ticks pending in this chunk.
-    pub fluid_ticks: SyncMutex<FluidTickList>,
+    /// Scheduled ticks awaiting transfer to the world owner before Full publication.
+    ///
+    /// This is `None` for every published Full chunk.
+    unregistered_tick_lists: SyncMutex<Option<ChunkTickLists>>,
     /// Structure starts originating in this chunk (carried from proto).
     pub structure_starts: SyncRwLock<StructureStartMap>,
     /// References to structures from nearby origin chunks (carried from proto).
@@ -224,8 +230,10 @@ impl LevelChunk {
             height,
             level,
             block_entities,
-            block_ticks: SyncMutex::new(block_ticks),
-            fluid_ticks: SyncMutex::new(fluid_ticks),
+            unregistered_tick_lists: SyncMutex::new(Some(ChunkTickLists::new(
+                block_ticks,
+                fluid_ticks,
+            ))),
             structure_starts: SyncRwLock::new(structure_starts),
             structure_references: SyncRwLock::new(structure_references),
             postprocessing: SyncMutex::new(postprocessing),
@@ -299,8 +307,10 @@ impl LevelChunk {
             height,
             level,
             block_entities: BlockEntityStorage::new(),
-            block_ticks: SyncMutex::new(block_ticks),
-            fluid_ticks: SyncMutex::new(fluid_ticks),
+            unregistered_tick_lists: SyncMutex::new(Some(ChunkTickLists::new(
+                block_ticks,
+                fluid_ticks,
+            ))),
             structure_starts: SyncRwLock::new(structure_starts),
             structure_references: SyncRwLock::new(structure_references),
             postprocessing: SyncMutex::new(postprocessing_from_disk(height, postprocessing)),
@@ -324,6 +334,130 @@ impl LevelChunk {
     #[must_use]
     pub fn level_weak(&self) -> Weak<World> {
         self.level.clone()
+    }
+
+    /// Transfers the pre-publication queues into the world's scheduler.
+    pub(crate) fn take_unregistered_tick_lists(&self) -> Option<ChunkTickLists> {
+        self.unregistered_tick_lists.lock().take()
+    }
+
+    pub(crate) fn schedule_unregistered_block_tick(
+        &self,
+        block: BlockRef,
+        pos: BlockPos,
+        delay: i32,
+        priority: TickPriority,
+        sub_tick_order: i64,
+    ) -> Option<bool> {
+        self.unregistered_tick_lists.lock().as_mut().map(|ticks| {
+            ticks
+                .block_mut()
+                .schedule(block, pos, delay, priority, sub_tick_order)
+        })
+    }
+
+    pub(crate) fn schedule_unregistered_fluid_tick(
+        &self,
+        fluid: FluidRef,
+        pos: BlockPos,
+        delay: i32,
+        priority: TickPriority,
+        sub_tick_order: i64,
+    ) -> Option<bool> {
+        self.unregistered_tick_lists.lock().as_mut().map(|ticks| {
+            ticks
+                .fluid_mut()
+                .schedule(fluid, pos, delay, priority, sub_tick_order)
+        })
+    }
+
+    pub(crate) fn has_unregistered_block_tick(
+        &self,
+        pos: BlockPos,
+        block: BlockRef,
+    ) -> Option<bool> {
+        self.unregistered_tick_lists
+            .lock()
+            .as_ref()
+            .map(|ticks| ticks.block().has_tick(pos, block))
+    }
+
+    pub(crate) fn has_unregistered_fluid_tick(
+        &self,
+        pos: BlockPos,
+        fluid: FluidRef,
+    ) -> Option<bool> {
+        self.unregistered_tick_lists
+            .lock()
+            .as_ref()
+            .map(|ticks| ticks.fluid().has_tick(pos, fluid))
+    }
+
+    pub(crate) fn snapshot_unregistered_tick_lists(&self) -> Option<ScheduledTickSnapshot> {
+        self.unregistered_tick_lists
+            .lock()
+            .as_ref()
+            .map(ChunkTickLists::snapshot)
+    }
+
+    /// Schedules through the world owner, or through local pre-publication
+    /// storage when this chunk has no live world (as in focused unit tests).
+    pub(crate) fn schedule_block_tick(
+        &self,
+        pos: BlockPos,
+        block: BlockRef,
+        delay: i32,
+        priority: TickPriority,
+        sub_tick_order: i64,
+    ) {
+        let result = if let Some(world) = self.get_level() {
+            world.schedule_block_tick_for_chunk(self, pos, block, delay, priority, sub_tick_order)
+        } else {
+            self.schedule_unregistered_block_tick(block, pos, delay, priority, sub_tick_order)
+                .ok_or(TickSchedulerError::MissingContainer(self.pos))
+        };
+
+        match result {
+            Ok(true) => self.dirty.store(true, Ordering::Release),
+            Ok(false) => {}
+            Err(error) => panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}"),
+        }
+    }
+
+    pub(crate) fn schedule_fluid_tick(
+        &self,
+        pos: BlockPos,
+        fluid: FluidRef,
+        delay: i32,
+        priority: TickPriority,
+        sub_tick_order: i64,
+    ) {
+        let result = if let Some(world) = self.get_level() {
+            world.schedule_fluid_tick_for_chunk(self, pos, fluid, delay, priority, sub_tick_order)
+        } else {
+            self.schedule_unregistered_fluid_tick(fluid, pos, delay, priority, sub_tick_order)
+                .ok_or(TickSchedulerError::MissingContainer(self.pos))
+        };
+
+        match result {
+            Ok(true) => self.dirty.store(true, Ordering::Release),
+            Ok(false) => {}
+            Err(error) => panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}"),
+        }
+    }
+
+    /// Takes an owned persistence snapshot without exposing live scheduler data.
+    pub(crate) fn scheduled_tick_snapshot(&self) -> ScheduledTickSnapshot {
+        let result = if let Some(world) = self.get_level() {
+            world.scheduled_tick_snapshot(self)
+        } else {
+            self.snapshot_unregistered_tick_lists()
+                .ok_or(TickSchedulerError::MissingContainer(self.pos))
+        };
+        match result {
+            Ok(snapshot) => snapshot,
+            Err(error) => panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}"),
+        }
     }
 
     /// Fills the vanilla skylight-source cache from current section contents.

@@ -5,14 +5,14 @@ use std::{
     path::Path,
     sync::{
         Arc, LazyLock, Weak,
-        atomic::{AtomicBool, AtomicI64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use crate::chunk::chunk_access::{ChunkAccess, ChunkStatus};
 use crate::chunk::chunk_ticket_manager::{PersistentChunkTickets, TimedChunkTickets};
-use crate::chunk::level_chunk::LevelChunkBlockSetResult;
+use crate::chunk::level_chunk::{LevelChunk, LevelChunkBlockSetResult};
 use crate::chunk::light::{
     LightLayer, LightSectionEmptinessChange, MAX_LIGHT_LEVEL, has_different_light_properties,
 };
@@ -448,10 +448,8 @@ pub struct World {
     pub weather: SyncMutex<Weather>,
     /// Per-level recent toggle history used by vanilla redstone-torch burnout.
     redstone_torch_toggles: SyncMutex<redstone::RedstoneTorchToggleTracker>,
-    /// Monotonic counter for `sub_tick_order` on scheduled ticks.
-    /// Provides stable ordering when multiple ticks fire on the same game tick
-    /// with the same priority.
-    sub_tick_count: AtomicI64,
+    /// World owner for all published Full-chunk scheduled block and fluid ticks.
+    scheduled_ticks: tick_scheduler::WorldTickScheduler,
     /// Block ticks selected for this tick whose callbacks have not started yet.
     scheduled_block_ticks_this_tick: SyncMutex<tick_scheduler::ScheduledTickRunSet>,
     /// Fluid ticks selected for this tick whose callbacks have not started yet.
@@ -574,7 +572,7 @@ impl World {
                 redstone_torch_toggles: SyncMutex::new(
                     redstone::RedstoneTorchToggleTracker::default(),
                 ),
-                sub_tick_count: AtomicI64::new(0),
+                scheduled_ticks: tick_scheduler::WorldTickScheduler::new(),
                 scheduled_block_ticks_this_tick: SyncMutex::new(
                     tick_scheduler::ScheduledTickRunSet::default(),
                 ),
@@ -2966,17 +2964,11 @@ impl World {
         delay: i32,
         priority: tick_scheduler::TickPriority,
     ) {
+        let order = self.scheduled_ticks.next_sub_tick_order();
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map.with_full_chunk(chunk_pos, |chunk_access| {
             if let Some(chunk) = chunk_access.as_full() {
-                let order = self.sub_tick_count.fetch_add(1, Ordering::Relaxed);
-                if chunk
-                    .block_ticks
-                    .lock()
-                    .schedule(block, pos, delay, priority, order)
-                {
-                    chunk.dirty.store(true, Ordering::Release);
-                }
+                chunk.schedule_block_tick(pos, block, delay, priority, order);
             }
         });
     }
@@ -2997,17 +2989,11 @@ impl World {
         delay: i32,
         priority: tick_scheduler::TickPriority,
     ) {
+        let order = self.scheduled_ticks.next_sub_tick_order();
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map.with_full_chunk(chunk_pos, |chunk_access| {
             if let Some(chunk) = chunk_access.as_full() {
-                let order = self.sub_tick_count.fetch_add(1, Ordering::Relaxed);
-                if chunk
-                    .fluid_ticks
-                    .lock()
-                    .schedule(fluid, pos, delay, priority, order)
-                {
-                    chunk.dirty.store(true, Ordering::Release);
-                }
+                chunk.schedule_fluid_tick(pos, fluid, delay, priority, order);
             }
         });
     }
@@ -3018,27 +3004,116 @@ impl World {
     }
 
     /// Returns `true` if a block tick is already scheduled for the given `(pos, block)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a published Full chunk has lost both its world-owned and local
+    /// scheduled-tick queues, which violates the chunk publication invariant.
     pub fn has_scheduled_block_tick(&self, pos: BlockPos, block: BlockRef) -> bool {
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
             .with_full_chunk(chunk_pos, |chunk_access| {
-                chunk_access
-                    .as_full()
-                    .is_some_and(|chunk| chunk.block_ticks.lock().has_tick(pos, block))
+                let Some(chunk) = chunk_access.as_full() else {
+                    return false;
+                };
+                match self.scheduled_ticks.has_block_tick(chunk, pos, block) {
+                    Ok(has_tick) => has_tick,
+                    Err(error) => {
+                        panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}")
+                    }
+                }
             })
             .unwrap_or(false)
     }
 
     /// Returns `true` if a fluid tick is already scheduled for the given `(pos, fluid)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a published Full chunk has lost both its world-owned and local
+    /// scheduled-tick queues, which violates the chunk publication invariant.
     pub fn has_scheduled_fluid_tick(&self, pos: BlockPos, fluid: FluidRef) -> bool {
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
             .with_full_chunk(chunk_pos, |chunk_access| {
-                chunk_access
-                    .as_full()
-                    .is_some_and(|chunk| chunk.fluid_ticks.lock().has_tick(pos, fluid))
+                let Some(chunk) = chunk_access.as_full() else {
+                    return false;
+                };
+                match self.scheduled_ticks.has_fluid_tick(chunk, pos, fluid) {
+                    Ok(has_tick) => has_tick,
+                    Err(error) => {
+                        panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}")
+                    }
+                }
             })
             .unwrap_or(false)
+    }
+
+    pub(crate) fn register_full_chunk_ticks(
+        &self,
+        chunk: &LevelChunk,
+    ) -> Result<(), tick_scheduler::TickSchedulerError> {
+        self.scheduled_ticks.register_chunk(chunk)
+    }
+
+    pub(crate) fn unregister_full_chunk_ticks(&self, pos: ChunkPos) {
+        self.scheduled_ticks.unregister_chunk(pos);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_registered_full_chunk_ticks(&self, pos: ChunkPos) -> bool {
+        self.scheduled_ticks.has_registered_chunk(pos)
+    }
+
+    pub(crate) fn schedule_block_tick_for_chunk(
+        &self,
+        chunk: &LevelChunk,
+        pos: BlockPos,
+        block: BlockRef,
+        delay: i32,
+        priority: tick_scheduler::TickPriority,
+        sub_tick_order: i64,
+    ) -> Result<bool, tick_scheduler::TickSchedulerError> {
+        self.scheduled_ticks
+            .schedule_block(chunk, block, pos, delay, priority, sub_tick_order)
+    }
+
+    pub(crate) fn schedule_fluid_tick_for_chunk(
+        &self,
+        chunk: &LevelChunk,
+        pos: BlockPos,
+        fluid: FluidRef,
+        delay: i32,
+        priority: tick_scheduler::TickPriority,
+        sub_tick_order: i64,
+    ) -> Result<bool, tick_scheduler::TickSchedulerError> {
+        self.scheduled_ticks
+            .schedule_fluid(chunk, fluid, pos, delay, priority, sub_tick_order)
+    }
+
+    pub(crate) fn scheduled_tick_snapshot(
+        &self,
+        chunk: &LevelChunk,
+    ) -> Result<tick_scheduler::ScheduledTickSnapshot, tick_scheduler::TickSchedulerError> {
+        self.scheduled_ticks.snapshot(chunk)
+    }
+
+    pub(crate) fn begin_scheduled_tick_phase(
+        &self,
+        active_chunks: &[ChunkPos],
+        max_ticks: usize,
+    ) -> Result<tick_scheduler::ScheduledTickBatch<BlockRef>, tick_scheduler::TickSchedulerError>
+    {
+        self.scheduled_ticks.begin_tick(active_chunks, max_ticks)
+    }
+
+    pub(crate) fn collect_scheduled_fluid_tick_batch(
+        &self,
+        active_chunks: &[ChunkPos],
+        max_ticks: usize,
+    ) -> Result<Vec<tick_scheduler::FluidTick>, tick_scheduler::TickSchedulerError> {
+        self.scheduled_ticks
+            .collect_fluid_ticks(active_chunks, max_ticks)
     }
 
     /// Returns whether a selected block tick at `(pos, block)` has not started yet.

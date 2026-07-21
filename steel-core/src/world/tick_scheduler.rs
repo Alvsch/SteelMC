@@ -15,13 +15,34 @@
 //! This preserves the spacing and phase of repeater clocks across the loaded but
 //! non-ticking zone. Remaining active-time delay is saved with the chunk and
 //! re-anchored when loaded.
+//!
+//! ## Exact cross-chunk ties
+//!
+//! Each loaded chunk reconstructs saved ticks with its own negative sub-tick
+//! order range, so two ready chunk heads can have the same priority and
+//! sub-tick order. A `WorldGenRegion` also owns an independent counter, as in
+//! Vanilla, and can retain that order when it schedules directly into an
+//! already-Full dependency chunk. Vanilla's final order for these exact ties
+//! follows iteration of fastutil's `Long2LongOpenHashMap` and then Java's
+//! `PriorityQueue` heap behavior. Minecraft supplies no custom hash strategy
+//! for that map. As an intentional performance tradeoff, Steel keeps the
+//! optimized `scc` chunk traversal as the final tie order instead of reproducing
+//! implementation-specific Java collection state. Ordinary live-world ticks
+//! still use a world-global sub-tick counter.
 
-use std::{cmp::Ordering, collections::BinaryHeap, ptr};
+use std::{
+    cmp::Ordering,
+    collections::BinaryHeap,
+    ptr,
+    sync::atomic::{AtomicI64, Ordering as AtomicOrdering},
+};
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use steel_registry::blocks::BlockRef;
 use steel_registry::fluid::FluidRef;
-use steel_utils::BlockPos;
+use steel_utils::{BlockPos, ChunkPos, locks::SyncMutex};
+
+use crate::chunk::level_chunk::LevelChunk;
 
 /// Priority levels for scheduled ticks. Lower discriminant = higher priority.
 ///
@@ -127,6 +148,279 @@ pub type ScheduledTickKey = (BlockPos, usize);
 pub type BlockTickList = TickList<BlockRef>;
 /// Per-chunk storage for scheduled fluid ticks.
 pub type FluidTickList = TickList<FluidRef>;
+
+/// Block and fluid scheduled-tick queues belonging to one Full chunk.
+///
+/// Full chunks transfer this pair into [`WorldTickScheduler`] before their Full
+/// status is published. Keeping both queues under the same world scheduler lock
+/// makes the block/fluid phase boundary atomic without locking every chunk.
+#[derive(Debug, Default)]
+pub(crate) struct ChunkTickLists {
+    block: BlockTickList,
+    fluid: FluidTickList,
+}
+
+impl ChunkTickLists {
+    #[must_use]
+    pub(crate) const fn new(block: BlockTickList, fluid: FluidTickList) -> Self {
+        Self { block, fluid }
+    }
+
+    pub(crate) const fn block(&self) -> &BlockTickList {
+        &self.block
+    }
+
+    pub(crate) const fn block_mut(&mut self) -> &mut BlockTickList {
+        &mut self.block
+    }
+
+    pub(crate) const fn fluid(&self) -> &FluidTickList {
+        &self.fluid
+    }
+
+    pub(crate) const fn fluid_mut(&mut self) -> &mut FluidTickList {
+        &mut self.fluid
+    }
+
+    #[must_use]
+    pub(crate) fn snapshot(&self) -> ScheduledTickSnapshot {
+        ScheduledTickSnapshot {
+            block: self.block.pack(),
+            fluid: self.fluid.pack(),
+        }
+    }
+}
+
+/// Owned persistence snapshot of both scheduled-tick queues for a Full chunk.
+pub(crate) struct ScheduledTickSnapshot {
+    pub(crate) block: Vec<SavedTick<BlockRef>>,
+    pub(crate) fluid: Vec<SavedTick<FluidRef>>,
+}
+
+/// A violated Full-chunk scheduled-tick ownership invariant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TickSchedulerError {
+    /// A second Full chunk attempted to register the same position.
+    AlreadyRegistered(ChunkPos),
+    /// Neither the world scheduler nor the unpublished Full chunk owns queues.
+    MissingContainer(ChunkPos),
+}
+
+/// Ready ticks and the active containers whose persisted delays changed.
+pub(crate) struct ScheduledTickBatch<T: TickKey> {
+    pub(crate) ticks: Vec<ScheduledTick<T>>,
+    pub(crate) changed_containers: Vec<usize>,
+}
+
+/// World owner for all live Full-chunk scheduled block and fluid ticks.
+///
+/// The mutex is held only while registering, scheduling, querying, snapshotting,
+/// or collecting a batch. It is never held while block/fluid callbacks run.
+/// A scheduling call linearizes when it acquires this mutex to insert. Reserving
+/// a sub-tick order alone does not make the tick visible to a concurrent
+/// collection; if collection acquires first, the call can only participate in a
+/// later collection.
+pub(crate) struct WorldTickScheduler {
+    next_sub_tick_order: AtomicI64,
+    state: SyncMutex<WorldTickSchedulerState>,
+}
+
+#[derive(Debug, Default)]
+struct WorldTickSchedulerState {
+    chunks: FxHashMap<ChunkPos, ChunkTickLists>,
+}
+
+impl WorldTickScheduler {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self {
+            next_sub_tick_order: AtomicI64::new(0),
+            state: SyncMutex::new(WorldTickSchedulerState::default()),
+        }
+    }
+
+    /// Allocates the world-global order before container lookup or deduplication.
+    ///
+    /// Vanilla creates the `ScheduledTick` before asking `LevelTicks` to store
+    /// it, so failed and duplicate scheduling attempts consume an order too.
+    pub(crate) fn next_sub_tick_order(&self) -> i64 {
+        self.next_sub_tick_order
+            .fetch_add(1, AtomicOrdering::Relaxed)
+    }
+
+    /// Transfers an unpublished Full chunk's queues into the world owner.
+    pub(crate) fn register_chunk(&self, chunk: &LevelChunk) -> Result<(), TickSchedulerError> {
+        let mut state = self.state.lock();
+        if state.chunks.contains_key(&chunk.pos) {
+            return Err(TickSchedulerError::AlreadyRegistered(chunk.pos));
+        }
+        let Some(ticks) = chunk.take_unregistered_tick_lists() else {
+            return Err(TickSchedulerError::MissingContainer(chunk.pos));
+        };
+        state.chunks.insert(chunk.pos, ticks);
+        Ok(())
+    }
+
+    /// Removes a finally-unloaded Full chunk after its last save completed.
+    pub(crate) fn unregister_chunk(&self, pos: ChunkPos) {
+        self.state.lock().chunks.remove(&pos);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_registered_chunk(&self, pos: ChunkPos) -> bool {
+        self.state.lock().chunks.contains_key(&pos)
+    }
+
+    pub(crate) fn schedule_block(
+        &self,
+        chunk: &LevelChunk,
+        block: BlockRef,
+        pos: BlockPos,
+        delay: i32,
+        priority: TickPriority,
+        sub_tick_order: i64,
+    ) -> Result<bool, TickSchedulerError> {
+        let mut state = self.state.lock();
+        if let Some(ticks) = state.chunks.get_mut(&chunk.pos) {
+            return Ok(ticks
+                .block
+                .schedule(block, pos, delay, priority, sub_tick_order));
+        }
+        chunk
+            .schedule_unregistered_block_tick(block, pos, delay, priority, sub_tick_order)
+            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
+    }
+
+    pub(crate) fn schedule_fluid(
+        &self,
+        chunk: &LevelChunk,
+        fluid: FluidRef,
+        pos: BlockPos,
+        delay: i32,
+        priority: TickPriority,
+        sub_tick_order: i64,
+    ) -> Result<bool, TickSchedulerError> {
+        let mut state = self.state.lock();
+        if let Some(ticks) = state.chunks.get_mut(&chunk.pos) {
+            return Ok(ticks
+                .fluid
+                .schedule(fluid, pos, delay, priority, sub_tick_order));
+        }
+        chunk
+            .schedule_unregistered_fluid_tick(fluid, pos, delay, priority, sub_tick_order)
+            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
+    }
+
+    pub(crate) fn has_block_tick(
+        &self,
+        chunk: &LevelChunk,
+        pos: BlockPos,
+        block: BlockRef,
+    ) -> Result<bool, TickSchedulerError> {
+        let state = self.state.lock();
+        if let Some(ticks) = state.chunks.get(&chunk.pos) {
+            return Ok(ticks.block.has_tick(pos, block));
+        }
+        chunk
+            .has_unregistered_block_tick(pos, block)
+            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
+    }
+
+    pub(crate) fn has_fluid_tick(
+        &self,
+        chunk: &LevelChunk,
+        pos: BlockPos,
+        fluid: FluidRef,
+    ) -> Result<bool, TickSchedulerError> {
+        let state = self.state.lock();
+        if let Some(ticks) = state.chunks.get(&chunk.pos) {
+            return Ok(ticks.fluid.has_tick(pos, fluid));
+        }
+        chunk
+            .has_unregistered_fluid_tick(pos, fluid)
+            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
+    }
+
+    pub(crate) fn snapshot(
+        &self,
+        chunk: &LevelChunk,
+    ) -> Result<ScheduledTickSnapshot, TickSchedulerError> {
+        let state = self.state.lock();
+        if let Some(ticks) = state.chunks.get(&chunk.pos) {
+            return Ok(ticks.snapshot());
+        }
+        chunk
+            .snapshot_unregistered_tick_lists()
+            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
+    }
+
+    /// Advances both active clocks and selects the block batch.
+    pub(crate) fn begin_tick(
+        &self,
+        active_chunks: &[ChunkPos],
+        max_ticks: usize,
+    ) -> Result<ScheduledTickBatch<BlockRef>, TickSchedulerError> {
+        let mut state = self.state.lock();
+        Self::verify_registered(&state, active_chunks)?;
+
+        let mut changed_containers = Vec::new();
+        for (index, pos) in active_chunks.iter().enumerate() {
+            let Some(ticks) = state.chunks.get_mut(pos) else {
+                continue;
+            };
+            if !ticks.block.is_empty() || !ticks.fluid.is_empty() {
+                changed_containers.push(index);
+            }
+            ticks.block.advance_active_time();
+            ticks.fluid.advance_active_time();
+        }
+
+        let ticks = collect_registered_ticks(
+            &mut state.chunks,
+            active_chunks,
+            ChunkTickLists::block_mut,
+            max_ticks,
+        );
+        Ok(ScheduledTickBatch {
+            ticks,
+            changed_containers,
+        })
+    }
+
+    /// Selects fluids after block callbacks, without advancing clocks again.
+    pub(crate) fn collect_fluid_ticks(
+        &self,
+        active_chunks: &[ChunkPos],
+        max_ticks: usize,
+    ) -> Result<Vec<FluidTick>, TickSchedulerError> {
+        let mut state = self.state.lock();
+        Self::verify_registered(&state, active_chunks)?;
+        Ok(collect_registered_ticks(
+            &mut state.chunks,
+            active_chunks,
+            ChunkTickLists::fluid_mut,
+            max_ticks,
+        ))
+    }
+
+    fn verify_registered(
+        state: &WorldTickSchedulerState,
+        active_chunks: &[ChunkPos],
+    ) -> Result<(), TickSchedulerError> {
+        for pos in active_chunks {
+            if !state.chunks.contains_key(pos) {
+                return Err(TickSchedulerError::MissingContainer(*pos));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for WorldTickScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl<T: TickKey> ScheduledTick<T> {
     /// Returns the position/type identity used to deduplicate this tick.
@@ -393,56 +687,42 @@ impl<T: TickKey> Default for TickList<T> {
     }
 }
 
-pub(crate) struct CollectedTicks<T: TickKey> {
-    pub(crate) ticks: Vec<ScheduledTick<T>>,
-    pub(crate) changed_containers: Vec<usize>,
-}
-
-/// Advances the active-time clock of each eligible container once.
-///
-/// Returns the indices of non-empty containers whose packed remaining delays
-/// changed and therefore need to be persisted.
-pub(crate) fn advance_tick_containers<T: TickKey>(
-    containers: &mut [&mut TickList<T>],
-) -> Vec<usize> {
-    let mut changed_containers = Vec::new();
-    for (index, container) in containers.iter_mut().enumerate() {
-        if !container.is_empty() {
-            changed_containers.push(index);
-        }
-        container.advance_active_time();
-    }
-    changed_containers
-}
-
 /// Selects at most `max_ticks` ready entries from already-advanced containers.
 ///
 /// Only queue heads compete globally. Revealing the next head after each pop is
 /// what preserves Vanilla's per-chunk deadline ordering when several ticks are
 /// already overdue.
-pub(crate) fn collect_ticks_to_run<T: TickKey>(
-    containers: &mut [&mut TickList<T>],
+fn collect_registered_ticks<T: TickKey>(
+    chunks: &mut FxHashMap<ChunkPos, ChunkTickLists>,
+    active_chunks: &[ChunkPos],
+    select: fn(&mut ChunkTickLists) -> &mut TickList<T>,
     max_ticks: usize,
-) -> CollectedTicks<T> {
-    let mut ready_containers = BinaryHeap::with_capacity(containers.len());
-    for (index, container) in containers.iter_mut().enumerate() {
+) -> Vec<ScheduledTick<T>> {
+    let mut ready_containers = BinaryHeap::with_capacity(active_chunks.len());
+    for (index, pos) in active_chunks.iter().enumerate() {
+        let Some(container) = chunks.get_mut(pos).map(select) else {
+            continue;
+        };
         if let Some(tick) = container.peek_ready() {
             ready_containers.push(ReadyContainer::new(index, tick));
         }
     }
 
     let mut ticks = Vec::with_capacity(max_ticks.min(ready_containers.len()));
-    let mut changed = vec![false; containers.len()];
     while ticks.len() < max_ticks {
         let Some(ready_container) = ready_containers.pop() else {
             break;
         };
-        let container = &mut *containers[ready_container.index];
+        let Some(container) = chunks
+            .get_mut(&active_chunks[ready_container.index])
+            .map(select)
+        else {
+            continue;
+        };
         let Some(tick) = container.pop_ready() else {
             continue;
         };
 
-        changed[ready_container.index] = true;
         ticks.push(tick);
 
         // Vanilla keeps draining the current container while its next head is
@@ -476,15 +756,7 @@ pub(crate) fn collect_ticks_to_run<T: TickKey>(
         }
     }
 
-    let changed_containers = changed
-        .into_iter()
-        .enumerate()
-        .filter_map(|(index, changed)| changed.then_some(index))
-        .collect();
-    CollectedTicks {
-        ticks,
-        changed_containers,
-    }
+    ticks
 }
 
 /// Remaining ticks in the currently collected execution snapshot.
@@ -521,6 +793,7 @@ mod tests {
     use super::*;
     use steel_registry::blocks::Block;
     use steel_registry::blocks::behavior::BlockConfig;
+    use steel_registry::vanilla_fluids;
     use steel_utils::Identifier;
 
     fn test_block() -> BlockRef {
@@ -550,6 +823,32 @@ mod tests {
         sub_tick_order: i64,
     ) -> bool {
         list.schedule(block, pos, delay, priority, sub_tick_order)
+    }
+
+    fn scheduler_with_block_lists(
+        chunks: impl IntoIterator<Item = (ChunkPos, BlockTickList)>,
+    ) -> WorldTickScheduler {
+        let scheduler = WorldTickScheduler::new();
+        {
+            let mut state = scheduler.state.lock();
+            for (pos, block) in chunks {
+                state
+                    .chunks
+                    .insert(pos, ChunkTickLists::new(block, FluidTickList::new()));
+            }
+        }
+        scheduler
+    }
+
+    fn begin_block_tick(
+        scheduler: &WorldTickScheduler,
+        active_chunks: &[ChunkPos],
+        max_ticks: usize,
+    ) -> ScheduledTickBatch<BlockRef> {
+        match scheduler.begin_tick(active_chunks, max_ticks) {
+            Ok(batch) => batch,
+            Err(error) => panic!("test scheduler invariant failed: {error:?}"),
+        }
     }
 
     #[test]
@@ -612,6 +911,7 @@ mod tests {
     #[test]
     fn global_cap_retains_ready_overflow() {
         let mut list = BlockTickList::new();
+        let chunk_pos = ChunkPos::new(0, 0);
         let high_pos = BlockPos::new(0, 0, 0);
         let normal_pos = BlockPos::new(1, 0, 0);
         let overflow_pos = BlockPos::new(2, 0, 0);
@@ -623,9 +923,8 @@ mod tests {
             assert!(schedule(&mut list, test_block(), pos, 1, priority, order));
         }
 
-        let mut containers = [&mut list];
-        assert_eq!(advance_tick_containers(&mut containers), vec![0]);
-        let selected = collect_ticks_to_run(&mut containers, 2);
+        let scheduler = scheduler_with_block_lists([(chunk_pos, list)]);
+        let selected = begin_block_tick(&scheduler, &[chunk_pos], 2);
         assert_eq!(
             selected
                 .ticks
@@ -635,51 +934,64 @@ mod tests {
             vec![high_pos, normal_pos]
         );
         assert_eq!(selected.changed_containers, vec![0]);
-        assert!(list.has_tick(overflow_pos, test_block()));
+        {
+            let state = scheduler.state.lock();
+            let Some(ticks) = state.chunks.get(&chunk_pos) else {
+                panic!("test chunk must remain registered");
+            };
+            assert!(ticks.block.has_tick(overflow_pos, test_block()));
+        }
 
-        let mut containers = [&mut list];
-        assert_eq!(advance_tick_containers(&mut containers), vec![0]);
-        let selected = collect_ticks_to_run(&mut containers, 2);
+        let selected = begin_block_tick(&scheduler, &[chunk_pos], 2);
         assert_eq!(selected.ticks.len(), 1);
         assert_eq!(selected.ticks[0].pos, overflow_pos);
     }
 
     #[test]
-    fn scheduling_after_clock_advance_anchors_to_the_current_active_tick() {
-        let mut list = BlockTickList::new();
+    fn block_and_fluid_collection_share_one_clock_advance() {
+        let chunk_pos = ChunkPos::new(0, 0);
+        let block_pos = BlockPos::new(0, 0, 0);
+        let fluid_pos = BlockPos::new(1, 0, 0);
+        let scheduler = scheduler_with_block_lists([(chunk_pos, BlockTickList::new())]);
+
+        assert!(
+            begin_block_tick(&scheduler, &[chunk_pos], 2)
+                .ticks
+                .is_empty()
+        );
         {
-            let mut containers = [&mut list];
-            assert!(advance_tick_containers(&mut containers).is_empty());
+            let mut state = scheduler.state.lock();
+            let Some(ticks) = state.chunks.get_mut(&chunk_pos) else {
+                panic!("test chunk must remain registered");
+            };
+            assert!(
+                ticks
+                    .block
+                    .schedule(test_block(), block_pos, 0, TickPriority::Normal, 0)
+            );
+            assert!(ticks.fluid.schedule(
+                &vanilla_fluids::WATER,
+                fluid_pos,
+                0,
+                TickPriority::Normal,
+                1
+            ));
         }
 
-        let immediate_pos = BlockPos::new(0, 0, 0);
-        let delayed_pos = BlockPos::new(1, 0, 0);
-        assert!(schedule(
-            &mut list,
-            test_block(),
-            immediate_pos,
-            0,
-            TickPriority::Normal,
-            0
-        ));
-        assert!(schedule(
-            &mut list,
-            test_block(),
-            delayed_pos,
-            1,
-            TickPriority::Normal,
-            1
-        ));
+        let fluids = match scheduler.collect_fluid_ticks(&[chunk_pos], 2) {
+            Ok(ticks) => ticks,
+            Err(error) => panic!("test scheduler invariant failed: {error:?}"),
+        };
+        assert_eq!(
+            fluids.iter().map(|tick| tick.pos).collect::<Vec<_>>(),
+            [fluid_pos]
+        );
 
-        let mut containers = [&mut list];
-        let selected = collect_ticks_to_run(&mut containers, 2);
-        assert_eq!(selected.ticks.len(), 1);
-        assert_eq!(selected.ticks[0].pos, immediate_pos);
-
-        assert_eq!(advance_tick_containers(&mut containers), vec![0]);
-        let selected = collect_ticks_to_run(&mut containers, 2);
-        assert_eq!(selected.ticks.len(), 1);
-        assert_eq!(selected.ticks[0].pos, delayed_pos);
+        let blocks = begin_block_tick(&scheduler, &[chunk_pos], 2);
+        assert_eq!(
+            blocks.ticks.iter().map(|tick| tick.pos).collect::<Vec<_>>(),
+            [block_pos]
+        );
     }
 
     #[test]
@@ -715,14 +1027,18 @@ mod tests {
             2
         ));
 
-        let mut containers = [&mut first_chunk, &mut second_chunk];
-        assert_eq!(advance_tick_containers(&mut containers), vec![0, 1]);
+        let first_pos = ChunkPos::new(0, 0);
+        let second_pos = ChunkPos::new(1, 0);
+        let scheduler =
+            scheduler_with_block_lists([(first_pos, first_chunk), (second_pos, second_chunk)]);
         // Leave the first due heads queued so that all three are overdue next active tick.
-        assert!(collect_ticks_to_run(&mut containers, 0).ticks.is_empty());
+        assert!(
+            begin_block_tick(&scheduler, &[first_pos, second_pos], 0)
+                .ticks
+                .is_empty()
+        );
 
-        let mut containers = [&mut first_chunk, &mut second_chunk];
-        assert_eq!(advance_tick_containers(&mut containers), vec![0, 1]);
-        let selected = collect_ticks_to_run(&mut containers, 3);
+        let selected = begin_block_tick(&scheduler, &[first_pos, second_pos], 3);
         assert_eq!(
             selected
                 .ticks
@@ -738,7 +1054,7 @@ mod tests {
         let current_high_pos = BlockPos::new(16, 0, 0);
         let current_normal_pos = BlockPos::new(17, 0, 0);
         let competing_normal_pos = BlockPos::new(0, 0, 0);
-        let mut current_chunk = BlockTickList::from_saved_ticks(vec![
+        let current_chunk = BlockTickList::from_saved_ticks(vec![
             SavedTick {
                 tick_type: test_block(),
                 pos: current_high_pos,
@@ -752,7 +1068,7 @@ mod tests {
                 priority: TickPriority::Normal,
             },
         ]);
-        let mut competing_chunk = BlockTickList::from_saved_ticks(vec![SavedTick {
+        let competing_chunk = BlockTickList::from_saved_ticks(vec![SavedTick {
             tick_type: test_block(),
             pos: competing_normal_pos,
             delay: 1,
@@ -761,9 +1077,13 @@ mod tests {
 
         // Put the competitor first so its container-index tie-break would win if
         // the current container were reinserted after every pop.
-        let mut containers = [&mut competing_chunk, &mut current_chunk];
-        assert_eq!(advance_tick_containers(&mut containers), vec![0, 1]);
-        let selected = collect_ticks_to_run(&mut containers, 3);
+        let competing_chunk_pos = ChunkPos::new(0, 0);
+        let current_chunk_pos = ChunkPos::new(1, 0);
+        let scheduler = scheduler_with_block_lists([
+            (competing_chunk_pos, competing_chunk),
+            (current_chunk_pos, current_chunk),
+        ]);
+        let selected = begin_block_tick(&scheduler, &[competing_chunk_pos, current_chunk_pos], 3);
 
         assert_eq!(
             selected
@@ -776,8 +1096,68 @@ mod tests {
     }
 
     #[test]
+    fn exact_loaded_head_ties_follow_the_active_scc_order() {
+        let first_tick_pos = BlockPos::new(0, 0, 0);
+        let second_tick_pos = BlockPos::new(16, 0, 0);
+        let first_chunk_pos = ChunkPos::new(0, 0);
+        let second_chunk_pos = ChunkPos::new(1, 0);
+        let first_chunk = BlockTickList::from_saved_ticks(vec![SavedTick {
+            tick_type: test_block(),
+            pos: first_tick_pos,
+            delay: 1,
+            priority: TickPriority::Normal,
+        }]);
+        let second_chunk = BlockTickList::from_saved_ticks(vec![SavedTick {
+            tick_type: test_block(),
+            pos: second_tick_pos,
+            delay: 1,
+            priority: TickPriority::Normal,
+        }]);
+        let scheduler = scheduler_with_block_lists([
+            (first_chunk_pos, first_chunk),
+            (second_chunk_pos, second_chunk),
+        ]);
+
+        let selected = begin_block_tick(&scheduler, &[second_chunk_pos, first_chunk_pos], 2);
+        assert_eq!(
+            selected
+                .ticks
+                .iter()
+                .map(|tick| tick.pos)
+                .collect::<Vec<_>>(),
+            [second_tick_pos, first_tick_pos]
+        );
+    }
+
+    #[test]
+    fn missing_active_container_does_not_partially_advance_clocks() {
+        let registered_pos = ChunkPos::new(0, 0);
+        let missing_pos = ChunkPos::new(1, 0);
+        let mut pending = BlockTickList::new();
+        assert!(schedule(
+            &mut pending,
+            test_block(),
+            BlockPos::new(0, 0, 0),
+            3,
+            TickPriority::Normal,
+            0
+        ));
+        let scheduler = scheduler_with_block_lists([(registered_pos, pending)]);
+
+        let Err(error) = scheduler.begin_tick(&[registered_pos, missing_pos], 1) else {
+            panic!("missing active container must reject the whole collection");
+        };
+        assert_eq!(error, TickSchedulerError::MissingContainer(missing_pos));
+        let state = scheduler.state.lock();
+        let Some(ticks) = state.chunks.get(&registered_pos) else {
+            panic!("test chunk must remain registered");
+        };
+        assert_eq!(ticks.block.pack()[0].delay, 3);
+    }
+
+    #[test]
     fn advancing_pending_ticks_reports_a_persistence_change() {
-        let mut empty = BlockTickList::new();
+        let empty = BlockTickList::new();
         let mut pending = BlockTickList::new();
         assert!(schedule(
             &mut pending,
@@ -789,12 +1169,16 @@ mod tests {
         ));
         assert_eq!(pending.pack()[0].delay, 3);
 
-        {
-            let mut containers = [&mut empty, &mut pending];
-            assert_eq!(advance_tick_containers(&mut containers), vec![1]);
-        }
-
-        assert_eq!(pending.pack()[0].delay, 2);
+        let empty_pos = ChunkPos::new(0, 0);
+        let pending_pos = ChunkPos::new(1, 0);
+        let scheduler = scheduler_with_block_lists([(empty_pos, empty), (pending_pos, pending)]);
+        let selected = begin_block_tick(&scheduler, &[empty_pos, pending_pos], 0);
+        assert_eq!(selected.changed_containers, vec![1]);
+        let state = scheduler.state.lock();
+        let Some(ticks) = state.chunks.get(&pending_pos) else {
+            panic!("test chunk must remain registered");
+        };
+        assert_eq!(ticks.block.pack()[0].delay, 2);
     }
 
     #[test]

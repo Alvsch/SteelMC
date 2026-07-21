@@ -32,7 +32,10 @@ use steel_registry::structure::{
     LiquidSettingsData, OceanRuinBiomeTempData, RuinedPortalPlacementData, TerrainAdjustment,
 };
 use steel_registry::template_pool::{PoolElement, ProcessorList, Projection};
-use steel_registry::{REGISTRY, Registry, RegistryEntry, RegistryExt, vanilla_biomes};
+use steel_registry::{
+    REGISTRY, Registry, RegistryEntry, RegistryExt, blocks::BlockRef, fluid::FluidRef,
+    vanilla_biomes,
+};
 use steel_utils::{
     BlockPos, BlockStateId, ChunkPos, Direction, Identifier, PackedChunkPos, Rotation,
 };
@@ -614,13 +617,14 @@ impl ChunkStorage {
         // Serialize scheduled ticks
         let (block_ticks, fluid_ticks) = match chunk {
             ChunkAccess::Full(c) => {
-                let bt = Self::block_ticks_to_persistent(&c.block_ticks.lock(), pos);
-                let ft = Self::fluid_ticks_to_persistent(&c.fluid_ticks.lock(), pos);
+                let snapshot = c.scheduled_tick_snapshot();
+                let bt = Self::block_ticks_to_persistent(snapshot.block, pos);
+                let ft = Self::fluid_ticks_to_persistent(snapshot.fluid, pos);
                 (bt, ft)
             }
             ChunkAccess::Proto(c) => {
-                let bt = Self::block_ticks_to_persistent(&c.block_ticks.lock(), pos);
-                let ft = Self::fluid_ticks_to_persistent(&c.fluid_ticks.lock(), pos);
+                let bt = Self::block_ticks_to_persistent(c.block_ticks.lock().pack(), pos);
+                let ft = Self::fluid_ticks_to_persistent(c.fluid_ticks.lock().pack(), pos);
                 (bt, ft)
             }
             ChunkAccess::Unloaded => unreachable!(),
@@ -1621,11 +1625,10 @@ impl ChunkStorage {
 
     /// Converts block ticks to persistent format for saving.
     fn block_ticks_to_persistent(
-        ticks: &BlockTickList,
+        ticks: Vec<SavedTick<BlockRef>>,
         chunk_pos: ChunkPos,
     ) -> Vec<PersistentTick> {
         ticks
-            .pack()
             .into_iter()
             .map(|t| PersistentTick {
                 x: (t.pos.0.x - chunk_pos.0.x * 16) as u8,
@@ -1640,11 +1643,10 @@ impl ChunkStorage {
 
     /// Converts fluid ticks to persistent format for saving.
     fn fluid_ticks_to_persistent(
-        ticks: &FluidTickList,
+        ticks: Vec<SavedTick<FluidRef>>,
         chunk_pos: ChunkPos,
     ) -> Vec<PersistentTick> {
         ticks
-            .pack()
             .into_iter()
             .map(|t| PersistentTick {
                 x: (t.pos.0.x - chunk_pos.0.x * 16) as u8,
@@ -2932,12 +2934,14 @@ mod tests {
         entities::{EndCrystalEntity, RawEntity},
         init_test_entities, next_entity_id,
     };
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
     use glam::DVec3;
     use rustc_hash::FxHashMap;
     use steel_registry::test_support::init_test_registry;
     use steel_registry::vanilla_block_entity_types;
     use steel_registry::vanilla_blocks;
     use steel_registry::vanilla_entities;
+    use steel_registry::vanilla_fluids;
     use steel_utils::BoundingBox;
     use steel_utils::types::UpdateFlags;
     use steel_worldgen::structure::StructureReferenceSet;
@@ -3119,6 +3123,39 @@ mod tests {
             panic!("forced save prep should serialize the chunk");
         };
         assert!(chunk.is_dirty());
+    }
+
+    #[test]
+    fn full_chunk_save_snapshots_world_owned_scheduled_ticks() {
+        init_test_registry();
+        init_runtime_registries();
+        let world = fresh_test_world("world_owned_tick_save");
+        let chunk_pos = ChunkPos::new(0, 0);
+        let holder = insert_ready_full_chunk(&world, chunk_pos);
+        let block_pos = BlockPos::new(1, 64, 2);
+        let fluid_pos = BlockPos::new(3, 64, 4);
+        world.schedule_block_tick(block_pos, &vanilla_blocks::STONE, 7, TickPriority::High);
+        world.schedule_fluid_tick(fluid_pos, &vanilla_fluids::WATER, 11, TickPriority::Low);
+
+        let Some(chunk) = holder.try_chunk(ChunkStatus::Full) else {
+            panic!("inserted test chunk must remain Full");
+        };
+        let Some(prepared) = ChunkStorage::prepare_chunk_save(&chunk, &[], true) else {
+            panic!("forced Full-chunk save must produce a snapshot");
+        };
+
+        assert_eq!(prepared.persistent.block_ticks.len(), 1);
+        assert_eq!(prepared.persistent.block_ticks[0].delay, 7);
+        assert_eq!(
+            prepared.persistent.block_ticks[0].priority,
+            TickPriority::High as i8
+        );
+        assert_eq!(prepared.persistent.fluid_ticks.len(), 1);
+        assert_eq!(prepared.persistent.fluid_ticks[0].delay, 11);
+        assert_eq!(
+            prepared.persistent.fluid_ticks[0].priority,
+            TickPriority::Low as i8
+        );
     }
 
     fn test_persistent_end_crystal(pos: DVec3) -> PersistentEntity {

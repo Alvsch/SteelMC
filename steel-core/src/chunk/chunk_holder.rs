@@ -1232,6 +1232,10 @@ impl ChunkHolder {
             }
         }
 
+        if status == ChunkStatus::Full {
+            self.register_full_chunk_ticks();
+        }
+
         self.mark_status_work_published(status);
         self.sender.send_modify(|chunk| match chunk {
             ChunkResult::Ok(current_status) if *current_status < status => {
@@ -1267,8 +1271,27 @@ impl ChunkHolder {
             proto.set_status(status);
         }
         self.data.with_write(|c| *c = chunk);
+        if status == ChunkStatus::Full {
+            self.register_full_chunk_ticks();
+        }
         self.mark_status_work_published(status);
         self.sender.send_replace(ChunkResult::Ok(status));
+    }
+
+    /// Registers tick queues before Full status becomes observable to watchers.
+    fn register_full_chunk_ticks(&self) {
+        let chunk = self.data.read();
+        let ChunkAccess::Full(full) = &*chunk else {
+            panic!("Full status must be backed by a LevelChunk");
+        };
+        let Some(world) = full.get_level() else {
+            // Focused holder tests construct chunks without a live world. Real
+            // loaded/generated chunks always carry the WorldGenContext world.
+            return;
+        };
+        if let Err(error) = world.register_full_chunk_ticks(full) {
+            panic!("Full chunk scheduled-tick registration invariant failed: {error:?}");
+        }
     }
 
     fn publish_full(self: &Arc<Self>) {
@@ -1343,7 +1366,9 @@ mod tests {
     use crate::behavior::init_behaviors;
     use crate::chunk::proto_chunk::ProtoChunk;
     use crate::chunk::section::{ChunkSection, Sections};
-    use steel_registry::test_support::init_test_registry;
+    use crate::test_support::fresh_test_world;
+    use crate::world::tick_scheduler::TickPriority;
+    use steel_registry::{test_support::init_test_registry, vanilla_blocks, vanilla_fluids};
 
     fn init_chunk_test_registry() {
         init_test_registry();
@@ -1439,6 +1464,52 @@ mod tests {
 
         assert_eq!(holder.entity_visibility(), EntityVisibility::Tracked);
         assert!(holder.is_full_status_initialized());
+    }
+
+    #[test]
+    fn full_registration_transfers_prepublication_block_and_fluid_ticks() {
+        init_chunk_test_registry();
+        let world = fresh_test_world("prepublication_tick_transfer");
+        let chunk_pos = ChunkPos::new(0, 0);
+        let min_y = world.get_min_y();
+        let height = world.get_height();
+        let sections = (0..height / 16)
+            .map(|_| ChunkSection::new_empty())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let proto = ProtoChunk::new(
+            Sections::from_owned(sections),
+            chunk_pos,
+            min_y,
+            height,
+            Arc::downgrade(&world),
+        );
+        proto.set_status(ChunkStatus::Light);
+        let block_pos = BlockPos::new(1, min_y + 1, 1);
+        let fluid_pos = BlockPos::new(2, min_y + 1, 2);
+        proto.schedule_block_tick(block_pos, &vanilla_blocks::STONE, TickPriority::High);
+        proto.schedule_fluid_tick(fluid_pos, &vanilla_fluids::WATER, TickPriority::Low);
+
+        let holder = Arc::new(ChunkHolder::new(
+            chunk_pos,
+            ChunkTicketLevel::FULL_CHUNK,
+            Some(ChunkTicketLevel::FULL_CHUNK),
+            min_y,
+            height,
+        ));
+        let _ = world
+            .chunk_map
+            .chunks
+            .insert_sync(chunk_pos, Arc::clone(&holder));
+        holder.insert_chunk(ChunkAccess::Proto(proto), ChunkStatus::Light);
+        holder.upgrade_to_full(Arc::downgrade(&world));
+
+        assert!(!world.has_registered_full_chunk_ticks(chunk_pos));
+        holder.finish_generation_status(ChunkStatus::Full);
+
+        assert!(world.has_registered_full_chunk_ticks(chunk_pos));
+        assert!(world.has_scheduled_block_tick(block_pos, &vanilla_blocks::STONE));
+        assert!(world.has_scheduled_fluid_tick(fluid_pos, &vanilla_fluids::WATER));
     }
 
     #[test]

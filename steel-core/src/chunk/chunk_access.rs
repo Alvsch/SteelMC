@@ -764,13 +764,7 @@ impl ChunkAccess {
     ) {
         match self {
             Self::Full(chunk) => {
-                if chunk
-                    .block_ticks
-                    .lock()
-                    .schedule(block, pos, delay, priority, sub_tick_order)
-                {
-                    chunk.dirty.store(true, Ordering::Release);
-                }
+                chunk.schedule_block_tick(pos, block, delay, priority, sub_tick_order);
             }
             Self::Proto(proto_chunk) => proto_chunk.schedule_block_tick(pos, block, priority),
             Self::Unloaded => unreachable!(),
@@ -788,13 +782,7 @@ impl ChunkAccess {
     ) {
         match self {
             Self::Full(chunk) => {
-                if chunk
-                    .fluid_ticks
-                    .lock()
-                    .schedule(fluid, pos, delay, priority, sub_tick_order)
-                {
-                    chunk.dirty.store(true, Ordering::Release);
-                }
+                chunk.schedule_fluid_tick(pos, fluid, delay, priority, sub_tick_order);
             }
             Self::Proto(proto_chunk) => proto_chunk.schedule_fluid_tick(pos, fluid, priority),
             Self::Unloaded => unreachable!(),

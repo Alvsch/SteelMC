@@ -57,9 +57,7 @@ use crate::chunk::{
 use crate::chunk_saver::ChunkStorage;
 use crate::player::connection::NetworkConnection;
 use crate::world::World;
-use crate::world::tick_scheduler::{
-    BlockTick, FluidTick, advance_tick_containers, collect_ticks_to_run,
-};
+use crate::world::tick_scheduler::{BlockTick, FluidTick};
 use crate::worldgen::{ChunkGeneratorType, WorldGenContext};
 use crate::{entity::Entity, player::Player};
 
@@ -1798,10 +1796,12 @@ impl ChunkMap {
                 )
                 .entered();
                 let start = Instant::now();
-                let ready_block_ticks = Self::collect_scheduled_block_ticks(&tickable_chunks);
+                let ready_block_ticks =
+                    Self::collect_scheduled_block_ticks(world, &tickable_chunks);
                 Self::execute_scheduled_block_ticks(world, ready_block_ticks);
 
-                let ready_fluid_ticks = Self::collect_scheduled_fluid_ticks(&tickable_chunks);
+                let ready_fluid_ticks =
+                    Self::collect_scheduled_fluid_ticks(world, &tickable_chunks);
                 Self::execute_scheduled_fluid_ticks(world, ready_fluid_ticks);
 
                 for tickable_chunk in &tickable_chunks {
@@ -2036,7 +2036,10 @@ impl ChunkMap {
     }
 
     /// Advances both active clocks and collects this tick's block batch.
-    fn collect_scheduled_block_ticks(tickable_chunks: &[TickableChunk]) -> Vec<BlockTick> {
+    fn collect_scheduled_block_ticks(
+        world: &World,
+        tickable_chunks: &[TickableChunk],
+    ) -> Vec<BlockTick> {
         let full_chunk_guards: Vec<_> = tickable_chunks
             .iter()
             .filter_map(|tickable| tickable.holder.try_chunk(ChunkStatus::Full))
@@ -2045,35 +2048,21 @@ impl ChunkMap {
             .iter()
             .filter_map(|chunk| chunk.as_full())
             .collect();
+        let active_chunks = level_chunks
+            .iter()
+            .map(|chunk| chunk.pos)
+            .collect::<Vec<_>>();
 
-        let (advanced_block_containers, collected) = {
-            let mut tick_guards: Vec<_> = level_chunks
-                .iter()
-                .map(|chunk| chunk.block_ticks.lock())
-                .collect();
-            let mut tick_lists: Vec<_> = tick_guards.iter_mut().map(|ticks| &mut **ticks).collect();
-            let advanced = advance_tick_containers(&mut tick_lists);
-            let collected = collect_ticks_to_run(&mut tick_lists, MAX_SCHEDULED_TICKS_PER_TICK);
-            (advanced, collected)
-        };
-        for index in advanced_block_containers
-            .into_iter()
-            .chain(collected.changed_containers.iter().copied())
-        {
-            level_chunks[index].dirty.store(true, Ordering::Release);
-        }
-
-        // Both clocks enter this active chunk tick before callbacks run. Fluid collection
-        // remains after block execution, matching `ServerLevel.tick`.
-        let advanced_fluid_containers = {
-            let mut tick_guards: Vec<_> = level_chunks
-                .iter()
-                .map(|chunk| chunk.fluid_ticks.lock())
-                .collect();
-            let mut tick_lists: Vec<_> = tick_guards.iter_mut().map(|ticks| &mut **ticks).collect();
-            advance_tick_containers(&mut tick_lists)
-        };
-        for index in advanced_fluid_containers {
+        // `tickable_chunks` retains the optimized SCC traversal order. It is
+        // also Steel's documented final order for exact cross-chunk head ties.
+        let collected =
+            match world.begin_scheduled_tick_phase(&active_chunks, MAX_SCHEDULED_TICKS_PER_TICK) {
+                Ok(collected) => collected,
+                Err(error) => {
+                    panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}")
+                }
+            };
+        for index in collected.changed_containers {
             level_chunks[index].dirty.store(true, Ordering::Release);
         }
 
@@ -2081,7 +2070,10 @@ impl ChunkMap {
     }
 
     /// Collects this tick's fluid batch after block callbacks have run.
-    fn collect_scheduled_fluid_ticks(tickable_chunks: &[TickableChunk]) -> Vec<FluidTick> {
+    fn collect_scheduled_fluid_ticks(
+        world: &World,
+        tickable_chunks: &[TickableChunk],
+    ) -> Vec<FluidTick> {
         let full_chunk_guards: Vec<_> = tickable_chunks
             .iter()
             .filter_map(|tickable| tickable.holder.try_chunk(ChunkStatus::Full))
@@ -2090,18 +2082,17 @@ impl ChunkMap {
             .iter()
             .filter_map(|chunk| chunk.as_full())
             .collect();
-        let collected = {
-            let mut tick_guards: Vec<_> = level_chunks
-                .iter()
-                .map(|chunk| chunk.fluid_ticks.lock())
-                .collect();
-            let mut tick_lists: Vec<_> = tick_guards.iter_mut().map(|ticks| &mut **ticks).collect();
-            collect_ticks_to_run(&mut tick_lists, MAX_SCHEDULED_TICKS_PER_TICK)
-        };
-        for index in &collected.changed_containers {
-            level_chunks[*index].dirty.store(true, Ordering::Release);
+        let active_chunks = level_chunks
+            .iter()
+            .map(|chunk| chunk.pos)
+            .collect::<Vec<_>>();
+        match world.collect_scheduled_fluid_tick_batch(&active_chunks, MAX_SCHEDULED_TICKS_PER_TICK)
+        {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}")
+            }
         }
-        collected.ticks
     }
 
     /// Executes ready scheduled block ticks in their collected order.
@@ -2256,12 +2247,14 @@ impl ChunkMap {
                     true // keep until clean
                 } else if holder.try_chunk(ChunkStatus::Empty).is_none() {
                     let world = self.world_gen_context.world();
+                    world.unregister_full_chunk_ticks(*pos);
                     world.on_entity_chunk_unload_finalized(*pos);
                     false
                 } else {
                     // Clean and no refs - release region handle and remove
                     let pos = *pos;
                     let world = self.world_gen_context.world();
+                    world.unregister_full_chunk_ticks(pos);
                     world.on_entity_chunk_unload_finalized(pos);
                     let map_clone = self.clone();
                     self.task_tracker.spawn(async move {
@@ -2540,7 +2533,7 @@ mod tests {
     use crate::player::{ClientInformation, GameProfile, PlayerConnection, ResetReason};
     use crate::server::Server;
     use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
-    use crate::world::tick_scheduler::{BlockTickList, FluidTickList};
+    use crate::world::tick_scheduler::{BlockTickList, FluidTickList, TickPriority};
     use crate::worldgen::EmptyChunkGenerator;
     use std::io::Cursor;
     use std::thread;
@@ -3296,6 +3289,101 @@ mod tests {
             Some(&false)
         );
         assert!(drained[1].1.changed_positions.contains(&east_block));
+    }
+
+    #[test]
+    fn world_owned_scheduler_collects_a_registered_full_chunk_tick() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("world_owned_tick_collection");
+        let chunk_pos = ChunkPos::new(0, 0);
+        let block_pos = BlockPos::new(1, 64, 1);
+        insert_ready_full_chunk(&world, chunk_pos);
+        world.schedule_block_tick(block_pos, &vanilla_blocks::STONE, 1, TickPriority::Normal);
+        assert!(world.has_scheduled_block_tick(block_pos, &vanilla_blocks::STONE));
+
+        world.chunk_map.tick_game(&world, 1, 0, true);
+
+        assert!(!world.has_scheduled_block_tick(block_pos, &vanilla_blocks::STONE));
+    }
+
+    #[test]
+    fn registered_full_chunks_use_active_order_for_equal_explicit_tick_heads() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("registered_explicit_tick_tie");
+        let first_chunk_pos = ChunkPos::new(0, 0);
+        let second_chunk_pos = ChunkPos::new(1, 0);
+        let first_tick_pos = BlockPos::new(1, 64, 1);
+        let second_tick_pos = BlockPos::new(17, 64, 1);
+        let first = insert_ready_full_chunk(&world, first_chunk_pos);
+        let second = insert_ready_full_chunk(&world, second_chunk_pos);
+
+        for (holder, tick_pos) in [(&first, first_tick_pos), (&second, second_tick_pos)] {
+            let Some(chunk) = holder.try_chunk(ChunkStatus::Full) else {
+                panic!("inserted test chunk must remain Full");
+            };
+            chunk.schedule_block_tick(tick_pos, &vanilla_blocks::STONE, 1, TickPriority::Normal, 0);
+        }
+
+        let batch = match world.begin_scheduled_tick_phase(
+            &[second_chunk_pos, first_chunk_pos],
+            MAX_SCHEDULED_TICKS_PER_TICK,
+        ) {
+            Ok(batch) => batch,
+            Err(error) => panic!("test scheduler invariant failed: {error:?}"),
+        };
+        assert_eq!(
+            batch.ticks.iter().map(|tick| tick.pos).collect::<Vec<_>>(),
+            [second_tick_pos, first_tick_pos]
+        );
+    }
+
+    #[test]
+    fn final_full_chunk_unload_unregisters_world_owned_tick_queues() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("world_owned_tick_unload");
+        let chunk_pos = ChunkPos::new(0, 0);
+        let holder = insert_ready_full_chunk(&world, chunk_pos);
+        let Some(chunk) = holder.try_chunk(ChunkStatus::Full) else {
+            panic!("inserted test chunk must remain Full");
+        };
+        chunk.take_dirty();
+        drop(chunk);
+        assert!(world.has_registered_full_chunk_ticks(chunk_pos));
+
+        world.chunk_map.update_chunk_level(chunk_pos, None, None);
+        drop(holder);
+        let _runtime_guard = world.chunk_map.chunk_runtime.enter();
+        world.chunk_map.process_unloads(&FxHashSet::default());
+
+        assert!(!world.chunk_map.unloading_chunks.contains_sync(&chunk_pos));
+        assert!(!world.has_registered_full_chunk_ticks(chunk_pos));
+    }
+
+    #[test]
+    fn unloading_full_chunk_revival_keeps_world_owned_tick_queues() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("world_owned_tick_revival");
+        let chunk_pos = ChunkPos::new(0, 0);
+        let block_pos = BlockPos::new(1, 64, 1);
+        let original = insert_ready_full_chunk(&world, chunk_pos);
+        world.schedule_block_tick(block_pos, &vanilla_blocks::STONE, 3, TickPriority::Normal);
+
+        world.chunk_map.update_chunk_level(chunk_pos, None, None);
+        assert!(world.has_registered_full_chunk_ticks(chunk_pos));
+        let Some(revived) = world.chunk_map.update_chunk_level(
+            chunk_pos,
+            Some(ChunkTicketLevel::BLOCK_TICKING_CHUNK),
+            Some(ChunkTicketLevel::BLOCK_TICKING_CHUNK),
+        ) else {
+            panic!("restored ticket level must revive the unloading holder");
+        };
+
+        assert!(Arc::ptr_eq(&original, &revived));
+        assert!(world.has_scheduled_block_tick(block_pos, &vanilla_blocks::STONE));
     }
 
     #[test]
