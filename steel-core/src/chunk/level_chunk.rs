@@ -49,8 +49,8 @@ use crate::chunk::{
 };
 use crate::entity::SharedEntity;
 use crate::world::tick_scheduler::{
-    BlockTickList, ChunkTickLists, FluidTickList, ScheduledTickSnapshot, TickPriority,
-    TickSchedulerError,
+    BlockTickList, ChunkTickContainer, ChunkTickLists, FluidTickList, ScheduledTickSnapshot,
+    TickPriority, TickSchedulerError,
 };
 use crate::world::{World, game_event_listener::GameEventListenerCount};
 use steel_worldgen::structure::{StructureReferenceMap, StructureStartMap};
@@ -88,10 +88,8 @@ pub struct LevelChunk {
     pub(crate) game_event_listeners: LevelChunkGameEventListeners,
     /// Main-boundary activation state and callbacks staged by background loading.
     block_entity_activation: SyncMutex<BlockEntityActivation>,
-    /// Scheduled ticks awaiting transfer to the world owner before Full publication.
-    ///
-    /// This is `None` for every published Full chunk.
-    unregistered_tick_lists: SyncMutex<Option<ChunkTickLists>>,
+    /// Stable block and fluid scheduled-tick storage owned by this chunk.
+    scheduled_ticks: Arc<ChunkTickContainer>,
     /// Structure starts originating in this chunk (carried from proto).
     pub structure_starts: SyncRwLock<StructureStartMap>,
     /// References to structures from nearby origin chunks (carried from proto).
@@ -277,7 +275,7 @@ impl LevelChunk {
             block_entities: BlockEntityStorage::new(),
             game_event_listeners: LevelChunkGameEventListeners::new(game_event_listener_count),
             block_entity_activation: SyncMutex::new(BlockEntityActivation::default()),
-            unregistered_tick_lists: SyncMutex::new(Some(ChunkTickLists::new(
+            scheduled_ticks: Arc::new(ChunkTickContainer::new(ChunkTickLists::new(
                 block_ticks,
                 fluid_ticks,
             ))),
@@ -370,7 +368,7 @@ impl LevelChunk {
             block_entities: BlockEntityStorage::new(),
             game_event_listeners: LevelChunkGameEventListeners::new(game_event_listener_count),
             block_entity_activation: SyncMutex::new(BlockEntityActivation::default()),
-            unregistered_tick_lists: SyncMutex::new(Some(ChunkTickLists::new(
+            scheduled_ticks: Arc::new(ChunkTickContainer::new(ChunkTickLists::new(
                 block_ticks,
                 fluid_ticks,
             ))),
@@ -620,9 +618,9 @@ impl LevelChunk {
             .reconcile(&holder, block_entity, ticker);
     }
 
-    /// Transfers the pre-publication queues into the world's scheduler.
-    pub(crate) fn take_unregistered_tick_lists(&self) -> Option<ChunkTickLists> {
-        self.unregistered_tick_lists.lock().take()
+    /// Returns this chunk's stable scheduled-tick container.
+    pub(crate) const fn scheduled_tick_container(&self) -> &Arc<ChunkTickContainer> {
+        &self.scheduled_ticks
     }
 
     pub(crate) fn schedule_unregistered_block_tick(
@@ -633,11 +631,13 @@ impl LevelChunk {
         priority: TickPriority,
         sub_tick_order: i64,
     ) -> Option<bool> {
-        self.unregistered_tick_lists.lock().as_mut().map(|ticks| {
-            ticks
-                .block_mut()
-                .schedule(block, pos, trigger_tick, priority, sub_tick_order)
-        })
+        self.scheduled_ticks.schedule_unregistered_block(
+            block,
+            pos,
+            trigger_tick,
+            priority,
+            sub_tick_order,
+        )
     }
 
     pub(crate) fn schedule_unregistered_fluid_tick(
@@ -648,46 +648,36 @@ impl LevelChunk {
         priority: TickPriority,
         sub_tick_order: i64,
     ) -> Option<bool> {
-        self.unregistered_tick_lists.lock().as_mut().map(|ticks| {
-            ticks
-                .fluid_mut()
-                .schedule(fluid, pos, trigger_tick, priority, sub_tick_order)
-        })
+        self.scheduled_ticks.schedule_unregistered_fluid(
+            fluid,
+            pos,
+            trigger_tick,
+            priority,
+            sub_tick_order,
+        )
     }
 
-    pub(crate) fn has_unregistered_block_tick(
+    pub(crate) fn has_scheduled_block_tick(
         &self,
         pos: BlockPos,
         block: BlockRef,
-    ) -> Option<bool> {
-        self.unregistered_tick_lists
-            .lock()
-            .as_ref()
-            .map(|ticks| ticks.block().has_tick(pos, block))
+    ) -> Result<bool, TickSchedulerError> {
+        self.scheduled_ticks
+            .has_block(pos, block)
+            .ok_or(TickSchedulerError::MissingContainer(self.pos))
     }
 
-    pub(crate) fn has_unregistered_fluid_tick(
+    pub(crate) fn has_scheduled_fluid_tick(
         &self,
         pos: BlockPos,
         fluid: FluidRef,
-    ) -> Option<bool> {
-        self.unregistered_tick_lists
-            .lock()
-            .as_ref()
-            .map(|ticks| ticks.fluid().has_tick(pos, fluid))
+    ) -> Result<bool, TickSchedulerError> {
+        self.scheduled_ticks
+            .has_fluid(pos, fluid)
+            .ok_or(TickSchedulerError::MissingContainer(self.pos))
     }
 
-    pub(crate) fn snapshot_unregistered_tick_lists(
-        &self,
-        current_tick: i64,
-    ) -> Option<ScheduledTickSnapshot> {
-        self.unregistered_tick_lists
-            .lock()
-            .as_ref()
-            .map(|ticks| ticks.snapshot(current_tick))
-    }
-
-    /// Schedules through the world owner, or through local pre-publication
+    /// Schedules through the world index, or through local pre-publication
     /// storage when this chunk has no live world (as in focused unit tests).
     pub(crate) fn schedule_block_tick(
         &self,
@@ -761,12 +751,11 @@ impl LevelChunk {
 
     /// Takes an owned persistence snapshot without exposing live scheduler data.
     pub(crate) fn scheduled_tick_snapshot(&self) -> ScheduledTickSnapshot {
-        let result = if let Some(world) = self.get_level() {
-            world.scheduled_tick_snapshot(self)
-        } else {
-            self.snapshot_unregistered_tick_lists(0)
-                .ok_or(TickSchedulerError::MissingContainer(self.pos))
-        };
+        let current_tick = self.get_level().map_or(0, |world| world.game_time());
+        let result = self
+            .scheduled_ticks
+            .snapshot(current_tick)
+            .ok_or(TickSchedulerError::MissingContainer(self.pos));
         match result {
             Ok(snapshot) => snapshot,
             Err(error) => panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}"),

@@ -27,15 +27,21 @@
 
 use std::{
     cmp::Ordering,
-    collections::BinaryHeap,
+    collections::{BTreeSet, BinaryHeap},
     ptr,
-    sync::atomic::{AtomicI64, Ordering as AtomicOrdering},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicI64, AtomicUsize, Ordering as AtomicOrdering},
+    },
 };
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use steel_registry::blocks::BlockRef;
 use steel_registry::fluid::FluidRef;
-use steel_utils::{BlockPos, ChunkPos, locks::SyncMutex};
+use steel_utils::{
+    BlockPos, ChunkPos, PackedChunkPos,
+    locks::{SyncMutex, SyncRwLock},
+};
 
 use crate::chunk::level_chunk::LevelChunk;
 
@@ -145,10 +151,6 @@ pub type BlockTickList = TickList<BlockRef>;
 pub type FluidTickList = TickList<FluidRef>;
 
 /// Block and fluid scheduled-tick queues belonging to one Full chunk.
-///
-/// Full chunks transfer this pair into [`WorldTickScheduler`] before their Full
-/// status is published. Keeping both queues under the same world scheduler lock
-/// makes the block/fluid phase boundary atomic without locking every chunk.
 #[derive(Debug, Default)]
 pub(crate) struct ChunkTickLists {
     block: BlockTickList,
@@ -177,8 +179,111 @@ impl ChunkTickLists {
         &mut self.fluid
     }
 
+    fn packing_snapshot(&self) -> ChunkTickPackingSnapshot {
+        ChunkTickPackingSnapshot {
+            block: self.block.packing_snapshot(),
+            fluid: self.fluid.packing_snapshot(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChunkTickContainerLifecycle {
+    PrePublication,
+    Registered,
+    Finalized,
+}
+
+#[derive(Debug)]
+struct ChunkTickContainerState {
+    lifecycle: ChunkTickContainerLifecycle,
+    lists: ChunkTickLists,
+}
+
+/// Stable scheduled-tick storage owned by one `LevelChunk`.
+///
+/// The world scheduler retains a shared handle only while the chunk is registered and indexes
+/// its current heads. Persistence reads this container directly, so packing one chunk never
+/// retains the world scheduler metadata lock.
+#[derive(Debug)]
+pub(crate) struct ChunkTickContainer {
+    state: SyncMutex<ChunkTickContainerState>,
+}
+
+impl ChunkTickContainer {
     #[must_use]
-    pub(crate) fn snapshot(&self, current_tick: i64) -> ScheduledTickSnapshot {
+    pub(crate) const fn new(lists: ChunkTickLists) -> Self {
+        Self {
+            state: SyncMutex::new(ChunkTickContainerState {
+                lifecycle: ChunkTickContainerLifecycle::PrePublication,
+                lists,
+            }),
+        }
+    }
+
+    pub(crate) fn schedule_unregistered_block(
+        &self,
+        block: BlockRef,
+        pos: BlockPos,
+        trigger_tick: i64,
+        priority: TickPriority,
+        sub_tick_order: i64,
+    ) -> Option<bool> {
+        let mut state = self.state.lock();
+        (state.lifecycle == ChunkTickContainerLifecycle::PrePublication).then(|| {
+            state
+                .lists
+                .block_mut()
+                .schedule(block, pos, trigger_tick, priority, sub_tick_order)
+        })
+    }
+
+    pub(crate) fn schedule_unregistered_fluid(
+        &self,
+        fluid: FluidRef,
+        pos: BlockPos,
+        trigger_tick: i64,
+        priority: TickPriority,
+        sub_tick_order: i64,
+    ) -> Option<bool> {
+        let mut state = self.state.lock();
+        (state.lifecycle == ChunkTickContainerLifecycle::PrePublication).then(|| {
+            state
+                .lists
+                .fluid_mut()
+                .schedule(fluid, pos, trigger_tick, priority, sub_tick_order)
+        })
+    }
+
+    pub(crate) fn has_block(&self, pos: BlockPos, block: BlockRef) -> Option<bool> {
+        let state = self.state.lock();
+        (state.lifecycle != ChunkTickContainerLifecycle::Finalized)
+            .then(|| state.lists.block().has_tick(pos, block))
+    }
+
+    pub(crate) fn has_fluid(&self, pos: BlockPos, fluid: FluidRef) -> Option<bool> {
+        let state = self.state.lock();
+        (state.lifecycle != ChunkTickContainerLifecycle::Finalized)
+            .then(|| state.lists.fluid().has_tick(pos, fluid))
+    }
+
+    pub(crate) fn snapshot(&self, current_tick: i64) -> Option<ScheduledTickSnapshot> {
+        let packing = {
+            let state = self.state.lock();
+            (state.lifecycle != ChunkTickContainerLifecycle::Finalized)
+                .then(|| state.lists.packing_snapshot())
+        }?;
+        Some(packing.pack(current_tick))
+    }
+}
+
+struct ChunkTickPackingSnapshot {
+    block: TickListPackingSnapshot<BlockRef>,
+    fluid: TickListPackingSnapshot<FluidRef>,
+}
+
+impl ChunkTickPackingSnapshot {
+    fn pack(self, current_tick: i64) -> ScheduledTickSnapshot {
         ScheduledTickSnapshot {
             block: self.block.pack(current_tick),
             fluid: self.fluid.pack(current_tick),
@@ -197,8 +302,10 @@ pub(crate) struct ScheduledTickSnapshot {
 pub(crate) enum TickSchedulerError {
     /// A second Full chunk attempted to register the same position.
     AlreadyRegistered(ChunkPos),
-    /// Neither the world scheduler nor the unpublished Full chunk owns queues.
+    /// The required chunk-owned container is unavailable or already finalized.
     MissingContainer(ChunkPos),
+    /// The world index and chunk refer to different containers at the same position.
+    ContainerMismatch(ChunkPos),
 }
 
 /// Ready ticks and the active containers whose persisted delays changed.
@@ -207,24 +314,173 @@ pub(crate) struct ScheduledTickBatch<T: TickKey> {
     pub(crate) changed_containers: Vec<usize>,
 }
 
-/// World owner for all live Full-chunk scheduled block and fluid ticks.
+/// World index for registered Full-chunk scheduled block and fluid containers.
 ///
-/// The mutex is held only while registering, scheduling, querying, snapshotting,
-/// or collecting a batch. It is never held while block/fluid callbacks run.
-/// A scheduling call linearizes when it acquires this mutex to insert. Reserving
-/// a sub-tick order alone does not make the tick visible to a concurrent
-/// collection; if collection acquires first, the call can only participate in a
-/// later collection.
+/// Chunks own the queues used for persistence. The metadata mutex retains shared handles, current
+/// heads, and active deadline sets; packing never acquires it. The phase lock gives collection a
+/// single world-wide cutoff without retaining any scheduler lock during callbacks.
 pub(crate) struct WorldTickScheduler {
     next_sub_tick_order: AtomicI64,
+    phase: SyncRwLock<()>,
     state: SyncMutex<WorldTickSchedulerState>,
 }
 
 #[derive(Debug, Default)]
 struct WorldTickSchedulerState {
-    chunks: FxHashMap<ChunkPos, ChunkTickLists>,
-    block_next_tick: FxHashMap<ChunkPos, i64>,
-    fluid_next_tick: FxHashMap<ChunkPos, i64>,
+    chunks: FxHashMap<ChunkPos, RegisteredChunkTicks>,
+    active_block_deadlines: BTreeSet<(i64, PackedChunkPos)>,
+    active_fluid_deadlines: BTreeSet<(i64, PackedChunkPos)>,
+    active_generation: u64,
+}
+
+#[derive(Debug)]
+struct RegisteredChunkTicks {
+    container: Arc<ChunkTickContainer>,
+    block_head: Option<i64>,
+    fluid_head: Option<i64>,
+    active: Option<ActiveChunkRank>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActiveChunkRank {
+    generation: u64,
+    rank: usize,
+}
+
+#[derive(Clone, Copy)]
+enum TickKind {
+    Block,
+    Fluid,
+}
+
+struct ActiveTickContainer {
+    pos: ChunkPos,
+    rank: usize,
+    container: Arc<ChunkTickContainer>,
+}
+
+struct TickHeadUpdate {
+    pos: ChunkPos,
+    trigger_tick: Option<i64>,
+}
+
+impl RegisteredChunkTicks {
+    const fn head(&self, kind: TickKind) -> Option<i64> {
+        match kind {
+            TickKind::Block => self.block_head,
+            TickKind::Fluid => self.fluid_head,
+        }
+    }
+
+    const fn set_head(&mut self, kind: TickKind, trigger_tick: Option<i64>) {
+        match kind {
+            TickKind::Block => self.block_head = trigger_tick,
+            TickKind::Fluid => self.fluid_head = trigger_tick,
+        }
+    }
+
+    const fn active_rank(&self, generation: u64) -> Option<usize> {
+        match self.active {
+            Some(active) if active.generation == generation => Some(active.rank),
+            _ => None,
+        }
+    }
+}
+
+impl WorldTickSchedulerState {
+    fn advance_active_generation(&mut self) -> u64 {
+        let generation = if let Some(generation) = self.active_generation.checked_add(1) {
+            generation
+        } else {
+            for registered in self.chunks.values_mut() {
+                registered.active = None;
+            }
+            1
+        };
+        self.active_generation = generation;
+        generation
+    }
+
+    const fn deadlines(&self, kind: TickKind) -> &BTreeSet<(i64, PackedChunkPos)> {
+        match kind {
+            TickKind::Block => &self.active_block_deadlines,
+            TickKind::Fluid => &self.active_fluid_deadlines,
+        }
+    }
+
+    const fn deadlines_mut(&mut self, kind: TickKind) -> &mut BTreeSet<(i64, PackedChunkPos)> {
+        match kind {
+            TickKind::Block => &mut self.active_block_deadlines,
+            TickKind::Fluid => &mut self.active_fluid_deadlines,
+        }
+    }
+
+    fn set_head(
+        &mut self,
+        pos: ChunkPos,
+        kind: TickKind,
+        trigger_tick: Option<i64>,
+    ) -> Result<(), TickSchedulerError> {
+        let Some(registered) = self.chunks.get(&pos) else {
+            return Err(TickSchedulerError::MissingContainer(pos));
+        };
+        let active = registered.active_rank(self.active_generation).is_some();
+        let previous = registered.head(kind);
+        if previous == trigger_tick {
+            return Ok(());
+        }
+        let packed = PackedChunkPos::from(pos);
+        if active && let Some(previous) = previous {
+            assert!(
+                self.deadlines_mut(kind).remove(&(previous, packed)),
+                "active scheduled-tick head was absent from its deadline index"
+            );
+        }
+        let Some(registered) = self.chunks.get_mut(&pos) else {
+            return Err(TickSchedulerError::MissingContainer(pos));
+        };
+        registered.set_head(kind, trigger_tick);
+        if active && let Some(trigger_tick) = trigger_tick {
+            assert!(
+                self.deadlines_mut(kind).insert((trigger_tick, packed)),
+                "active scheduled-tick deadline was already indexed"
+            );
+        }
+        Ok(())
+    }
+
+    fn take_due(&mut self, kind: TickKind, current_tick: i64) -> Vec<ActiveTickContainer> {
+        let mut due = Vec::new();
+        while let Some((trigger_tick, packed)) = self.deadlines(kind).first().copied() {
+            if trigger_tick > current_tick {
+                break;
+            }
+            assert_eq!(
+                self.deadlines_mut(kind).pop_first(),
+                Some((trigger_tick, packed)),
+                "due scheduled-tick deadline changed during collection"
+            );
+            let pos = packed.to_chunk_pos();
+            let Some(registered) = self.chunks.get_mut(&pos) else {
+                panic!("active scheduled-tick deadline lost its registered container");
+            };
+            assert_eq!(
+                registered.head(kind),
+                Some(trigger_tick),
+                "active scheduled-tick deadline diverged from its container head"
+            );
+            let Some(rank) = registered.active_rank(self.active_generation) else {
+                panic!("inactive scheduled-tick container retained an active deadline");
+            };
+            due.push(ActiveTickContainer {
+                pos,
+                rank,
+                container: Arc::clone(&registered.container),
+            });
+            registered.set_head(kind, None);
+        }
+        due
+    }
 }
 
 impl WorldTickScheduler {
@@ -232,6 +488,7 @@ impl WorldTickScheduler {
     pub(crate) fn new() -> Self {
         Self {
             next_sub_tick_order: AtomicI64::new(0),
+            phase: SyncRwLock::new(()),
             state: SyncMutex::new(WorldTickSchedulerState::default()),
         }
     }
@@ -245,22 +502,38 @@ impl WorldTickScheduler {
             .fetch_add(1, AtomicOrdering::Relaxed)
     }
 
-    /// Transfers an unpublished Full chunk's queues into the world owner.
+    /// Registers an unpublished Full chunk's stable queues with the world index.
     pub(crate) fn register_chunk(&self, chunk: &LevelChunk) -> Result<(), TickSchedulerError> {
+        let _phase = self.phase.read();
+        let container = chunk.scheduled_tick_container();
+        let mut container_state = container.state.lock();
+        if container_state.lifecycle != ChunkTickContainerLifecycle::PrePublication {
+            return Err(TickSchedulerError::AlreadyRegistered(chunk.pos));
+        }
+        let block_head = container_state
+            .lists
+            .block()
+            .peek()
+            .map(|tick| tick.trigger_tick);
+        let fluid_head = container_state
+            .lists
+            .fluid()
+            .peek()
+            .map(|tick| tick.trigger_tick);
         let mut state = self.state.lock();
         if state.chunks.contains_key(&chunk.pos) {
             return Err(TickSchedulerError::AlreadyRegistered(chunk.pos));
         }
-        let Some(ticks) = chunk.take_unregistered_tick_lists() else {
-            return Err(TickSchedulerError::MissingContainer(chunk.pos));
-        };
-        if let Some(tick) = ticks.block.peek() {
-            state.block_next_tick.insert(chunk.pos, tick.trigger_tick);
-        }
-        if let Some(tick) = ticks.fluid.peek() {
-            state.fluid_next_tick.insert(chunk.pos, tick.trigger_tick);
-        }
-        state.chunks.insert(chunk.pos, ticks);
+        state.chunks.insert(
+            chunk.pos,
+            RegisteredChunkTicks {
+                container: Arc::clone(container),
+                block_head,
+                fluid_head,
+                active: None,
+            },
+        );
+        container_state.lifecycle = ChunkTickContainerLifecycle::Registered;
         Ok(())
     }
 
@@ -273,29 +546,71 @@ impl WorldTickScheduler {
         pos: ChunkPos,
         current_tick: i64,
     ) -> Result<(), TickSchedulerError> {
+        let _phase = self.phase.read();
+        let container = self
+            .state
+            .lock()
+            .chunks
+            .get(&pos)
+            .map(|registered| Arc::clone(&registered.container))
+            .ok_or(TickSchedulerError::MissingContainer(pos))?;
+        let mut container_state = container.state.lock();
+        if container_state.lifecycle != ChunkTickContainerLifecycle::Registered {
+            return Err(TickSchedulerError::MissingContainer(pos));
+        }
+        container_state.lists.block_mut().unpack(current_tick);
+        container_state.lists.fluid_mut().unpack(current_tick);
+        let block_head = container_state
+            .lists
+            .block()
+            .peek()
+            .map(|tick| tick.trigger_tick);
+        let fluid_head = container_state
+            .lists
+            .fluid()
+            .peek()
+            .map(|tick| tick.trigger_tick);
         let mut state = self.state.lock();
-        let (block_head, fluid_head) = {
-            let Some(ticks) = state.chunks.get_mut(&pos) else {
-                return Err(TickSchedulerError::MissingContainer(pos));
-            };
-            ticks.block.unpack(current_tick);
-            ticks.fluid.unpack(current_tick);
-            (
-                ticks.block.peek().map(|tick| tick.trigger_tick),
-                ticks.fluid.peek().map(|tick| tick.trigger_tick),
-            )
+        let Some(registered) = state.chunks.get(&pos) else {
+            return Err(TickSchedulerError::MissingContainer(pos));
         };
-        Self::set_next_tick(&mut state.block_next_tick, pos, block_head);
-        Self::set_next_tick(&mut state.fluid_next_tick, pos, fluid_head);
+        if !Arc::ptr_eq(&registered.container, &container) {
+            return Err(TickSchedulerError::ContainerMismatch(pos));
+        }
+        state.set_head(pos, TickKind::Block, block_head)?;
+        state.set_head(pos, TickKind::Fluid, fluid_head)?;
         Ok(())
     }
 
     /// Removes a finally-unloaded Full chunk after its last save completed.
     pub(crate) fn unregister_chunk(&self, pos: ChunkPos) {
-        let mut state = self.state.lock();
-        state.chunks.remove(&pos);
-        state.block_next_tick.remove(&pos);
-        state.fluid_next_tick.remove(&pos);
+        let _phase = self.phase.write();
+        let registered = {
+            let mut state = self.state.lock();
+            let active_generation = state.active_generation;
+            let registered = state.chunks.remove(&pos);
+            if let Some(registered) = &registered
+                && registered.active_rank(active_generation).is_some()
+            {
+                let packed = PackedChunkPos::from(pos);
+                if let Some(head) = registered.block_head {
+                    assert!(
+                        state.active_block_deadlines.remove(&(head, packed)),
+                        "unloaded active block-tick head was absent from its deadline index"
+                    );
+                }
+                if let Some(head) = registered.fluid_head {
+                    assert!(
+                        state.active_fluid_deadlines.remove(&(head, packed)),
+                        "unloaded active fluid-tick head was absent from its deadline index"
+                    );
+                }
+            }
+            registered
+        };
+        if let Some(registered) = registered {
+            registered.container.state.lock().lifecycle = ChunkTickContainerLifecycle::Finalized;
+        }
     }
 
     #[cfg(test)]
@@ -306,19 +621,55 @@ impl WorldTickScheduler {
     #[cfg(test)]
     pub(crate) fn has_indexed_head(&self, pos: ChunkPos) -> bool {
         let state = self.state.lock();
-        state.block_next_tick.contains_key(&pos) || state.fluid_next_tick.contains_key(&pos)
+        state.chunks.get(&pos).is_some_and(|registered| {
+            registered.block_head.is_some() || registered.fluid_head.is_some()
+        })
     }
 
-    /// Checks the Full-publication invariant at a rare snapshot rebuild rather
-    /// than scanning every active chunk during every scheduled-tick phase.
-    pub(crate) fn verify_registered_chunks(
+    /// Reconciles the active sparse deadline index at a rare ticking-snapshot rebuild.
+    pub(crate) fn reconcile_active_chunks<I>(
         &self,
-        active_chunks: &FxHashMap<ChunkPos, usize>,
-    ) -> Result<(), TickSchedulerError> {
-        let state = self.state.lock();
-        for pos in active_chunks.keys() {
-            if !state.chunks.contains_key(pos) {
-                return Err(TickSchedulerError::MissingContainer(*pos));
+        active_chunks: I,
+    ) -> Result<(), TickSchedulerError>
+    where
+        I: Iterator<Item = ChunkPos> + Clone,
+    {
+        let _phase = self.phase.write();
+        let mut state = self.state.lock();
+        for pos in active_chunks.clone() {
+            if !state.chunks.contains_key(&pos) {
+                return Err(TickSchedulerError::MissingContainer(pos));
+            }
+        }
+        state.active_block_deadlines.clear();
+        state.active_fluid_deadlines.clear();
+        let generation = state.advance_active_generation();
+        for (rank, pos) in active_chunks.enumerate() {
+            let (block_head, fluid_head) = {
+                let Some(registered) = state.chunks.get_mut(&pos) else {
+                    return Err(TickSchedulerError::MissingContainer(pos));
+                };
+                assert!(
+                    registered
+                        .active
+                        .is_none_or(|active| active.generation != generation),
+                    "active scheduled-tick chunk appeared twice during reconciliation"
+                );
+                registered.active = Some(ActiveChunkRank { generation, rank });
+                (registered.block_head, registered.fluid_head)
+            };
+            let packed = PackedChunkPos::from(pos);
+            if let Some(block_head) = block_head {
+                assert!(
+                    state.active_block_deadlines.insert((block_head, packed)),
+                    "active block-tick chunk appeared twice during reconciliation"
+                );
+            }
+            if let Some(fluid_head) = fluid_head {
+                assert!(
+                    state.active_fluid_deadlines.insert((fluid_head, packed)),
+                    "active fluid-tick chunk appeared twice during reconciliation"
+                );
             }
         }
         Ok(())
@@ -333,21 +684,53 @@ impl WorldTickScheduler {
         priority: TickPriority,
         sub_tick_order: i64,
     ) -> Result<bool, TickSchedulerError> {
-        let mut state = self.state.lock();
-        if let Some(ticks) = state.chunks.get_mut(&chunk.pos) {
-            let (added, head) = {
-                let list = &mut ticks.block;
-                let added = list.schedule(block, pos, trigger_tick, priority, sub_tick_order);
-                (added, list.peek().map(|tick| tick.trigger_tick))
-            };
-            if added {
-                Self::set_next_tick(&mut state.block_next_tick, chunk.pos, head);
-            }
-            return Ok(added);
+        let _phase = self.phase.read();
+        let container = chunk.scheduled_tick_container();
+        let mut container_state = container.state.lock();
+        if container_state.lifecycle == ChunkTickContainerLifecycle::PrePublication {
+            return Ok(container_state.lists.block_mut().schedule(
+                block,
+                pos,
+                trigger_tick,
+                priority,
+                sub_tick_order,
+            ));
         }
-        chunk
-            .schedule_unregistered_block_tick(block, pos, trigger_tick, priority, sub_tick_order)
-            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
+        if container_state.lifecycle == ChunkTickContainerLifecycle::Finalized {
+            return Err(TickSchedulerError::MissingContainer(chunk.pos));
+        }
+        let previous_head = container_state
+            .lists
+            .block()
+            .peek()
+            .map(|tick| tick.trigger_tick);
+        let added = container_state.lists.block_mut().schedule(
+            block,
+            pos,
+            trigger_tick,
+            priority,
+            sub_tick_order,
+        );
+        if !added {
+            return Ok(false);
+        }
+        let head = container_state
+            .lists
+            .block()
+            .peek()
+            .map(|tick| tick.trigger_tick);
+        if head == previous_head {
+            return Ok(true);
+        }
+        let mut state = self.state.lock();
+        let Some(registered) = state.chunks.get(&chunk.pos) else {
+            return Err(TickSchedulerError::MissingContainer(chunk.pos));
+        };
+        if !Arc::ptr_eq(&registered.container, container) {
+            return Err(TickSchedulerError::ContainerMismatch(chunk.pos));
+        }
+        state.set_head(chunk.pos, TickKind::Block, head)?;
+        Ok(true)
     }
 
     pub(crate) fn schedule_fluid(
@@ -359,84 +742,63 @@ impl WorldTickScheduler {
         priority: TickPriority,
         sub_tick_order: i64,
     ) -> Result<bool, TickSchedulerError> {
+        let _phase = self.phase.read();
+        let container = chunk.scheduled_tick_container();
+        let mut container_state = container.state.lock();
+        if container_state.lifecycle == ChunkTickContainerLifecycle::PrePublication {
+            return Ok(container_state.lists.fluid_mut().schedule(
+                fluid,
+                pos,
+                trigger_tick,
+                priority,
+                sub_tick_order,
+            ));
+        }
+        if container_state.lifecycle == ChunkTickContainerLifecycle::Finalized {
+            return Err(TickSchedulerError::MissingContainer(chunk.pos));
+        }
+        let previous_head = container_state
+            .lists
+            .fluid()
+            .peek()
+            .map(|tick| tick.trigger_tick);
+        let added = container_state.lists.fluid_mut().schedule(
+            fluid,
+            pos,
+            trigger_tick,
+            priority,
+            sub_tick_order,
+        );
+        if !added {
+            return Ok(false);
+        }
+        let head = container_state
+            .lists
+            .fluid()
+            .peek()
+            .map(|tick| tick.trigger_tick);
+        if head == previous_head {
+            return Ok(true);
+        }
         let mut state = self.state.lock();
-        if let Some(ticks) = state.chunks.get_mut(&chunk.pos) {
-            let (added, head) = {
-                let list = &mut ticks.fluid;
-                let added = list.schedule(fluid, pos, trigger_tick, priority, sub_tick_order);
-                (added, list.peek().map(|tick| tick.trigger_tick))
-            };
-            if added {
-                Self::set_next_tick(&mut state.fluid_next_tick, chunk.pos, head);
-            }
-            return Ok(added);
+        let Some(registered) = state.chunks.get(&chunk.pos) else {
+            return Err(TickSchedulerError::MissingContainer(chunk.pos));
+        };
+        if !Arc::ptr_eq(&registered.container, container) {
+            return Err(TickSchedulerError::ContainerMismatch(chunk.pos));
         }
-        chunk
-            .schedule_unregistered_fluid_tick(fluid, pos, trigger_tick, priority, sub_tick_order)
-            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
-    }
-
-    pub(crate) fn has_block_tick(
-        &self,
-        chunk: &LevelChunk,
-        pos: BlockPos,
-        block: BlockRef,
-    ) -> Result<bool, TickSchedulerError> {
-        let state = self.state.lock();
-        if let Some(ticks) = state.chunks.get(&chunk.pos) {
-            return Ok(ticks.block.has_tick(pos, block));
-        }
-        chunk
-            .has_unregistered_block_tick(pos, block)
-            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
-    }
-
-    pub(crate) fn has_fluid_tick(
-        &self,
-        chunk: &LevelChunk,
-        pos: BlockPos,
-        fluid: FluidRef,
-    ) -> Result<bool, TickSchedulerError> {
-        let state = self.state.lock();
-        if let Some(ticks) = state.chunks.get(&chunk.pos) {
-            return Ok(ticks.fluid.has_tick(pos, fluid));
-        }
-        chunk
-            .has_unregistered_fluid_tick(pos, fluid)
-            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
-    }
-
-    pub(crate) fn snapshot(
-        &self,
-        chunk: &LevelChunk,
-        current_tick: i64,
-    ) -> Result<ScheduledTickSnapshot, TickSchedulerError> {
-        let state = self.state.lock();
-        if let Some(ticks) = state.chunks.get(&chunk.pos) {
-            return Ok(ticks.snapshot(current_tick));
-        }
-        chunk
-            .snapshot_unregistered_tick_lists(current_tick)
-            .ok_or(TickSchedulerError::MissingContainer(chunk.pos))
+        state.set_head(chunk.pos, TickKind::Fluid, head)?;
+        Ok(true)
     }
 
     /// Selects the ready block batch from sparse live-container heads.
     pub(crate) fn begin_tick(
         &self,
         current_tick: i64,
-        active_chunks: &FxHashMap<ChunkPos, usize>,
         max_ticks: usize,
     ) -> ScheduledTickBatch<BlockRef> {
-        let mut state = self.state.lock();
-        let WorldTickSchedulerState {
-            chunks,
-            block_next_tick,
-            ..
-        } = &mut *state;
-        collect_registered_ticks(
-            chunks,
-            block_next_tick,
-            active_chunks,
+        self.collect_ticks(
+            TickKind::Block,
             ChunkTickLists::block_mut,
             current_tick,
             max_ticks,
@@ -447,35 +809,45 @@ impl WorldTickScheduler {
     pub(crate) fn collect_fluid_ticks(
         &self,
         current_tick: i64,
-        active_chunks: &FxHashMap<ChunkPos, usize>,
         max_ticks: usize,
     ) -> ScheduledTickBatch<FluidRef> {
-        let mut state = self.state.lock();
-        let WorldTickSchedulerState {
-            chunks,
-            fluid_next_tick,
-            ..
-        } = &mut *state;
-        collect_registered_ticks(
-            chunks,
-            fluid_next_tick,
-            active_chunks,
+        self.collect_ticks(
+            TickKind::Fluid,
             ChunkTickLists::fluid_mut,
             current_tick,
             max_ticks,
         )
     }
 
-    fn set_next_tick(
-        next_ticks: &mut FxHashMap<ChunkPos, i64>,
-        pos: ChunkPos,
-        trigger_tick: Option<i64>,
-    ) {
-        if let Some(trigger_tick) = trigger_tick {
-            next_ticks.insert(pos, trigger_tick);
-        } else {
-            next_ticks.remove(&pos);
+    fn collect_ticks<T: TickKey>(
+        &self,
+        kind: TickKind,
+        select: fn(&mut ChunkTickLists) -> &mut TickList<T>,
+        current_tick: i64,
+        max_ticks: usize,
+    ) -> ScheduledTickBatch<T> {
+        if max_ticks == 0 {
+            return ScheduledTickBatch {
+                ticks: Vec::new(),
+                changed_containers: Vec::new(),
+            };
         }
+        let _phase = self.phase.write();
+        let due = self.state.lock().take_due(kind, current_tick);
+        if due.is_empty() {
+            return ScheduledTickBatch {
+                ticks: Vec::new(),
+                changed_containers: Vec::new(),
+            };
+        }
+        let (batch, head_updates) = collect_registered_ticks(due, select, current_tick, max_ticks);
+        let mut state = self.state.lock();
+        for update in head_updates {
+            if let Err(error) = state.set_head(update.pos, kind, update.trigger_tick) {
+                panic!("scheduled-tick head index invariant failed: {error:?}");
+            }
+        }
+        batch
     }
 }
 
@@ -545,10 +917,11 @@ impl<T: TickKey> Ord for QueuedTick<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 struct ReadyContainer {
     pos: ChunkPos,
     rank: usize,
+    container: Arc<ChunkTickContainer>,
     priority: TickPriority,
     sub_tick_order: i64,
     dirty_reported: bool,
@@ -565,19 +938,24 @@ impl PartialEq for ReadyContainer {
 impl Eq for ReadyContainer {}
 
 impl ReadyContainer {
-    const fn new<T: TickKey>(
-        pos: ChunkPos,
-        rank: usize,
+    fn new<T: TickKey>(
+        active: ActiveTickContainer,
         tick: ScheduledTick<T>,
         dirty_reported: bool,
     ) -> Self {
         Self {
-            pos,
-            rank,
+            pos: active.pos,
+            rank: active.rank,
+            container: active.container,
             priority: tick.priority,
             sub_tick_order: tick.sub_tick_order,
             dirty_reported,
         }
+    }
+
+    const fn refresh<T: TickKey>(&mut self, tick: ScheduledTick<T>) {
+        self.priority = tick.priority;
+        self.sub_tick_order = tick.sub_tick_order;
     }
 }
 
@@ -611,6 +989,30 @@ pub struct TickList<T: TickKey> {
     ticks: BinaryHeap<QueuedTick<T>>,
     scheduled: FxHashSet<ScheduledTickKey>,
     next_insertion_order: u64,
+}
+
+struct TickListPackingSnapshot<T: TickKey> {
+    pending_ticks: Vec<SavedTick<T>>,
+    live_ticks: Vec<(ScheduledTick<T>, u64)>,
+}
+
+impl<T: TickKey> TickListPackingSnapshot<T> {
+    fn pack(mut self, current_tick: i64) -> Vec<SavedTick<T>> {
+        self.live_ticks.sort_by(|left, right| {
+            left.0
+                .sub_tick_order
+                .cmp(&right.0.sub_tick_order)
+                .then_with(|| left.1.cmp(&right.1))
+        });
+        self.pending_ticks
+            .extend(self.live_ticks.into_iter().map(|(tick, _)| SavedTick {
+                tick_type: tick.tick_type,
+                pos: tick.pos,
+                delay: tick.trigger_tick.wrapping_sub(current_tick) as i32,
+                priority: tick.priority,
+            }));
+        self.pending_ticks
+    }
 }
 
 impl<T: TickKey> TickList<T> {
@@ -732,26 +1134,23 @@ impl<T: TickKey> TickList<T> {
     /// Packs pending entries followed by live entries in Vanilla saved-list order.
     #[must_use]
     pub(crate) fn pack(&self, current_tick: i64) -> Vec<SavedTick<T>> {
-        let mut saved = Vec::with_capacity(self.len());
-        if let Some(pending_ticks) = &self.pending_ticks {
-            saved.extend_from_slice(pending_ticks);
+        self.packing_snapshot().pack(current_tick)
+    }
+
+    fn packing_snapshot(&self) -> TickListPackingSnapshot<T> {
+        let mut pending_ticks = Vec::with_capacity(self.len());
+        if let Some(pending) = &self.pending_ticks {
+            pending_ticks.extend_from_slice(pending);
         }
-
-        let mut ticks: Vec<_> = self.ticks.iter().collect();
-        ticks.sort_by(|a, b| {
-            a.tick
-                .sub_tick_order
-                .cmp(&b.tick.sub_tick_order)
-                .then_with(|| a.insertion_order.cmp(&b.insertion_order))
-        });
-
-        saved.extend(ticks.into_iter().map(|queued| SavedTick {
-            tick_type: queued.tick.tick_type,
-            pos: queued.tick.pos,
-            delay: queued.tick.trigger_tick.wrapping_sub(current_tick) as i32,
-            priority: queued.tick.priority,
-        }));
-        saved
+        let live_ticks = self
+            .ticks
+            .iter()
+            .map(|queued| (queued.tick, queued.insertion_order))
+            .collect();
+        TickListPackingSnapshot {
+            pending_ticks,
+            live_ticks,
+        }
     }
 
     /// Converts pending saved/proto ticks into live absolute-time ordering.
@@ -823,54 +1222,50 @@ impl<T: TickKey> Default for TickList<T> {
     }
 }
 
+fn prepare_ready_containers<T: TickKey>(
+    due_containers: Vec<ActiveTickContainer>,
+    select: fn(&mut ChunkTickLists) -> &mut TickList<T>,
+    current_tick: i64,
+) -> (BinaryHeap<ReadyContainer>, Vec<TickHeadUpdate>) {
+    let mut ready_containers = BinaryHeap::with_capacity(due_containers.len());
+    let mut head_updates = Vec::with_capacity(due_containers.len());
+    for active in due_containers {
+        let head = {
+            let mut state = active.container.state.lock();
+            assert_eq!(
+                state.lifecycle,
+                ChunkTickContainerLifecycle::Registered,
+                "active scheduled-tick container was not registered"
+            );
+            select(&mut state.lists).peek()
+        };
+        if let Some(tick) = head
+            && tick.trigger_tick <= current_tick
+        {
+            ready_containers.push(ReadyContainer::new(active, tick, false));
+        } else {
+            head_updates.push(TickHeadUpdate {
+                pos: active.pos,
+                trigger_tick: head.map(|tick| tick.trigger_tick),
+            });
+        }
+    }
+    (ready_containers, head_updates)
+}
+
 /// Selects at most `max_ticks` ready entries from sparse live-container heads.
 ///
 /// Only queue heads compete globally. Revealing the next head after each pop is
 /// what preserves Vanilla's per-chunk deadline ordering when several ticks are
 /// already overdue.
 fn collect_registered_ticks<T: TickKey>(
-    chunks: &mut FxHashMap<ChunkPos, ChunkTickLists>,
-    next_ticks: &mut FxHashMap<ChunkPos, i64>,
-    active_chunks: &FxHashMap<ChunkPos, usize>,
+    due_containers: Vec<ActiveTickContainer>,
     select: fn(&mut ChunkTickLists) -> &mut TickList<T>,
     current_tick: i64,
     max_ticks: usize,
-) -> ScheduledTickBatch<T> {
-    if max_ticks == 0 || next_ticks.is_empty() || active_chunks.is_empty() {
-        return ScheduledTickBatch {
-            ticks: Vec::new(),
-            changed_containers: Vec::new(),
-        };
-    }
-
-    let mut ready_containers = BinaryHeap::new();
-    next_ticks.retain(|pos, indexed_trigger| {
-        if *indexed_trigger > current_tick {
-            return true;
-        }
-        let Some(container) = chunks.get_mut(pos).map(select) else {
-            return false;
-        };
-        let Some(tick) = container.peek() else {
-            return false;
-        };
-        if tick.trigger_tick > current_tick {
-            *indexed_trigger = tick.trigger_tick;
-            return true;
-        }
-        let Some(&rank) = active_chunks.get(pos) else {
-            return true;
-        };
-        ready_containers.push(ReadyContainer::new(*pos, rank, tick, false));
-        false
-    });
-
-    if ready_containers.is_empty() {
-        return ScheduledTickBatch {
-            ticks: Vec::new(),
-            changed_containers: Vec::new(),
-        };
-    }
+) -> (ScheduledTickBatch<T>, Vec<TickHeadUpdate>) {
+    let (mut ready_containers, mut head_updates) =
+        prepare_ready_containers(due_containers, select, current_tick);
 
     let mut ticks = Vec::with_capacity(max_ticks.min(ready_containers.len()));
     let mut changed_containers = Vec::with_capacity(ready_containers.len());
@@ -878,13 +1273,18 @@ fn collect_registered_ticks<T: TickKey>(
         let Some(mut ready_container) = ready_containers.pop() else {
             break;
         };
-        let Some(container) = chunks.get_mut(&ready_container.pos).map(select) else {
-            continue;
-        };
+        let mut container_state = ready_container.container.state.lock();
+        assert_eq!(
+            container_state.lifecycle,
+            ChunkTickContainerLifecycle::Registered,
+            "ready scheduled-tick container was not registered"
+        );
+        let container = select(&mut container_state.lists);
         let Some(tick) = container.pop_ready(current_tick) else {
-            if let Some(next_tick) = container.peek() {
-                next_ticks.insert(ready_container.pos, next_tick.trigger_tick);
-            }
+            head_updates.push(TickHeadUpdate {
+                pos: ready_container.pos,
+                trigger_tick: container.peek().map(|tick| tick.trigger_tick),
+            });
             continue;
         };
 
@@ -897,17 +1297,19 @@ fn collect_registered_ticks<T: TickKey>(
         // Vanilla keeps draining the current container while its next head is
         // no later in intra-tick order than the best competing container. In
         // particular, an exact tie stays with the current container.
-        let next_competing_container = ready_containers.peek().copied();
+        let next_competing_container = ready_containers
+            .peek()
+            .map(|competitor| (competitor.priority, competitor.sub_tick_order));
         while ticks.len() < max_ticks {
             let Some(next_tick) = container.peek_ready(current_tick) else {
                 break;
             };
-            if next_competing_container.is_some_and(|competitor| {
+            if next_competing_container.is_some_and(|(priority, sub_tick_order)| {
                 intra_tick_drain_order(
                     next_tick.priority,
                     next_tick.sub_tick_order,
-                    competitor.priority,
-                    competitor.sub_tick_order,
+                    priority,
+                    sub_tick_order,
                 ) == Ordering::Greater
             }) {
                 break;
@@ -918,72 +1320,123 @@ fn collect_registered_ticks<T: TickKey>(
             ticks.push(next_tick);
         }
 
-        if let Some(next_tick) = container.peek() {
+        let next_tick = container.peek();
+        drop(container_state);
+        if let Some(next_tick) = next_tick {
             if ticks.len() < max_ticks && next_tick.trigger_tick <= current_tick {
-                ready_containers.push(ReadyContainer::new(
-                    ready_container.pos,
-                    ready_container.rank,
-                    next_tick,
-                    ready_container.dirty_reported,
-                ));
+                ready_container.refresh(next_tick);
+                ready_containers.push(ready_container);
             } else {
-                next_ticks.insert(ready_container.pos, next_tick.trigger_tick);
+                head_updates.push(TickHeadUpdate {
+                    pos: ready_container.pos,
+                    trigger_tick: Some(next_tick.trigger_tick),
+                });
             }
+        } else {
+            head_updates.push(TickHeadUpdate {
+                pos: ready_container.pos,
+                trigger_tick: None,
+            });
         }
     }
 
     for ready_container in ready_containers {
-        if let Some(next_tick) = chunks
-            .get_mut(&ready_container.pos)
-            .map(select)
-            .and_then(|container| container.peek())
-        {
-            next_ticks.insert(ready_container.pos, next_tick.trigger_tick);
+        let next_tick = {
+            let mut state = ready_container.container.state.lock();
+            select(&mut state.lists).peek()
+        };
+        head_updates.push(TickHeadUpdate {
+            pos: ready_container.pos,
+            trigger_tick: next_tick.map(|tick| tick.trigger_tick),
+        });
+    }
+
+    (
+        ScheduledTickBatch {
+            ticks,
+            changed_containers,
+        },
+        head_updates,
+    )
+}
+
+/// Immutable ticks selected for one execution phase with a lazily built lookup index.
+///
+/// Vanilla creates its `willTickThisTick` hash set only on the first query. The executor advances
+/// `next_index` before each callback, so a materialized key index needs no per-callback removal.
+#[derive(Debug)]
+pub(crate) struct ScheduledTickRunBatch<T: TickKey> {
+    ticks: Vec<ScheduledTick<T>>,
+    next_index: AtomicUsize,
+    lookup: OnceLock<FxHashMap<ScheduledTickKey, usize>>,
+}
+
+impl<T: TickKey> ScheduledTickRunBatch<T> {
+    #[must_use]
+    pub(crate) const fn new(ticks: Vec<ScheduledTick<T>>) -> Self {
+        Self {
+            ticks,
+            next_index: AtomicUsize::new(0),
+            lookup: OnceLock::new(),
         }
     }
 
-    ScheduledTickBatch {
-        ticks,
-        changed_containers,
-    }
-}
-
-/// Remaining ticks in the currently collected execution snapshot.
-///
-/// Vanilla removes a tick from this set immediately before its callback. Earlier
-/// callbacks can therefore detect a later tick selected for the same game tick.
-#[derive(Debug, Default)]
-pub(crate) struct ScheduledTickRunSet {
-    remaining: FxHashSet<ScheduledTickKey>,
-}
-
-impl ScheduledTickRunSet {
-    pub(crate) fn begin<T: TickKey>(&mut self, ticks: &[ScheduledTick<T>]) {
-        self.remaining.clear();
-        self.remaining.extend(ticks.iter().map(ScheduledTick::key));
+    #[must_use]
+    pub(crate) fn ticks(&self) -> &[ScheduledTick<T>] {
+        &self.ticks
     }
 
-    pub(crate) fn start<T: TickKey>(&mut self, tick: &ScheduledTick<T>) {
-        self.remaining.remove(&tick.key());
+    pub(crate) fn start(&self, index: usize) {
+        assert!(
+            index < self.ticks.len(),
+            "scheduled-tick batch index out of bounds"
+        );
+        self.next_index.store(index + 1, AtomicOrdering::Relaxed);
     }
 
     #[must_use]
-    pub(crate) fn contains<T: TickKey>(&self, pos: BlockPos, tick_type: T) -> bool {
-        self.remaining.contains(&(pos, tick_type.key()))
+    pub(crate) fn contains(&self, pos: BlockPos, tick_type: T) -> bool {
+        let initial_index = self.next_index.load(AtomicOrdering::Relaxed);
+        if initial_index >= self.ticks.len() {
+            return false;
+        }
+        let lookup = self.lookup.get_or_init(|| {
+            self.ticks[initial_index..]
+                .iter()
+                .enumerate()
+                .map(|(index, tick)| (tick.key(), initial_index + index))
+                .collect()
+        });
+        let next_index = self.next_index.load(AtomicOrdering::Relaxed);
+        lookup
+            .get(&(pos, tick_type.key()))
+            .is_some_and(|&index| index >= next_index)
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.remaining.clear();
+    #[cfg(test)]
+    fn lookup_is_initialized(&self) -> bool {
+        self.lookup.get().is_some()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::{Barrier, mpsc},
+        thread,
+        time::Duration,
+    };
+
     use super::*;
     use steel_registry::blocks::Block;
     use steel_registry::blocks::behavior::BlockConfig;
+    use steel_registry::test_support::init_test_registry;
     use steel_registry::vanilla_fluids;
     use steel_utils::Identifier;
+
+    use crate::behavior::init_behaviors;
+    use crate::chunk::chunk_access::ChunkStatus;
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
 
     fn test_block() -> BlockRef {
         static BLOCK: Block = Block::new(
@@ -1021,24 +1474,24 @@ mod tests {
         {
             let mut state = scheduler.state.lock();
             for (pos, block) in chunks {
-                if let Some(tick) = block.peek() {
-                    state.block_next_tick.insert(pos, tick.trigger_tick);
-                }
-                state
-                    .chunks
-                    .insert(pos, ChunkTickLists::new(block, FluidTickList::new()));
+                let block_head = block.peek().map(|tick| tick.trigger_tick);
+                let container = Arc::new(ChunkTickContainer::new(ChunkTickLists::new(
+                    block,
+                    FluidTickList::new(),
+                )));
+                container.state.lock().lifecycle = ChunkTickContainerLifecycle::Registered;
+                state.chunks.insert(
+                    pos,
+                    RegisteredChunkTicks {
+                        container,
+                        block_head,
+                        fluid_head: None,
+                        active: None,
+                    },
+                );
             }
         }
         scheduler
-    }
-
-    fn active_ranks(active_chunks: &[ChunkPos]) -> FxHashMap<ChunkPos, usize> {
-        active_chunks
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(rank, pos)| (pos, rank))
-            .collect()
     }
 
     fn begin_block_tick_at(
@@ -1047,7 +1500,30 @@ mod tests {
         active_chunks: &[ChunkPos],
         max_ticks: usize,
     ) -> ScheduledTickBatch<BlockRef> {
-        scheduler.begin_tick(current_tick, &active_ranks(active_chunks), max_ticks)
+        if let Err(error) = scheduler.reconcile_active_chunks(active_chunks.iter().copied()) {
+            panic!("test scheduler invariant failed: {error:?}");
+        }
+        scheduler.begin_tick(current_tick, max_ticks)
+    }
+
+    fn registered_container(
+        scheduler: &WorldTickScheduler,
+        pos: ChunkPos,
+    ) -> Arc<ChunkTickContainer> {
+        let state = scheduler.state.lock();
+        let Some(registered) = state.chunks.get(&pos) else {
+            panic!("test chunk must remain registered");
+        };
+        Arc::clone(&registered.container)
+    }
+
+    fn block_head(scheduler: &WorldTickScheduler, pos: ChunkPos) -> Option<i64> {
+        scheduler
+            .state
+            .lock()
+            .chunks
+            .get(&pos)
+            .and_then(|registered| registered.block_head)
     }
 
     fn begin_block_tick(
@@ -1086,6 +1562,44 @@ mod tests {
     }
 
     #[test]
+    fn chunk_snapshot_does_not_wait_for_world_scheduler_metadata() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("chunk_tick_snapshot_lock_scope");
+        let chunk_pos = ChunkPos::new(0, 0);
+        let tick_pos = BlockPos::new(1, 64, 1);
+        let holder = insert_ready_full_chunk(&world, chunk_pos);
+        world.schedule_block_tick(tick_pos, test_block(), 5, TickPriority::Normal);
+
+        let metadata = world.scheduled_ticks.state.lock();
+        let barrier = Arc::new(Barrier::new(2));
+        let worker_barrier = Arc::clone(&barrier);
+        let (sender, receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            worker_barrier.wait();
+            let Some(chunk) = holder.try_chunk(ChunkStatus::Full) else {
+                return;
+            };
+            let Some(full) = chunk.as_full() else {
+                return;
+            };
+            let _ = sender.send(full.scheduled_tick_snapshot().block.len());
+        });
+        barrier.wait();
+
+        let snapshot_len = receiver.recv_timeout(Duration::from_secs(2));
+        drop(metadata);
+        if worker.join().is_err() {
+            panic!("scheduled-tick snapshot worker panicked");
+        }
+        assert_eq!(
+            snapshot_len,
+            Ok(1),
+            "packing one chunk must not acquire world scheduler metadata"
+        );
+    }
+
+    #[test]
     fn pending_ticks_are_unindexed_until_idempotent_unpack() {
         let chunk_pos = ChunkPos::new(0, 0);
         let tick_pos = BlockPos::new(1, 2, 3);
@@ -1097,29 +1611,17 @@ mod tests {
         }]);
         let scheduler = scheduler_with_block_lists([(chunk_pos, pending)]);
 
-        assert!(
-            !scheduler
-                .state
-                .lock()
-                .block_next_tick
-                .contains_key(&chunk_pos)
-        );
+        assert_eq!(block_head(&scheduler, chunk_pos), None);
         if let Err(error) = scheduler.unpack_chunk(chunk_pos, 100) {
             panic!("test scheduler invariant failed: {error:?}");
         }
-        assert_eq!(
-            scheduler.state.lock().block_next_tick.get(&chunk_pos),
-            Some(&105)
-        );
+        assert_eq!(block_head(&scheduler, chunk_pos), Some(105));
 
         // A later readiness promotion cannot re-anchor the existing deadline.
         if let Err(error) = scheduler.unpack_chunk(chunk_pos, 200) {
             panic!("test scheduler invariant failed: {error:?}");
         }
-        assert_eq!(
-            scheduler.state.lock().block_next_tick.get(&chunk_pos),
-            Some(&105)
-        );
+        assert_eq!(block_head(&scheduler, chunk_pos), Some(105));
         assert!(
             begin_block_tick_at(&scheduler, 104, &[chunk_pos], 1)
                 .ticks
@@ -1204,13 +1706,15 @@ mod tests {
             vec![high_pos, normal_pos]
         );
         assert_eq!(selected.changed_containers, vec![0]);
-        {
-            let state = scheduler.state.lock();
-            let Some(ticks) = state.chunks.get(&chunk_pos) else {
-                panic!("test chunk must remain registered");
-            };
-            assert!(ticks.block.has_tick(overflow_pos, test_block()));
-        }
+        let container = registered_container(&scheduler, chunk_pos);
+        assert!(
+            container
+                .state
+                .lock()
+                .lists
+                .block()
+                .has_tick(overflow_pos, test_block())
+        );
 
         let selected = begin_block_tick(&scheduler, &[chunk_pos], 2);
         assert_eq!(selected.ticks.len(), 1);
@@ -1224,36 +1728,51 @@ mod tests {
         let fluid_pos = BlockPos::new(1, 0, 0);
         let scheduler = scheduler_with_block_lists([(chunk_pos, BlockTickList::new())]);
 
+        let container = registered_container(&scheduler, chunk_pos);
+        let (block_head, fluid_head) = {
+            let mut container_state = container.state.lock();
+            assert!(container_state.lists.block_mut().schedule(
+                test_block(),
+                block_pos,
+                20,
+                TickPriority::Normal,
+                0
+            ));
+            assert!(container_state.lists.fluid_mut().schedule(
+                &vanilla_fluids::WATER,
+                fluid_pos,
+                20,
+                TickPriority::Normal,
+                1
+            ));
+            (
+                container_state
+                    .lists
+                    .block()
+                    .peek()
+                    .map(|tick| tick.trigger_tick),
+                container_state
+                    .lists
+                    .fluid()
+                    .peek()
+                    .map(|tick| tick.trigger_tick),
+            )
+        };
         {
             let mut state = scheduler.state.lock();
-            let (block_head, fluid_head) = {
-                let Some(ticks) = state.chunks.get_mut(&chunk_pos) else {
-                    panic!("test chunk must remain registered");
-                };
-                assert!(
-                    ticks
-                        .block
-                        .schedule(test_block(), block_pos, 20, TickPriority::Normal, 0)
-                );
-                assert!(ticks.fluid.schedule(
-                    &vanilla_fluids::WATER,
-                    fluid_pos,
-                    20,
-                    TickPriority::Normal,
-                    1
-                ));
-                (
-                    ticks.block.peek().map(|tick| tick.trigger_tick),
-                    ticks.fluid.peek().map(|tick| tick.trigger_tick),
-                )
-            };
-            WorldTickScheduler::set_next_tick(&mut state.block_next_tick, chunk_pos, block_head);
-            WorldTickScheduler::set_next_tick(&mut state.fluid_next_tick, chunk_pos, fluid_head);
+            if let Err(error) = state.set_head(chunk_pos, TickKind::Block, block_head) {
+                panic!("test scheduler invariant failed: {error:?}");
+            }
+            if let Err(error) = state.set_head(chunk_pos, TickKind::Fluid, fluid_head) {
+                panic!("test scheduler invariant failed: {error:?}");
+            }
         }
 
-        let active = active_ranks(&[chunk_pos]);
-        let blocks = scheduler.begin_tick(20, &active, 2);
-        let fluids = scheduler.collect_fluid_ticks(20, &active, 2);
+        if let Err(error) = scheduler.reconcile_active_chunks([chunk_pos].into_iter()) {
+            panic!("test scheduler invariant failed: {error:?}");
+        }
+        let blocks = scheduler.begin_tick(20, 2);
+        let fluids = scheduler.collect_fluid_ticks(20, 2);
         assert_eq!(
             fluids.ticks.iter().map(|tick| tick.pos).collect::<Vec<_>>(),
             [fluid_pos]
@@ -1423,17 +1942,77 @@ mod tests {
         ));
         let scheduler = scheduler_with_block_lists([(registered_pos, pending)]);
 
-        let inactive = active_ranks(&[]);
-        let inactive_batch = scheduler.begin_tick(100, &inactive, 1);
-        assert!(inactive_batch.ticks.is_empty());
-        assert_eq!(
-            scheduler.state.lock().block_next_tick.get(&registered_pos),
-            Some(&3)
+        if let Err(error) = scheduler.reconcile_active_chunks([registered_pos].into_iter()) {
+            panic!("test scheduler invariant failed: {error:?}");
+        }
+        assert!(
+            scheduler
+                .state
+                .lock()
+                .active_block_deadlines
+                .contains(&(3, PackedChunkPos::from(registered_pos)))
         );
 
-        let selected = begin_block_tick_at(&scheduler, 100, &[registered_pos], 1);
+        if let Err(error) = scheduler.reconcile_active_chunks([].into_iter()) {
+            panic!("test scheduler invariant failed: {error:?}");
+        }
+        assert!(scheduler.state.lock().active_block_deadlines.is_empty());
+        let inactive_batch = scheduler.begin_tick(100, 1);
+        assert!(inactive_batch.ticks.is_empty());
+        assert_eq!(block_head(&scheduler, registered_pos), Some(3));
+
+        if let Err(error) = scheduler.reconcile_active_chunks([registered_pos].into_iter()) {
+            panic!("test scheduler invariant failed: {error:?}");
+        }
+        assert!(
+            scheduler
+                .state
+                .lock()
+                .active_block_deadlines
+                .contains(&(3, PackedChunkPos::from(registered_pos)))
+        );
+        let selected = scheduler.begin_tick(100, 1);
         assert_eq!(selected.ticks.len(), 1);
         assert_eq!(selected.changed_containers, [0]);
+    }
+
+    #[test]
+    fn failed_active_reconciliation_preserves_the_published_index() {
+        let registered_pos = ChunkPos::new(0, 0);
+        let missing_pos = ChunkPos::new(1, 0);
+        let mut ticks = BlockTickList::new();
+        assert!(schedule(
+            &mut ticks,
+            test_block(),
+            BlockPos::new(0, 0, 0),
+            3,
+            TickPriority::Normal,
+            0
+        ));
+        let scheduler = scheduler_with_block_lists([(registered_pos, ticks)]);
+        if let Err(error) = scheduler.reconcile_active_chunks([registered_pos].into_iter()) {
+            panic!("test scheduler invariant failed: {error:?}");
+        }
+        let generation = scheduler.state.lock().active_generation;
+
+        assert_eq!(
+            scheduler.reconcile_active_chunks([registered_pos, missing_pos].into_iter()),
+            Err(TickSchedulerError::MissingContainer(missing_pos))
+        );
+        let state = scheduler.state.lock();
+        assert_eq!(state.active_generation, generation);
+        assert!(
+            state
+                .active_block_deadlines
+                .contains(&(3, PackedChunkPos::from(registered_pos)))
+        );
+        assert_eq!(
+            state
+                .chunks
+                .get(&registered_pos)
+                .and_then(|registered| registered.active_rank(generation)),
+            Some(0)
+        );
     }
 
     #[test]
@@ -1559,16 +2138,27 @@ mod tests {
             priority: TickPriority::Normal,
             sub_tick_order: 1,
         };
-        let mut run_set = ScheduledTickRunSet::default();
-        run_set.begin(&[first, second]);
+        let batch = ScheduledTickRunBatch::new(vec![first, second]);
+        assert!(!batch.lookup_is_initialized());
+        assert!(batch.contains(first.pos, first.tick_type));
+        assert!(batch.lookup_is_initialized());
+        assert!(batch.contains(second.pos, second.tick_type));
+        batch.start(0);
+        assert!(!batch.contains(first.pos, first.tick_type));
+        assert!(batch.contains(second.pos, second.tick_type));
+        batch.start(1);
+        assert!(!batch.contains(second.pos, second.tick_type));
 
-        assert!(run_set.contains(first.pos, first.tick_type));
-        assert!(run_set.contains(second.pos, second.tick_type));
-        run_set.start(&first);
-        assert!(!run_set.contains(first.pos, first.tick_type));
-        assert!(run_set.contains(second.pos, second.tick_type));
-        run_set.clear();
-        assert!(!run_set.contains(second.pos, second.tick_type));
+        let late_query_batch = ScheduledTickRunBatch::new(vec![first, second]);
+        late_query_batch.start(0);
+        assert!(!late_query_batch.lookup_is_initialized());
+        assert!(!late_query_batch.contains(first.pos, first.tick_type));
+        assert!(late_query_batch.contains(second.pos, second.tick_type));
+
+        let completed_batch = ScheduledTickRunBatch::new(vec![first]);
+        completed_batch.start(0);
+        assert!(!completed_batch.contains(first.pos, first.tick_type));
+        assert!(!completed_batch.lookup_is_initialized());
     }
 
     #[test]

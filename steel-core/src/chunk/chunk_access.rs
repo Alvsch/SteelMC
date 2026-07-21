@@ -146,15 +146,21 @@ impl ChunkStatus {
 }
 
 /// An enum that allows access to a chunk in different states.
-// Always stored behind `SyncRwLock` in `ChunkHolder`, so variant size doesn't matter.
+///
+/// Variants stay inline to avoid a heap allocation and indirection on every chunk access.
+/// This accepts padding to `ProtoChunk`'s size inside the holder lock.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing a chunk variant would add allocation and indirection to the common access path"
+)]
 pub enum ChunkAccess {
     /// A fully generated chunk.
     Full(LevelChunk),
     /// A chunk that is still being generated.
     Proto(ProtoChunk),
-    /// To get a chunk accses non-internally you need to use the methods on chunk holder.
-    /// Which prohibits you from getting an unloaded chunk.
-    // Therefore this can be seen as a placeholder that will panic if you somehow get it
+    /// External chunk access must use the methods on `ChunkHolder`, which prevent access to
+    /// unloaded chunks.
+    // This is therefore a placeholder that will panic if it is somehow accessed.
     Unloaded,
 }
 

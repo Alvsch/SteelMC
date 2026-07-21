@@ -3240,10 +3240,10 @@ mod tests {
     }
 
     #[test]
-    fn full_chunk_save_snapshots_world_owned_scheduled_ticks() {
+    fn full_chunk_save_snapshots_chunk_owned_scheduled_ticks() {
         init_test_registry();
         init_runtime_registries();
-        let world = fresh_test_world("world_owned_tick_save");
+        let world = fresh_test_world("chunk_owned_tick_save");
         let chunk_pos = ChunkPos::new(0, 0);
         let holder = insert_ready_full_chunk(&world, chunk_pos);
         let block_pos = BlockPos::new(1, 64, 2);

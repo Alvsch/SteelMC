@@ -39,7 +39,7 @@ use steel_protocol::{
     packets::game::CSetTime,
 };
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use simdnbt::owned::NbtCompound;
 use steel_registry::biome::{BiomeRef, TemperatureModifier};
 use steel_registry::blocks::block_state_ext::BlockStateExt;
@@ -455,12 +455,14 @@ pub struct World {
     pub weather: SyncMutex<Weather>,
     /// Per-level recent toggle history used by vanilla redstone-torch burnout.
     redstone_torch_toggles: SyncMutex<redstone::RedstoneTorchToggleTracker>,
-    /// World owner for all published Full-chunk scheduled block and fluid ticks.
+    /// World registration and sparse head index for chunk-owned scheduled ticks.
     scheduled_ticks: tick_scheduler::WorldTickScheduler,
-    /// Block ticks selected for this tick whose callbacks have not started yet.
-    scheduled_block_ticks_this_tick: SyncMutex<tick_scheduler::ScheduledTickRunSet>,
-    /// Fluid ticks selected for this tick whose callbacks have not started yet.
-    scheduled_fluid_ticks_this_tick: SyncMutex<tick_scheduler::ScheduledTickRunSet>,
+    /// Published block batch used by `willTickThisTick` queries during callbacks.
+    scheduled_block_ticks_this_tick:
+        SyncMutex<Option<Arc<tick_scheduler::ScheduledTickRunBatch<BlockRef>>>>,
+    /// Published fluid batch used by `willTickThisTick` queries during callbacks.
+    scheduled_fluid_ticks_this_tick:
+        SyncMutex<Option<Arc<tick_scheduler::ScheduledTickRunBatch<FluidRef>>>>,
     /// Point of interest storage for efficient spatial queries of special blocks.
     pub poi_storage: SyncMutex<PointOfInterestStorage>,
     /// World-change requests queued by world-local ticks for server safe-point processing.
@@ -580,12 +582,8 @@ impl World {
                     redstone::RedstoneTorchToggleTracker::default(),
                 ),
                 scheduled_ticks: tick_scheduler::WorldTickScheduler::new(),
-                scheduled_block_ticks_this_tick: SyncMutex::new(
-                    tick_scheduler::ScheduledTickRunSet::default(),
-                ),
-                scheduled_fluid_ticks_this_tick: SyncMutex::new(
-                    tick_scheduler::ScheduledTickRunSet::default(),
-                ),
+                scheduled_block_ticks_this_tick: SyncMutex::new(None),
+                scheduled_fluid_ticks_this_tick: SyncMutex::new(None),
                 poi_storage: SyncMutex::new(PointOfInterestStorage::new()),
                 pending_world_changes: SyncMutex::new(Vec::new()),
             }
@@ -3018,8 +3016,8 @@ impl World {
     ///
     /// # Panics
     ///
-    /// Panics if a published Full chunk has lost both its world-owned and local
-    /// scheduled-tick queues, which violates the chunk publication invariant.
+    /// Panics if a published Full chunk's scheduled-tick container was finalized,
+    /// which violates the chunk publication invariant.
     pub fn has_scheduled_block_tick(&self, pos: BlockPos, block: BlockRef) -> bool {
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
@@ -3027,7 +3025,7 @@ impl World {
                 let Some(chunk) = chunk_access.as_full() else {
                     return false;
                 };
-                match self.scheduled_ticks.has_block_tick(chunk, pos, block) {
+                match chunk.has_scheduled_block_tick(pos, block) {
                     Ok(has_tick) => has_tick,
                     Err(error) => {
                         panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}")
@@ -3041,8 +3039,8 @@ impl World {
     ///
     /// # Panics
     ///
-    /// Panics if a published Full chunk has lost both its world-owned and local
-    /// scheduled-tick queues, which violates the chunk publication invariant.
+    /// Panics if a published Full chunk's scheduled-tick container was finalized,
+    /// which violates the chunk publication invariant.
     pub fn has_scheduled_fluid_tick(&self, pos: BlockPos, fluid: FluidRef) -> bool {
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
@@ -3050,7 +3048,7 @@ impl World {
                 let Some(chunk) = chunk_access.as_full() else {
                     return false;
                 };
-                match self.scheduled_ticks.has_fluid_tick(chunk, pos, fluid) {
+                match chunk.has_scheduled_fluid_tick(pos, fluid) {
                     Ok(has_tick) => has_tick,
                     Err(error) => {
                         panic!("Full chunk scheduled-tick ownership invariant failed: {error:?}")
@@ -3119,13 +3117,6 @@ impl World {
         )
     }
 
-    pub(crate) fn scheduled_tick_snapshot(
-        &self,
-        chunk: &LevelChunk,
-    ) -> Result<tick_scheduler::ScheduledTickSnapshot, tick_scheduler::TickSchedulerError> {
-        self.scheduled_ticks.snapshot(chunk, self.game_time())
-    }
-
     pub(crate) fn unpack_scheduled_ticks(
         &self,
         pos: ChunkPos,
@@ -3133,31 +3124,31 @@ impl World {
         self.scheduled_ticks.unpack_chunk(pos, self.game_time())
     }
 
-    pub(crate) fn verify_registered_scheduled_tick_chunks(
+    pub(crate) fn reconcile_active_scheduled_tick_chunks<I>(
         &self,
-        active_chunks: &FxHashMap<ChunkPos, usize>,
-    ) -> Result<(), tick_scheduler::TickSchedulerError> {
-        self.scheduled_ticks.verify_registered_chunks(active_chunks)
+        active_chunks: I,
+    ) -> Result<(), tick_scheduler::TickSchedulerError>
+    where
+        I: Iterator<Item = ChunkPos> + Clone,
+    {
+        self.scheduled_ticks.reconcile_active_chunks(active_chunks)
     }
 
     pub(crate) fn begin_scheduled_tick_phase(
         &self,
         current_tick: i64,
-        active_chunks: &FxHashMap<ChunkPos, usize>,
         max_ticks: usize,
     ) -> tick_scheduler::ScheduledTickBatch<BlockRef> {
-        self.scheduled_ticks
-            .begin_tick(current_tick, active_chunks, max_ticks)
+        self.scheduled_ticks.begin_tick(current_tick, max_ticks)
     }
 
     pub(crate) fn collect_scheduled_fluid_tick_batch(
         &self,
         current_tick: i64,
-        active_chunks: &FxHashMap<ChunkPos, usize>,
         max_ticks: usize,
     ) -> tick_scheduler::ScheduledTickBatch<FluidRef> {
         self.scheduled_ticks
-            .collect_fluid_ticks(current_tick, active_chunks, max_ticks)
+            .collect_fluid_ticks(current_tick, max_ticks)
     }
 
     /// Returns whether a selected block tick at `(pos, block)` has not started yet.
@@ -3166,40 +3157,84 @@ impl World {
     /// [`Self::has_scheduled_block_tick`], because selected ticks have already
     /// been removed from their owning chunk queue.
     pub fn will_tick_block_this_tick(&self, pos: BlockPos, block: BlockRef) -> bool {
-        self.scheduled_block_ticks_this_tick
+        let batch = self
+            .scheduled_block_ticks_this_tick
             .lock()
-            .contains(pos, block)
+            .as_ref()
+            .map(Arc::clone);
+        batch.is_some_and(|batch| batch.contains(pos, block))
     }
 
     /// Returns whether a selected fluid tick at `(pos, fluid)` has not started yet.
     pub fn will_tick_fluid_this_tick(&self, pos: BlockPos, fluid: FluidRef) -> bool {
-        self.scheduled_fluid_ticks_this_tick
+        let batch = self
+            .scheduled_fluid_ticks_this_tick
             .lock()
-            .contains(pos, fluid)
+            .as_ref()
+            .map(Arc::clone);
+        batch.is_some_and(|batch| batch.contains(pos, fluid))
     }
 
-    pub(crate) fn begin_scheduled_block_tick_batch(&self, ticks: &[tick_scheduler::BlockTick]) {
-        self.scheduled_block_ticks_this_tick.lock().begin(ticks);
+    pub(crate) fn begin_scheduled_block_tick_batch(
+        &self,
+        ticks: Vec<tick_scheduler::BlockTick>,
+    ) -> Arc<tick_scheduler::ScheduledTickRunBatch<BlockRef>> {
+        let batch = Arc::new(tick_scheduler::ScheduledTickRunBatch::new(ticks));
+        let mut current = self.scheduled_block_ticks_this_tick.lock();
+        assert!(
+            current.is_none(),
+            "scheduled block-tick batch was already active"
+        );
+        *current = Some(Arc::clone(&batch));
+        batch
     }
 
-    pub(crate) fn start_scheduled_block_tick(&self, tick: &tick_scheduler::BlockTick) {
-        self.scheduled_block_ticks_this_tick.lock().start(tick);
+    pub(crate) fn end_scheduled_block_tick_batch(
+        &self,
+        batch: &Arc<tick_scheduler::ScheduledTickRunBatch<BlockRef>>,
+    ) {
+        let removed = {
+            let mut current = self.scheduled_block_ticks_this_tick.lock();
+            assert!(
+                current
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, batch)),
+                "scheduled block-tick batch identity changed during execution"
+            );
+            current.take()
+        };
+        drop(removed);
     }
 
-    pub(crate) fn end_scheduled_block_tick_batch(&self) {
-        self.scheduled_block_ticks_this_tick.lock().clear();
+    pub(crate) fn begin_scheduled_fluid_tick_batch(
+        &self,
+        ticks: Vec<tick_scheduler::FluidTick>,
+    ) -> Arc<tick_scheduler::ScheduledTickRunBatch<FluidRef>> {
+        let batch = Arc::new(tick_scheduler::ScheduledTickRunBatch::new(ticks));
+        let mut current = self.scheduled_fluid_ticks_this_tick.lock();
+        assert!(
+            current.is_none(),
+            "scheduled fluid-tick batch was already active"
+        );
+        *current = Some(Arc::clone(&batch));
+        batch
     }
 
-    pub(crate) fn begin_scheduled_fluid_tick_batch(&self, ticks: &[tick_scheduler::FluidTick]) {
-        self.scheduled_fluid_ticks_this_tick.lock().begin(ticks);
-    }
-
-    pub(crate) fn start_scheduled_fluid_tick(&self, tick: &tick_scheduler::FluidTick) {
-        self.scheduled_fluid_ticks_this_tick.lock().start(tick);
-    }
-
-    pub(crate) fn end_scheduled_fluid_tick_batch(&self) {
-        self.scheduled_fluid_ticks_this_tick.lock().clear();
+    pub(crate) fn end_scheduled_fluid_tick_batch(
+        &self,
+        batch: &Arc<tick_scheduler::ScheduledTickRunBatch<FluidRef>>,
+    ) {
+        let removed = {
+            let mut current = self.scheduled_fluid_ticks_this_tick.lock();
+            assert!(
+                current
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, batch)),
+                "scheduled fluid-tick batch identity changed during execution"
+            );
+            current.take()
+        };
+        drop(removed);
     }
 
     /// Advances game time and this world's clock instances, then periodically synchronizes game time.
