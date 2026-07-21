@@ -1,7 +1,6 @@
 //! This module contains the `ChunkAccess` enum, which is used to access chunks in different states.
-use rand::Rng;
-use std::sync::Weak;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
 use steel_registry::{blocks::BlockRef, fluid::FluidRef};
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, types::UpdateFlags};
 use wincode::{SchemaRead, SchemaWrite};
@@ -11,7 +10,7 @@ use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use crate::block_entity::{ClearedBlockEntities, SharedBlockEntity};
 use crate::chunk::{
     heightmap::HeightmapType,
-    level_chunk::{LevelChunk, LevelChunkBlockSetResult},
+    level_chunk::{BlockRandomPositionGenerator, LevelChunk, LevelChunkBlockSetResult},
     light::ChunkLightData,
     light::ChunkSkyLightSources,
     proto_chunk::ProtoChunk,
@@ -869,9 +868,14 @@ impl ChunkAccess {
     }
 
     /// Ticks random blocks and fluids if this is a full chunk.
-    pub fn tick_random_blocks<R: Rng + ?Sized>(&self, random_tick_speed: u32, rng: &mut R) {
+    pub(crate) fn tick_random_blocks(
+        &self,
+        world: &Arc<World>,
+        random_tick_speed: u32,
+        random_positions: &mut BlockRandomPositionGenerator,
+    ) {
         if let Self::Full(chunk) = self {
-            chunk.tick_random_blocks(random_tick_speed, rng);
+            chunk.tick_random_blocks(world, random_tick_speed, random_positions);
         }
     }
 }

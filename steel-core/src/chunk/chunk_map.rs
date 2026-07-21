@@ -57,6 +57,7 @@ use crate::chunk::player_chunk_view::PlayerChunkView;
 use crate::chunk::{
     chunk_access::{ChunkAccess, ChunkStatus},
     chunk_generation_task::ChunkGenerationTask,
+    level_chunk::BlockRandomPositionGenerator,
     section::RandomTickSectionBits,
 };
 use crate::chunk_saver::ChunkStorage;
@@ -1979,11 +1980,9 @@ impl ChunkMap {
                 Self::execute_scheduled_fluid_ticks(world, ready_fluid_ticks);
 
                 if random_tick_speed > 0 {
-                    // Intentional Steel difference: Vanilla selects live random-tick
-                    // coordinates with Level's LCG. Steel uses unseeded runtime RNG
-                    // for incidental gameplay randomness while preserving uniform
-                    // coordinate ranges and callback ordering.
-                    let mut rng = rand::rng();
+                    // Intentional Steel difference: this uses Vanilla's coordinate LCG,
+                    // but seeds it per tick from runtime RNG instead of sharing Level RNG.
+                    let mut random_positions = BlockRandomPositionGenerator::from_runtime_rng();
                     for &index in &tickable_chunks.random_chunk_indices {
                         // Vanilla random chunk ticks use the entity-ticking range but only
                         // require the same confirmed block-ticking chunk used by scheduled ticks.
@@ -1994,7 +1993,11 @@ impl ChunkMap {
                         if let Some(chunk_guard) =
                             tickable_chunk.holder.try_chunk(ChunkStatus::Full)
                         {
-                            chunk_guard.tick_random_blocks(random_tick_speed, &mut rng);
+                            chunk_guard.tick_random_blocks(
+                                world,
+                                random_tick_speed,
+                                &mut random_positions,
+                            );
                         }
                     }
                 }

@@ -8,7 +8,6 @@ use std::{
     },
 };
 
-use rand::{Rng, RngExt};
 use rustc_hash::FxHashSet;
 use steel_protocol::packets::game::{
     BlockEntityInfo, ChunkPacketData, HeightmapType as ProtocolHeightmapType, Heightmaps,
@@ -142,16 +141,43 @@ fn random_tick_kinds(state: BlockStateId) -> Option<(bool, Option<FluidRef>)> {
     (tick_block || tick_fluid.is_some()).then_some((tick_block, tick_fluid))
 }
 
+/// Generates section-local random-tick positions with Vanilla's LCG and bit layout.
+pub(crate) struct BlockRandomPositionGenerator {
+    value: i32,
+}
+
+impl BlockRandomPositionGenerator {
+    pub(crate) fn from_runtime_rng() -> Self {
+        Self::from_seed(rand::random())
+    }
+
+    const fn from_seed(value: i32) -> Self {
+        Self { value }
+    }
+
+    const fn next_local(&mut self) -> (usize, usize, usize) {
+        self.value = self.value.wrapping_mul(3).wrapping_add(1_013_904_223);
+        let value = self.value >> 2;
+        (
+            (value & 15) as usize,
+            ((value >> 16) & 15) as usize,
+            ((value >> 8) & 15) as usize,
+        )
+    }
+}
+
 impl LevelChunk {
     /// Runs random block and fluid ticks for this chunk.
-    pub fn tick_random_blocks<R: Rng + ?Sized>(&self, random_tick_speed: u32, rng: &mut R) {
+    pub(crate) fn tick_random_blocks(
+        &self,
+        world: &Arc<World>,
+        random_tick_speed: u32,
+        random_positions: &mut BlockRandomPositionGenerator,
+    ) {
         if random_tick_speed == 0 {
             return;
         }
 
-        let Some(world) = self.get_level() else {
-            return;
-        };
         let block_behaviors = &*BLOCK_BEHAVIORS;
         let fluid_behaviors = &*FLUID_BEHAVIORS;
         let chunk_base_x = self.pos.0.x * 16;
@@ -165,9 +191,7 @@ impl LevelChunk {
             let section_base_y = self.min_y + (section_index as i32 * 16);
 
             for _ in 0..random_tick_speed {
-                let local_x = rng.random_range(0..16);
-                let local_y = rng.random_range(0..16);
-                let local_z = rng.random_range(0..16);
+                let (local_x, local_y, local_z) = random_positions.next_local();
                 // Copy the sampled state and release the guard before either
                 // callback; the block callback may mutate this section.
                 let state = section.read().states.get(local_x, local_y, local_z);
@@ -183,10 +207,10 @@ impl LevelChunk {
                 if tick_block {
                     block_behaviors
                         .get_behavior(state.get_block())
-                        .random_tick(state, &world, pos);
+                        .random_tick(state, world, pos);
                 }
                 if let Some(fluid) = tick_fluid {
-                    fluid_behaviors.get_behavior(fluid).random_tick(&world, pos);
+                    fluid_behaviors.get_behavior(fluid).random_tick(world, pos);
                 }
             }
         }
@@ -1863,6 +1887,17 @@ mod tests {
         assert!(tick_block);
         assert_eq!(tick_fluid, Some(&vanilla_fluids::LAVA));
         assert!(random_tick_kinds(vanilla_blocks::WATER.default_state()).is_none());
+    }
+
+    #[test]
+    fn block_random_positions_match_vanilla_lcg_layout() {
+        let mut positions = BlockRandomPositionGenerator::from_seed(0);
+
+        assert_eq!(positions.next_local(), (7, 11, 12));
+        assert_eq!(positions.next_local(), (15, 14, 3));
+        assert_eq!(positions.next_local(), (4, 8, 6));
+        assert_eq!(positions.next_local(), (6, 5, 1));
+        assert_eq!(positions.next_local(), (9, 12, 1));
     }
 
     struct ActivationRecordingBlockEntity {
