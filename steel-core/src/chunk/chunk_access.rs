@@ -1,4 +1,5 @@
 //! This module contains the `ChunkAccess` enum, which is used to access chunks in different states.
+use rand::Rng;
 use std::sync::Weak;
 use std::sync::atomic::Ordering;
 use steel_registry::{blocks::BlockRef, fluid::FluidRef};
@@ -861,10 +862,10 @@ impl ChunkAccess {
         }
     }
 
-    /// Ticks random blocks if this is a full chunk.
-    pub fn tick_random_blocks(&self, random_tick_speed: u32) {
+    /// Ticks random blocks and fluids if this is a full chunk.
+    pub fn tick_random_blocks<R: Rng + ?Sized>(&self, random_tick_speed: u32, rng: &mut R) {
         if let Self::Full(chunk) = self {
-            chunk.tick_random_blocks(random_tick_speed);
+            chunk.tick_random_blocks(random_tick_speed, rng);
         }
     }
 }

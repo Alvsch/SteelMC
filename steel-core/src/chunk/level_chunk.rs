@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use rand::RngExt;
+use rand::{Rng, RngExt};
 use steel_protocol::packets::game::{
     BlockEntityInfo, ChunkPacketData, HeightmapType as ProtocolHeightmapType, Heightmaps,
     LightUpdatePacketData,
@@ -27,7 +27,8 @@ use steel_utils::{
 use steel_utils::locks::SyncMutex;
 
 use crate::behavior::{
-    BLOCK_BEHAVIORS, BlockEntityCreation, BlockStateBehaviorExt, FLUID_BEHAVIORS,
+    BLOCK_BEHAVIORS, BlockBehaviorRegistry, BlockEntityCreation, BlockStateBehaviorExt,
+    FLUID_BEHAVIORS, FluidBehaviorRegistry,
 };
 use crate::block_entity::{
     BlockEntity, BlockEntityInsert, BlockEntityLifecycleExt as _, BlockEntityLookup,
@@ -133,64 +134,70 @@ enum PendingPromotionCommit {
     },
 }
 
+fn random_tick_kinds(
+    state: BlockStateId,
+    block_behaviors: &BlockBehaviorRegistry,
+    fluid_behaviors: &FluidBehaviorRegistry,
+) -> Option<(bool, Option<FluidRef>)> {
+    let block_behavior = block_behaviors.get_behavior(state.get_block());
+    let fluid_state = block_behavior.get_fluid_state(state);
+    let tick_block = block_behavior.is_randomly_ticking(state);
+    let tick_fluid = (!fluid_state.is_empty()
+        && fluid_behaviors
+            .get_behavior(fluid_state.fluid_id)
+            .is_randomly_ticking())
+    .then_some(fluid_state.fluid_id);
+    (tick_block || tick_fluid.is_some()).then_some((tick_block, tick_fluid))
+}
+
 impl LevelChunk {
-    /// Runs vanilla random block ticks for this chunk.
-    pub fn tick_random_blocks(&self, random_tick_speed: u32) {
+    /// Runs random block and fluid ticks for this chunk.
+    pub fn tick_random_blocks<R: Rng + ?Sized>(&self, random_tick_speed: u32, rng: &mut R) {
         if random_tick_speed == 0 {
             return;
         }
 
-        for (section_index, section) in self.sections.sections.iter().enumerate() {
-            // Skip sections with no randomly-ticking blocks (lock-free check)
-            if !section.is_randomly_ticking() {
-                continue;
-            }
+        let Some(world) = self.get_level() else {
+            return;
+        };
+        let block_behaviors = &*BLOCK_BEHAVIORS;
+        let fluid_behaviors = &*FLUID_BEHAVIORS;
+        let chunk_base_x = self.pos.0.x * 16;
+        let chunk_base_z = self.pos.0.y * 16;
+        let random_tick_sections = self.sections.random_tick_sections();
+        let mut next_section_index = 0;
 
-            let Some(world) = self.get_level() else {
-                return;
-            };
-
-            let block_behaviors = &*BLOCK_BEHAVIORS;
-            let mut rng = rand::rng();
-            let chunk_base_x = self.pos.0.x * 16;
-            let chunk_base_z = self.pos.0.y * 16;
-
+        while let Some(section_index) = random_tick_sections.next(next_section_index) {
+            next_section_index = section_index + 1;
+            let section = &self.sections.sections[section_index];
             let section_base_y = self.min_y + (section_index as i32 * 16);
 
-            // Collect blocks to tick while holding the read lock, then release it
-            // before calling random_tick to avoid deadlock (random_tick may call set_block)
-            let blocks_to_tick: Vec<(BlockStateId, BlockPos)> = {
-                let section_guard = section.read();
+            for _ in 0..random_tick_speed {
+                let local_x = rng.random_range(0..16);
+                let local_y = rng.random_range(0..16);
+                let local_z = rng.random_range(0..16);
+                // Copy the sampled state and release the guard before either
+                // callback; the block callback may mutate this section.
+                let state = section.read().states.get(local_x, local_y, local_z);
+                let Some((tick_block, tick_fluid)) =
+                    random_tick_kinds(state, block_behaviors, fluid_behaviors)
+                else {
+                    continue;
+                };
+                let pos = BlockPos::new(
+                    chunk_base_x + local_x as i32,
+                    section_base_y + local_y as i32,
+                    chunk_base_z + local_z as i32,
+                );
 
-                let mut blocks = Vec::with_capacity(random_tick_speed as usize);
-
-                for _ in 0..random_tick_speed {
-                    let local_x = rng.random_range(0..16);
-                    let local_y = rng.random_range(0..16);
-                    let local_z = rng.random_range(0..16);
-
-                    let state = section_guard.states.get(local_x, local_y, local_z);
-
-                    if block_behaviors
+                if tick_block {
+                    block_behaviors
                         .get_behavior(state.get_block())
-                        .is_randomly_ticking(state)
-                    {
-                        let pos = BlockPos::new(
-                            chunk_base_x + local_x as i32,
-                            section_base_y + local_y as i32,
-                            chunk_base_z + local_z as i32,
-                        );
-                        blocks.push((state, pos));
-                    }
+                        .random_tick(state, &world, pos);
                 }
-
-                blocks
-            }; // section_guard dropped here
-
-            // Now process the collected blocks without holding any lock
-            for (state, pos) in blocks_to_tick {
-                let behavior = block_behaviors.get_behavior(state.get_block());
-                behavior.random_tick(state, &world, pos);
+                if let Some(fluid) = tick_fluid {
+                    fluid_behaviors.get_behavior(fluid).random_tick(&world, pos);
+                }
             }
         }
     }
@@ -1742,7 +1749,7 @@ mod tests {
     use simdnbt::{borrow::BaseNbtCompound as BorrowedNbtCompound, owned::NbtCompound};
     use steel_registry::{
         blocks::properties::BlockStateProperties, test_support::init_test_registry,
-        vanilla_block_entity_types, vanilla_blocks,
+        vanilla_block_entity_types, vanilla_blocks, vanilla_fluids,
     };
     use steel_utils::{ChunkPos, Downcast as _, DowncastType, DowncastTypeKey, locks::SyncMutex};
 
@@ -1767,6 +1774,30 @@ mod tests {
             Weak::new(),
         );
         Arc::new(LevelChunk::from_proto(proto, 0, 16, Weak::new()).chunk)
+    }
+
+    #[test]
+    fn lava_random_tick_classification_includes_block_and_fluid_hooks() {
+        init_test_registry();
+        init_behaviors();
+        let Some((tick_block, tick_fluid)) = random_tick_kinds(
+            vanilla_blocks::LAVA.default_state(),
+            &BLOCK_BEHAVIORS,
+            &FLUID_BEHAVIORS,
+        ) else {
+            panic!("lava should be eligible for random ticking");
+        };
+
+        assert!(tick_block);
+        assert_eq!(tick_fluid, Some(&vanilla_fluids::LAVA));
+        assert!(
+            random_tick_kinds(
+                vanilla_blocks::WATER.default_state(),
+                &BLOCK_BEHAVIORS,
+                &FLUID_BEHAVIORS,
+            )
+            .is_none()
+        );
     }
 
     struct ActivationRecordingBlockEntity {

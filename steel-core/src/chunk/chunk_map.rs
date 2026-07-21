@@ -55,6 +55,7 @@ use crate::chunk::player_chunk_view::PlayerChunkView;
 use crate::chunk::{
     chunk_access::{ChunkAccess, ChunkStatus},
     chunk_generation_task::ChunkGenerationTask,
+    section::RandomTickSectionBits,
 };
 use crate::chunk_saver::ChunkStorage;
 use crate::player::connection::NetworkConnection;
@@ -93,6 +94,7 @@ pub struct ChunkMapGameTickTimings {
 struct TickableChunk {
     pos: ChunkPos,
     holder: Arc<ChunkHolder>,
+    randomly_ticking_sections: Arc<RandomTickSectionBits>,
 }
 
 /// Immutable views of the chunk sets consumed during a game tick.
@@ -1588,17 +1590,22 @@ impl ChunkMap {
                 return true;
             };
             let readiness = holder.ticking_readiness_snapshot();
-            if !simulation_level.is_block_ticking()
-                || !readiness.is_block_ticking()
-                || holder.try_chunk(ChunkStatus::Full).is_none()
-            {
+            if !simulation_level.is_block_ticking() || !readiness.is_block_ticking() {
                 return true;
             }
+            let Some(chunk) = holder.try_chunk(ChunkStatus::Full) else {
+                return true;
+            };
+            let Some(full) = chunk.as_full() else {
+                return true;
+            };
+            let randomly_ticking_sections = Arc::clone(full.sections.random_tick_sections());
 
             let index = block.len();
             block.push(TickableChunk {
                 pos: *pos,
                 holder: Arc::clone(holder),
+                randomly_ticking_sections,
             });
             block_indices.insert(*pos, index);
             if simulation_level.is_entity_ticking() {
@@ -1954,12 +1961,24 @@ impl ChunkMap {
                     Self::collect_scheduled_fluid_ticks(world, &tickable_chunks, current_tick);
                 Self::execute_scheduled_fluid_ticks(world, ready_fluid_ticks);
 
-                for &index in &tickable_chunks.random_chunk_indices {
-                    // Vanilla random chunk ticks use the entity-ticking range but only require
-                    // the same confirmed block-ticking chunk used by scheduled ticks.
-                    let tickable_chunk = &tickable_chunks.block[index];
-                    if let Some(chunk_guard) = tickable_chunk.holder.try_chunk(ChunkStatus::Full) {
-                        chunk_guard.tick_random_blocks(random_tick_speed);
+                if random_tick_speed > 0 {
+                    // Intentional Steel difference: Vanilla selects live random-tick
+                    // coordinates with Level's LCG. Steel uses unseeded runtime RNG
+                    // for incidental gameplay randomness while preserving uniform
+                    // coordinate ranges and callback ordering.
+                    let mut rng = rand::rng();
+                    for &index in &tickable_chunks.random_chunk_indices {
+                        // Vanilla random chunk ticks use the entity-ticking range but only
+                        // require the same confirmed block-ticking chunk used by scheduled ticks.
+                        let tickable_chunk = &tickable_chunks.block[index];
+                        if tickable_chunk.randomly_ticking_sections.is_empty() {
+                            continue;
+                        }
+                        if let Some(chunk_guard) =
+                            tickable_chunk.holder.try_chunk(ChunkStatus::Full)
+                        {
+                            chunk_guard.tick_random_blocks(random_tick_speed, &mut rng);
+                        }
                     }
                 }
                 timings.tick_chunks = start.elapsed();
