@@ -4,6 +4,7 @@ use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use smallvec::SmallVec;
+use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction};
@@ -26,7 +27,7 @@ use crate::behavior::blocks::vegetation::bonemealable::Bonemealable;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
 use crate::behavior::{BLOCK_BEHAVIORS, BlockStateBehaviorExt};
 use crate::behavior::{InventoryAccess, PlacementSource};
-use crate::block_entity::SharedBlockEntity;
+use crate::block_entity::{BlockEntityTicker, SharedBlockEntity};
 use crate::entity::ai::path::PathComputationType;
 use crate::entity::projectile::Projectile;
 use crate::entity::{Entity, InsideBlockEffectCollector, damage::DamageSource};
@@ -1470,6 +1471,23 @@ pub trait BlockBehavior: Send + Sync {
         state: BlockStateId,
     ) -> BlockEntityCreation {
         BlockEntityCreation::Unimplemented
+    }
+
+    /// Returns the server ticker selected by this live block state and entity type.
+    ///
+    /// Mirrors Vanilla `EntityBlock.getTicker`. Selection runs without chunk,
+    /// section, or block-entity storage locks.
+    #[expect(
+        unused_variables,
+        reason = "default trait implementation has no block-entity ticker"
+    )]
+    fn get_block_entity_ticker(
+        &self,
+        world: &Arc<World>,
+        state: BlockStateId,
+        block_entity_type: BlockEntityTypeRef,
+    ) -> Option<BlockEntityTicker> {
+        None
     }
 
     /// Returns whether this new block should keep the old state's block entity.

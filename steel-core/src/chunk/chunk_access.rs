@@ -7,7 +7,7 @@ use wincode::{SchemaRead, SchemaWrite};
 
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 
-use crate::block_entity::SharedBlockEntity;
+use crate::block_entity::{ClearedBlockEntities, SharedBlockEntity};
 use crate::chunk::{
     heightmap::HeightmapType,
     level_chunk::{LevelChunk, LevelChunkBlockSetResult},
@@ -714,14 +714,14 @@ impl ChunkAccess {
 
     /// Clears storage and stages Full-chunk lifecycle callbacks for lock-free dispatch.
     #[must_use]
-    pub(crate) fn clear_all_block_entities_staged(&self) -> Vec<SharedBlockEntity> {
+    pub(crate) fn clear_all_block_entities_staged(&self) -> ClearedBlockEntities {
         match self {
             Self::Full(chunk) => chunk.clear_all_block_entities_staged(),
             Self::Proto(proto_chunk) => {
                 proto_chunk.clear_all_block_entities();
-                Vec::new()
+                ClearedBlockEntities::default()
             }
-            Self::Unloaded => Vec::new(),
+            Self::Unloaded => ClearedBlockEntities::default(),
         }
     }
 
@@ -865,13 +865,6 @@ impl ChunkAccess {
     pub fn tick_random_blocks(&self, random_tick_speed: u32) {
         if let Self::Full(chunk) = self {
             chunk.tick_random_blocks(random_tick_speed);
-        }
-    }
-
-    /// Ticks block entities if this is a full chunk.
-    pub fn tick_block_entities(&self) {
-        if let Self::Full(chunk) = self {
-            chunk.tick_block_entities();
         }
     }
 }

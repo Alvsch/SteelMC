@@ -162,9 +162,4 @@ impl BlockEntity for BeehiveBlockEntity {
             .collect::<Vec<_>>();
         nbt.insert("bees", NbtList::Compound(bees));
     }
-
-    fn is_ticking(&self) -> bool {
-        // TODO: Release occupants after their minimum hive time once bee entities exist.
-        false
-    }
 }

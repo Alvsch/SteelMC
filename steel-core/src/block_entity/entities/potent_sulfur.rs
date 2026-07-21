@@ -260,10 +260,6 @@ impl BlockEntity for PotentSulfurBlockEntity {
         nbt.insert("countdown", self.sulfur.lock().waiting_countdown);
     }
 
-    fn is_ticking(&self) -> bool {
-        true
-    }
-
     fn tick(&self, world: &Arc<World>) {
         let pos = self.get_block_pos();
         let state = world.get_block_state(pos);

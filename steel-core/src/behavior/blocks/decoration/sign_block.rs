@@ -8,17 +8,18 @@ use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
 use steel_registry::REGISTRY;
+use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction};
 use steel_registry::blocks::shapes::SupportType;
-use steel_registry::vanilla_blocks;
+use steel_registry::{vanilla_block_entity_types, vanilla_blocks};
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::InventoryAccess;
 use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
-use crate::block_entity::entities::SignBlockEntity;
+use crate::block_entity::{BlockEntityTicker, entities::SignBlockEntity};
 use crate::entity::Entity;
 use crate::player::Player;
 use crate::world::{LevelReader, ScheduledTickAccess, World};
@@ -330,6 +331,18 @@ impl BlockBehavior for StandingSignBlock {
         BlockEntityCreation::Created(Arc::new(SignBlockEntity::new(level, pos, state)))
     }
 
+    fn get_block_entity_ticker(
+        &self,
+        _world: &Arc<World>,
+        _state: BlockStateId,
+        block_entity_type: BlockEntityTypeRef,
+    ) -> Option<BlockEntityTicker> {
+        BlockEntityTicker::for_matching_entity_tick(
+            block_entity_type,
+            &vanilla_block_entity_types::SIGN,
+        )
+    }
+
     fn use_without_item(
         &self,
         state: BlockStateId,
@@ -407,6 +420,18 @@ impl BlockBehavior for WallSignBlock {
         state: BlockStateId,
     ) -> BlockEntityCreation {
         BlockEntityCreation::Created(Arc::new(SignBlockEntity::new(level, pos, state)))
+    }
+
+    fn get_block_entity_ticker(
+        &self,
+        _world: &Arc<World>,
+        _state: BlockStateId,
+        block_entity_type: BlockEntityTypeRef,
+    ) -> Option<BlockEntityTicker> {
+        BlockEntityTicker::for_matching_entity_tick(
+            block_entity_type,
+            &vanilla_block_entity_types::SIGN,
+        )
     }
 
     fn use_without_item(
@@ -527,6 +552,18 @@ impl BlockBehavior for CeilingHangingSignBlock {
         BlockEntityCreation::Created(Arc::new(SignBlockEntity::new_hanging(level, pos, state)))
     }
 
+    fn get_block_entity_ticker(
+        &self,
+        _world: &Arc<World>,
+        _state: BlockStateId,
+        block_entity_type: BlockEntityTypeRef,
+    ) -> Option<BlockEntityTicker> {
+        BlockEntityTicker::for_matching_entity_tick(
+            block_entity_type,
+            &vanilla_block_entity_types::HANGING_SIGN,
+        )
+    }
+
     fn use_without_item(
         &self,
         state: BlockStateId,
@@ -624,6 +661,18 @@ impl BlockBehavior for WallHangingSignBlock {
         BlockEntityCreation::Created(Arc::new(SignBlockEntity::new_hanging(level, pos, state)))
     }
 
+    fn get_block_entity_ticker(
+        &self,
+        _world: &Arc<World>,
+        _state: BlockStateId,
+        block_entity_type: BlockEntityTypeRef,
+    ) -> Option<BlockEntityTicker> {
+        BlockEntityTicker::for_matching_entity_tick(
+            block_entity_type,
+            &vanilla_block_entity_types::HANGING_SIGN,
+        )
+    }
+
     fn use_without_item(
         &self,
         state: BlockStateId,
@@ -634,5 +683,71 @@ impl BlockBehavior for WallHangingSignBlock {
         _inv: &mut InventoryAccess,
     ) -> InteractionResult {
         try_open_sign_editor(state, world, pos, player)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::test_support::init_test_registry;
+
+    use super::*;
+    use crate::test_support::fresh_test_world;
+
+    #[test]
+    fn sign_variants_select_their_matching_vanilla_tickers() {
+        init_test_registry();
+        let world = fresh_test_world("sign_ticker_selection");
+
+        let standing = StandingSignBlock::new(&vanilla_blocks::OAK_SIGN);
+        assert!(
+            standing
+                .get_block_entity_ticker(
+                    &world,
+                    vanilla_blocks::OAK_SIGN.default_state(),
+                    &vanilla_block_entity_types::SIGN,
+                )
+                .is_some()
+        );
+
+        let wall = WallSignBlock::new(&vanilla_blocks::OAK_WALL_SIGN);
+        assert!(
+            wall.get_block_entity_ticker(
+                &world,
+                vanilla_blocks::OAK_WALL_SIGN.default_state(),
+                &vanilla_block_entity_types::SIGN,
+            )
+            .is_some()
+        );
+
+        let ceiling_hanging = CeilingHangingSignBlock::new(&vanilla_blocks::OAK_HANGING_SIGN);
+        assert!(
+            ceiling_hanging
+                .get_block_entity_ticker(
+                    &world,
+                    vanilla_blocks::OAK_HANGING_SIGN.default_state(),
+                    &vanilla_block_entity_types::HANGING_SIGN,
+                )
+                .is_some()
+        );
+
+        let wall_hanging = WallHangingSignBlock::new(&vanilla_blocks::OAK_WALL_HANGING_SIGN);
+        assert!(
+            wall_hanging
+                .get_block_entity_ticker(
+                    &world,
+                    vanilla_blocks::OAK_WALL_HANGING_SIGN.default_state(),
+                    &vanilla_block_entity_types::HANGING_SIGN,
+                )
+                .is_some()
+        );
+        assert!(
+            wall_hanging
+                .get_block_entity_ticker(
+                    &world,
+                    vanilla_blocks::OAK_WALL_HANGING_SIGN.default_state(),
+                    &vanilla_block_entity_types::SIGN,
+                )
+                .is_none()
+        );
     }
 }

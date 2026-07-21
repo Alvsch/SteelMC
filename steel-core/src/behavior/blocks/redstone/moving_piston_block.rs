@@ -3,11 +3,12 @@
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
+use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::item_stack::ItemStack;
-use steel_registry::vanilla_blocks;
+use steel_registry::{vanilla_block_entity_types, vanilla_blocks};
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::{
@@ -15,7 +16,7 @@ use crate::behavior::{
     BlockEntityCreation, BlockHitResult, BlockLootContext, BlockPlaceContext, InteractionResult,
     InventoryAccess,
 };
-use crate::block_entity::entities::PistonMovingBlockEntity;
+use crate::block_entity::{BlockEntityTicker, entities::PistonMovingBlockEntity};
 use crate::entity::ai::path::PathComputationType;
 use crate::player::Player;
 use crate::world::{LevelReader, World};
@@ -44,6 +45,18 @@ impl BlockBehavior for MovingPistonBlock {
         _state: BlockStateId,
     ) -> BlockEntityCreation {
         BlockEntityCreation::NoEntity
+    }
+
+    fn get_block_entity_ticker(
+        &self,
+        _world: &Arc<World>,
+        _state: BlockStateId,
+        block_entity_type: BlockEntityTypeRef,
+    ) -> Option<BlockEntityTicker> {
+        BlockEntityTicker::for_matching_entity_tick(
+            block_entity_type,
+            &vanilla_block_entity_types::PISTON,
+        )
     }
 
     fn get_collision_boxes(
@@ -124,5 +137,32 @@ impl BlockBehavior for MovingPistonBlock {
 
     fn is_pathfindable(&self, _state: BlockStateId, _type: PathComputationType) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::test_support::init_test_registry;
+
+    use super::*;
+    use crate::test_support::fresh_test_world;
+
+    #[test]
+    fn moving_piston_selects_only_the_piston_block_entity_ticker() {
+        init_test_registry();
+        let world = fresh_test_world("moving_piston_ticker");
+        let behavior = MovingPistonBlock::new(&vanilla_blocks::MOVING_PISTON);
+        let state = vanilla_blocks::MOVING_PISTON.default_state();
+
+        assert!(
+            behavior
+                .get_block_entity_ticker(&world, state, &vanilla_block_entity_types::PISTON)
+                .is_some()
+        );
+        assert!(
+            behavior
+                .get_block_entity_ticker(&world, state, &vanilla_block_entity_types::CHEST)
+                .is_none()
+        );
     }
 }

@@ -292,10 +292,6 @@ impl BlockEntity for SignBlockEntity {
         Some(nbt)
     }
 
-    fn is_ticking(&self) -> bool {
-        true
-    }
-
     fn tick(&self, world: &Arc<World>) {
         // Clear the edit lock if the editing player is too far away or gone
         let editor_uuid = self.sign.lock().player_who_may_edit;
@@ -399,7 +395,6 @@ mod tests {
         );
         sign.set_player_who_may_edit(Some(Uuid::from_u128(1)));
 
-        assert!(sign.is_ticking());
         sign.tick(&world);
         assert_eq!(sign.get_player_who_may_edit(), None);
     }

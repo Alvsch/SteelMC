@@ -452,7 +452,7 @@ impl ProtoChunk {
             }
             PendingPromotionCommit::Complete(
                 self.block_entities
-                    .promote_without_ticker(pos, block_entity),
+                    .promote_without_lifecycle(pos, block_entity),
             )
         })
     }
@@ -915,7 +915,6 @@ mod tests {
         );
         let entity: SharedBlockEntity = Arc::new(SignBlockEntity::new(Weak::new(), pos, sign));
         assert!(proto.set_block_entity(Arc::clone(&entity)));
-        assert!(proto.block_entities.get_tickers().is_empty());
 
         assert_eq!(
             proto.set_block_state(
@@ -970,7 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_proto_entity_promotes_on_explicit_access_without_registering_a_ticker() {
+    fn pending_proto_entity_promotes_without_running_live_lifecycle() {
         init_test_registry();
         init_behaviors();
         init_block_entities();
@@ -992,7 +991,6 @@ mod tests {
 
         assert!(proto.promote_pending_block_entity(pos).is_some());
         assert!(proto.pending_block_entity_positions().is_empty());
-        assert!(proto.block_entities.get_tickers().is_empty());
     }
 
     #[test]

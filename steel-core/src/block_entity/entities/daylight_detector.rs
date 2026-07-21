@@ -49,11 +49,6 @@ impl BlockEntity for DaylightDetectorBlockEntity {
 
     fn save_additional(&self, _nbt: &mut NbtCompound) {}
 
-    fn is_ticking(&self) -> bool {
-        self.get_level()
-            .is_some_and(|world| world.dimension_type.has_skylight)
-    }
-
     fn tick(&self, world: &Arc<World>) {
         if world.game_time() % 20 != 0 {
             return;

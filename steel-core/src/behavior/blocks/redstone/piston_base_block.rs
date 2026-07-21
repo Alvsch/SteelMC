@@ -593,19 +593,12 @@ mod tests {
 
     use super::*;
     use crate::behavior::{BlockHitResult, BlockLootContext, PlacementOrientation, init_behaviors};
-    use crate::chunk::chunk_access::ChunkStatus;
     use crate::chunk::chunk_holder::ChunkHolder;
     use crate::test_support::{TestLevel, fresh_test_world, insert_ready_full_chunk};
 
-    fn tick_block_entities(holder: &Arc<ChunkHolder>, ticks: usize) {
+    fn tick_block_entities(world: &Arc<World>, ticks: usize) {
         for _ in 0..ticks {
-            let chunk = holder
-                .try_chunk(ChunkStatus::Full)
-                .expect("test chunk should remain full");
-            chunk
-                .as_full()
-                .expect("test chunk should remain a level chunk")
-                .tick_block_entities();
+            world.block_entity_tickers().tick(world, true);
         }
     }
 
@@ -735,7 +728,7 @@ mod tests {
 
     #[test]
     fn normal_piston_extends_settles_and_retracts_without_pulling() {
-        let (world, holder, piston_pos, power_pos) =
+        let (world, _holder, piston_pos, power_pos) =
             powered_piston_world("normal_piston_cycle", &vanilla_blocks::PISTON);
         assert!(
             world
@@ -753,7 +746,7 @@ mod tests {
             &vanilla_blocks::MOVING_PISTON
         );
 
-        tick_block_entities(&holder, 3);
+        tick_block_entities(&world, 3);
         assert_eq!(
             world.get_block_state(piston_pos.east()).get_block(),
             &vanilla_blocks::PISTON_HEAD
@@ -771,7 +764,7 @@ mod tests {
             world.get_block_state(piston_pos).get_block(),
             &vanilla_blocks::MOVING_PISTON
         );
-        tick_block_entities(&holder, 3);
+        tick_block_entities(&world, 3);
         let base = world.get_block_state(piston_pos);
         assert_eq!(base.get_block(), &vanilla_blocks::PISTON);
         assert!(!base.get_value(&BlockStateProperties::EXTENDED));
@@ -792,7 +785,7 @@ mod tests {
         let piston_pos = BlockPos::new(8, 64, 8);
         let button_pos = piston_pos.west();
         let power_pos = piston_pos.north();
-        let holder = insert_ready_full_chunk(&world, ChunkPos::from_block_pos(piston_pos));
+        let _holder = insert_ready_full_chunk(&world, ChunkPos::from_block_pos(piston_pos));
         let piston_state = vanilla_blocks::PISTON
             .default_state()
             .set_value(&BlockStateProperties::FACING, Direction::East)
@@ -815,7 +808,7 @@ mod tests {
             &vanilla_blocks::OAK_BUTTON
         );
 
-        tick_block_entities(&holder, 3);
+        tick_block_entities(&world, 3);
         assert!(world.remove_block(power_pos, false));
         world.run_block_events();
 
@@ -829,7 +822,7 @@ mod tests {
             &vanilla_blocks::OAK_BUTTON
         );
 
-        tick_block_entities(&holder, 3);
+        tick_block_entities(&world, 3);
         assert_eq!(
             world.get_block_state(button_pos).get_block(),
             &vanilla_blocks::OAK_BUTTON
@@ -838,9 +831,9 @@ mod tests {
 
     #[test]
     fn sticky_piston_pulls_settled_normal_block() {
-        let (world, holder, piston_pos, power_pos) =
+        let (world, _holder, piston_pos, power_pos) =
             powered_piston_world("sticky_piston_cycle", &vanilla_blocks::STICKY_PISTON);
-        tick_block_entities(&holder, 3);
+        tick_block_entities(&world, 3);
 
         assert!(world.remove_block(power_pos, false));
         world.run_block_events();
@@ -848,7 +841,7 @@ mod tests {
             world.get_block_state(piston_pos.east()).get_block(),
             &vanilla_blocks::MOVING_PISTON
         );
-        tick_block_entities(&holder, 3);
+        tick_block_entities(&world, 3);
 
         let base = world.get_block_state(piston_pos);
         assert_eq!(base.get_block(), &vanilla_blocks::STICKY_PISTON);

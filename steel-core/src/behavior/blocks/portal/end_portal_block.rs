@@ -1,14 +1,18 @@
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
+use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::{BlockRef, block_state_ext::BlockStateExt as _, shapes::VoxelShape};
 use steel_registry::dimension_type::DimensionTypeRef;
-use steel_registry::vanilla_dimension_types;
+use steel_registry::{vanilla_block_entity_types, vanilla_dimension_types};
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::BlockPlaceContext;
 use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
-use crate::block_entity::entities::{EndGatewayBlockEntity, EndPortalBlockEntity};
+use crate::block_entity::{
+    BlockEntityTicker,
+    entities::{EndGatewayBlockEntity, EndPortalBlockEntity},
+};
 use crate::entity::{Entity, InsideBlockEffectCollector};
 use crate::portal::PortalKind;
 use crate::world::LevelReader;
@@ -158,6 +162,18 @@ impl BlockBehavior for EndGatewayBlock {
         BlockEntityCreation::Created(Arc::new(EndGatewayBlockEntity::new(level, pos, state)))
     }
 
+    fn get_block_entity_ticker(
+        &self,
+        _world: &Arc<World>,
+        _state: BlockStateId,
+        block_entity_type: BlockEntityTypeRef,
+    ) -> Option<BlockEntityTicker> {
+        BlockEntityTicker::for_matching_entity_tick(
+            block_entity_type,
+            &vanilla_block_entity_types::END_GATEWAY,
+        )
+    }
+
     fn trigger_event(
         &self,
         _state: BlockStateId,
@@ -192,7 +208,7 @@ mod tests {
     use crate::block_entity::entities::{EndGatewayBlockEntity, EndPortalBlockEntity};
     use crate::entity::{Entity, EntityBase};
     use crate::portal::PortalKind;
-    use crate::test_support::TestLevel;
+    use crate::test_support::{TestLevel, fresh_test_world};
     use glam::DVec3;
     use std::sync::Weak;
     use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -319,6 +335,7 @@ mod tests {
     #[test]
     fn end_gateway_creates_typed_block_entity() {
         init_test_registry();
+        let world = fresh_test_world("end_gateway_ticker");
         let behavior = EndGatewayBlock::new(&vanilla_blocks::END_GATEWAY);
         let state = vanilla_blocks::END_GATEWAY.default_state();
         let pos = BlockPos::new(2, 70, -4);
@@ -334,5 +351,15 @@ mod tests {
         );
         assert_eq!(block_entity.get_block_pos(), pos);
         assert_eq!(block_entity.get_block_state(), state);
+        assert!(
+            behavior
+                .get_block_entity_ticker(&world, state, &vanilla_block_entity_types::END_GATEWAY,)
+                .is_some()
+        );
+        assert!(
+            behavior
+                .get_block_entity_ticker(&world, state, &vanilla_block_entity_types::END_PORTAL)
+                .is_none()
+        );
     }
 }

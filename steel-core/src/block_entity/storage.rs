@@ -6,14 +6,16 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use steel_utils::{BlockPos, BlockStateId, locks::SyncRwLock};
 
-use super::{BlockEntity, BlockEntityLifecycleExt as _, SharedBlockEntity};
+#[cfg(test)]
+use super::BlockEntityLifecycleExt as _;
+use super::{BlockEntity, SharedBlockEntity};
 
 /// Storage for block entities in a chunk.
 ///
-/// Encapsulates both the main storage map and the ticking list to ensure
-/// they stay in sync.
+/// Ticker iteration is world-owned. This storage only owns chunk-persistent
+/// entities and lazy-promotion markers.
 pub(crate) struct BlockEntityStorage {
-    /// Related entity, marker, and ticker state shares one lock. This makes replacement,
+    /// Related entity and marker state shares one lock. This makes replacement,
     /// promotion, removal, and persistence snapshots linearizable.
     entries: SyncRwLock<BlockEntityEntries>,
 }
@@ -22,8 +24,6 @@ pub(crate) struct BlockEntityStorage {
 struct BlockEntityEntries {
     entities: FxHashMap<BlockPos, SharedBlockEntity>,
     pending: FxHashSet<BlockPos>,
-    /// Ticking entities, in registration order. Every entry is also present in `entities`.
-    tickers: Vec<SharedBlockEntity>,
 }
 
 /// Atomic classification of one block-entity storage position.
@@ -52,6 +52,12 @@ pub(crate) struct DetachedBlockEntity {
     pub dispatch_removed: bool,
 }
 
+#[derive(Default)]
+pub(crate) struct ClearedBlockEntities {
+    pub(crate) lifecycle_dispatchers: Vec<SharedBlockEntity>,
+    pub(crate) positions: Vec<BlockPos>,
+}
+
 pub(crate) type LifecycleDispatchers = SmallVec<[SharedBlockEntity; 2]>;
 
 impl BlockEntityStorage {
@@ -67,6 +73,16 @@ impl BlockEntityStorage {
     #[must_use]
     pub(crate) fn get(&self, pos: BlockPos) -> Option<SharedBlockEntity> {
         self.entries.read().entities.get(&pos).cloned()
+    }
+
+    /// Returns whether `expected` is the exact current concrete owner.
+    #[must_use]
+    pub(crate) fn contains_same(&self, pos: BlockPos, expected: &SharedBlockEntity) -> bool {
+        self.entries
+            .read()
+            .entities
+            .get(&pos)
+            .is_some_and(|current| Arc::ptr_eq(current, expected))
     }
 
     /// Classifies a position with one lock acquisition and one entity-map probe.
@@ -184,14 +200,14 @@ impl BlockEntityStorage {
         {
             return false;
         }
-        entries.tickers.retain(|entity| entity.base().pos() != pos);
         entries.entities.insert(pos, Arc::clone(block_entity));
         true
     }
 
     /// Removes a block entity at the given position.
     ///
-    /// Marks the entity as removed and removes it from the ticking list.
+    /// Marks the entity as removed.
+    #[cfg(test)]
     pub(crate) fn remove(&self, pos: BlockPos) -> bool {
         let (removed, lifecycle_dispatchers) = self.remove_staged(pos);
         for entity in lifecycle_dispatchers {
@@ -210,7 +226,6 @@ impl BlockEntityStorage {
             let dispatch_removed = removed
                 .as_ref()
                 .is_some_and(|entity| entity.base().queue_set_removed());
-            entries.tickers.retain(|entity| entity.base().pos() != pos);
             (removed, removed_pending, dispatch_removed)
         };
         let mut lifecycle_dispatchers = LifecycleDispatchers::new();
@@ -230,7 +245,6 @@ impl BlockEntityStorage {
         let mut entries = self.entries.write();
         let entity = entries.entities.remove(&pos);
         entries.pending.remove(&pos);
-        entries.tickers.retain(|ticker| ticker.base().pos() != pos);
         let dispatch_removed = entity
             .as_ref()
             .is_some_and(|entity| entity.base().queue_set_removed());
@@ -245,7 +259,6 @@ impl BlockEntityStorage {
         let mut entries = self.entries.write();
         let removed = entries.entities.remove(&pos).is_some();
         let removed_pending = entries.pending.remove(&pos);
-        entries.tickers.retain(|entity| entity.base().pos() != pos);
         removed || removed_pending
     }
 
@@ -267,16 +280,13 @@ impl BlockEntityStorage {
         }
         entries.entities.remove(&pos);
         entries.pending.remove(&pos);
-        entries.tickers.retain(|entity| entity.base().pos() != pos);
         true
     }
 
     #[cfg(test)]
     pub(crate) fn add_and_register(&self, block_entity: SharedBlockEntity) {
         let block_state = block_entity.get_block_state();
-        let should_tick = block_entity.is_ticking();
-        let (_, lifecycle_dispatchers) =
-            self.add_and_register_staged(&block_entity, block_state, should_tick);
+        let (_, lifecycle_dispatchers) = self.add_staged(&block_entity, block_state);
         for entity in lifecycle_dispatchers {
             entity.dispatch_lifecycle_events();
         }
@@ -284,20 +294,18 @@ impl BlockEntityStorage {
 
     /// Adds an entity while staging callbacks for dispatch after outer chunk locks are dropped.
     #[must_use]
-    pub(crate) fn add_and_register_staged(
+    pub(crate) fn add_staged(
         &self,
         block_entity: &SharedBlockEntity,
         block_state: BlockStateId,
-        should_tick: bool,
     ) -> (bool, LifecycleDispatchers) {
-        self.set_inner(block_entity, block_state, should_tick)
+        self.set_inner(block_entity, block_state)
     }
 
     fn set_inner(
         &self,
         block_entity: &SharedBlockEntity,
         block_state: BlockStateId,
-        should_tick: bool,
     ) -> (bool, LifecycleDispatchers) {
         let pos = block_entity.get_block_pos();
         let (inserted, dispatch_new, removed) = {
@@ -311,7 +319,6 @@ impl BlockEntityStorage {
             {
                 let dispatch_state = block_entity.base().queue_block_state_change(block_state);
                 let dispatch_clear = block_entity.base().queue_clear_removed();
-                Self::replace_ticker(&mut entries, pos, block_entity, should_tick);
                 (false, dispatch_state || dispatch_clear, None)
             } else {
                 let dispatch_state = block_entity.base().queue_block_state_change(block_state);
@@ -323,10 +330,6 @@ impl BlockEntityStorage {
                         let dispatch = old.base().queue_set_removed();
                         (old, dispatch)
                     });
-                entries.tickers.retain(|entity| entity.base().pos() != pos);
-                if should_tick {
-                    entries.tickers.push(Arc::clone(block_entity));
-                }
                 (true, dispatch_state || dispatch_clear, removed)
             }
         };
@@ -342,11 +345,10 @@ impl BlockEntityStorage {
 
     /// Inserts without replacing a concurrent concrete owner.
     #[must_use]
-    pub(crate) fn insert_if_absent_and_register_staged(
+    pub(crate) fn insert_if_absent_staged(
         &self,
         block_entity: &SharedBlockEntity,
         block_state: BlockStateId,
-        should_tick: bool,
     ) -> BlockEntityInsert {
         let pos = block_entity.get_block_pos();
         let dispatch_new = {
@@ -358,9 +360,6 @@ impl BlockEntityStorage {
             let dispatch_state = block_entity.base().queue_block_state_change(block_state);
             let dispatch_clear = block_entity.base().queue_clear_removed();
             entries.entities.insert(pos, Arc::clone(block_entity));
-            if should_tick {
-                entries.tickers.push(Arc::clone(block_entity));
-            }
             dispatch_state || dispatch_clear
         };
         let mut lifecycle_dispatchers = LifecycleDispatchers::new();
@@ -375,7 +374,6 @@ impl BlockEntityStorage {
         expected_pos: BlockPos,
         block_entity: SharedBlockEntity,
         block_state: Option<BlockStateId>,
-        should_tick: bool,
         update_lifecycle: bool,
     ) -> (Option<SharedBlockEntity>, LifecycleDispatchers) {
         let pos = block_entity.get_block_pos();
@@ -394,9 +392,6 @@ impl BlockEntityStorage {
                 .is_some_and(|state| block_entity.base().queue_block_state_change(state));
             let dispatch_clear = update_lifecycle && block_entity.base().queue_clear_removed();
             entries.entities.insert(pos, Arc::clone(&block_entity));
-            if should_tick {
-                entries.tickers.push(Arc::clone(&block_entity));
-            }
             dispatch_state || dispatch_clear
         };
         let mut lifecycle_dispatchers = LifecycleDispatchers::new();
@@ -406,71 +401,37 @@ impl BlockEntityStorage {
         (Some(block_entity), lifecycle_dispatchers)
     }
 
-    /// Atomically replaces a packed marker with a concrete proto entity without a ticker.
-    pub(crate) fn promote_without_ticker(
+    /// Atomically replaces a packed marker with a concrete proto entity without lifecycle work.
+    pub(crate) fn promote_without_lifecycle(
         &self,
         expected_pos: BlockPos,
         block_entity: SharedBlockEntity,
     ) -> Option<SharedBlockEntity> {
-        self.promote_entry(expected_pos, block_entity, None, false, false)
+        self.promote_entry(expected_pos, block_entity, None, false)
             .0
     }
 
     /// Promotes a marker while staging callbacks for dispatch after outer locks are dropped.
     #[must_use]
-    pub(crate) fn promote_and_register_staged(
+    pub(crate) fn promote_staged(
         &self,
         expected_pos: BlockPos,
         block_state: BlockStateId,
         block_entity: SharedBlockEntity,
-        should_tick: bool,
     ) -> (Option<SharedBlockEntity>, LifecycleDispatchers) {
-        self.promote_entry(
-            expected_pos,
-            block_entity,
-            Some(block_state),
-            should_tick,
-            true,
-        )
+        self.promote_entry(expected_pos, block_entity, Some(block_state), true)
     }
 
-    /// Updates the ticking status of a block entity.
-    ///
-    /// Call this when a block entity's ticking status may have changed.
-    pub(crate) fn update_ticker(&self, block_entity: &SharedBlockEntity) {
-        let should_tick = block_entity.is_ticking();
-        self.update_ticker_with_decision(block_entity, should_tick);
-    }
-
-    /// Applies a previously computed ticking decision if `block_entity` still owns its position.
-    pub(crate) fn update_ticker_with_decision(
-        &self,
-        block_entity: &SharedBlockEntity,
-        should_tick: bool,
-    ) {
-        let pos = block_entity.get_block_pos();
-        let mut entries = self.entries.write();
-        if !entries
-            .entities
-            .get(&pos)
-            .is_some_and(|current| Arc::ptr_eq(current, block_entity))
-        {
-            return;
-        }
-        Self::replace_ticker(&mut entries, pos, block_entity, should_tick);
-    }
-
-    /// Updates cached state and ticker membership only while `block_entity` still owns `pos`.
+    /// Updates cached state only while `block_entity` still owns `pos`.
     #[must_use]
     pub(crate) fn update_if_same_staged(
         &self,
         pos: BlockPos,
         block_entity: &SharedBlockEntity,
         block_state: BlockStateId,
-        should_tick: bool,
     ) -> (bool, LifecycleDispatchers) {
         let dispatch_state = {
-            let mut entries = self.entries.write();
+            let entries = self.entries.write();
             if !entries
                 .entities
                 .get(&pos)
@@ -478,9 +439,7 @@ impl BlockEntityStorage {
             {
                 return (false, LifecycleDispatchers::new());
             }
-            let dispatch_state = block_entity.base().queue_block_state_change(block_state);
-            Self::replace_ticker(&mut entries, pos, block_entity, should_tick);
-            dispatch_state
+            block_entity.base().queue_block_state_change(block_state)
         };
         let mut lifecycle_dispatchers = LifecycleDispatchers::new();
         if dispatch_state {
@@ -509,7 +468,6 @@ impl BlockEntityStorage {
                 return (false, LifecycleDispatchers::new());
             };
             entries.pending.remove(&pos);
-            entries.tickers.retain(|entity| entity.base().pos() != pos);
             let dispatch_removed = removed.base().queue_set_removed();
             (removed, dispatch_removed)
         };
@@ -520,45 +478,25 @@ impl BlockEntityStorage {
         (true, lifecycle_dispatchers)
     }
 
-    /// Returns a copy of the ticking block entities for iteration.
-    ///
-    /// Filters out removed entities.
-    #[must_use]
-    pub(crate) fn get_tickers(&self) -> Vec<SharedBlockEntity> {
-        self.entries
-            .read()
-            .tickers
-            .iter()
-            .filter(|entity| !entity.base().is_removed())
-            .cloned()
-            .collect()
-    }
-
-    /// Cleans up removed entities from the ticking list.
-    pub(crate) fn cleanup_tickers(&self) {
-        self.entries
-            .write()
-            .tickers
-            .retain(|entity| !entity.base().is_removed());
-    }
-
     /// Clears storage and returns entities whose lifecycle callback dispatcher this call owns.
     ///
     /// Callers that hold outer chunk-map or holder guards can drop them before dispatching.
     #[must_use]
-    pub(crate) fn clear_and_stage_lifecycle_callbacks(&self) -> Vec<SharedBlockEntity> {
-        {
-            let mut entries = self.entries.write();
-            let mut removed = Vec::with_capacity(entries.entities.len());
-            for entity in entries.entities.values() {
-                if entity.base().queue_set_removed() {
-                    removed.push(Arc::clone(entity));
-                }
+    pub(crate) fn clear_and_stage_lifecycle_callbacks(&self) -> ClearedBlockEntities {
+        let mut entries = self.entries.write();
+        let mut lifecycle_dispatchers = Vec::with_capacity(entries.entities.len());
+        let mut positions = Vec::with_capacity(entries.entities.len());
+        for (&pos, entity) in &entries.entities {
+            positions.push(pos);
+            if entity.base().queue_set_removed() {
+                lifecycle_dispatchers.push(Arc::clone(entity));
             }
-            entries.entities.clear();
-            entries.pending.clear();
-            entries.tickers.clear();
-            removed
+        }
+        entries.entities.clear();
+        entries.pending.clear();
+        ClearedBlockEntities {
+            lifecycle_dispatchers,
+            positions,
         }
     }
 
@@ -567,27 +505,6 @@ impl BlockEntityStorage {
         let mut entries = self.entries.write();
         entries.entities.clear();
         entries.pending.clear();
-        entries.tickers.clear();
-    }
-
-    fn replace_ticker(
-        entries: &mut BlockEntityEntries,
-        pos: BlockPos,
-        block_entity: &SharedBlockEntity,
-        should_tick: bool,
-    ) {
-        let existing_index = entries
-            .tickers
-            .iter()
-            .position(|entity| entity.base().pos() == pos);
-        match (existing_index, should_tick) {
-            (Some(index), true) => entries.tickers[index] = Arc::clone(block_entity),
-            (Some(index), false) => {
-                entries.tickers.remove(index);
-            }
-            (None, true) => entries.tickers.push(Arc::clone(block_entity)),
-            (None, false) => {}
-        }
     }
 }
 
@@ -601,7 +518,6 @@ impl fmt::Debug for BlockEntityStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BlockEntityStorage")
             .field("len", &self.len())
-            .field("ticking_len", &self.entries.read().tickers.len())
             .finish_non_exhaustive()
     }
 }
@@ -660,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn readding_the_same_entity_does_not_remove_or_duplicate_its_ticker() {
+    fn readding_the_same_entity_preserves_ownership_and_clears_the_marker() {
         init_test_registry();
         let storage = BlockEntityStorage::new();
         let entity: SharedBlockEntity = Arc::new(SignBlockEntity::new(
@@ -678,7 +594,6 @@ mod tests {
         storage.add_and_register(Arc::clone(&entity));
 
         assert_eq!(storage.len(), 1);
-        assert_eq!(storage.get_tickers().len(), 1);
         assert!(!entity.is_removed());
         let (concrete, pending) = storage.save_snapshot();
         assert_eq!(concrete.len(), 1);
@@ -716,11 +631,7 @@ mod tests {
         let challenger: SharedBlockEntity = Arc::new(SignBlockEntity::new(Weak::new(), pos, state));
         storage.add_and_register(Arc::clone(&owner));
 
-        let result = storage.insert_if_absent_and_register_staged(
-            &challenger,
-            state,
-            challenger.is_ticking(),
-        );
+        let result = storage.insert_if_absent_staged(&challenger, state);
         let BlockEntityInsert::Existing(existing) = result else {
             panic!("the existing owner should win insertion");
         };
@@ -799,7 +710,7 @@ mod tests {
         assert!(entity.is_removed());
 
         let (_, revival_dispatchers) =
-            storage.add_and_register_staged(&entity, vanilla_blocks::BARREL.default_state(), false);
+            storage.add_staged(&entity, vanilla_blocks::BARREL.default_state());
         assert!(revival_dispatchers.is_empty());
         assert!(!entity.is_removed());
         assert!(concrete.events.lock().is_empty());
@@ -833,7 +744,7 @@ mod tests {
         let storage = BlockEntityStorage::new();
         storage.add_and_register(Arc::clone(&entity));
 
-        let (_, lifecycle_dispatchers) = storage.add_and_register_staged(&entity, exposed, false);
+        let (_, lifecycle_dispatchers) = storage.add_staged(&entity, exposed);
         assert_eq!(entity.get_block_state(), exposed);
         assert!(concrete.events.lock().is_empty());
         for dispatcher in lifecycle_dispatchers {

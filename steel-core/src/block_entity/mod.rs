@@ -30,7 +30,10 @@ mod storage;
 
 use std::{
     ptr,
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use simdnbt::borrow::BaseNbtCompound as BorrowedNbtCompound;
@@ -42,8 +45,8 @@ use steel_utils::{BlockPos, BlockStateId, ErasedType, locks::SyncMutex};
 
 pub use registry::{BLOCK_ENTITIES, BlockEntityFactory, BlockEntityRegistry, init_block_entities};
 pub(crate) use storage::{
-    BlockEntityInsert, BlockEntityLookup, BlockEntityStorage, DetachedBlockEntity,
-    LifecycleDispatchers,
+    BlockEntityInsert, BlockEntityLookup, BlockEntityStorage, ClearedBlockEntities,
+    DetachedBlockEntity, LifecycleDispatchers,
 };
 
 use crate::inventory::lock::ContainerRef;
@@ -51,9 +54,73 @@ use crate::player::Player;
 
 use crate::world::World;
 
+/// Erased block-state-selected ticker for one concrete block-entity type.
+///
+/// Vanilla obtains this callback from the owning block behavior. Keeping the
+/// expected type with the callback preserves that selection boundary while
+/// allowing Steel's world ticker to store heterogeneous entries.
+#[derive(Clone, Copy)]
+pub struct BlockEntityTicker {
+    block_entity_type: BlockEntityTypeRef,
+    tick: fn(&Arc<World>, BlockPos, BlockStateId, &dyn BlockEntity),
+}
+
+impl BlockEntityTicker {
+    /// Creates a ticker for one block-entity type.
+    #[must_use]
+    pub const fn new(
+        block_entity_type: BlockEntityTypeRef,
+        tick: fn(&Arc<World>, BlockPos, BlockStateId, &dyn BlockEntity),
+    ) -> Self {
+        Self {
+            block_entity_type,
+            tick,
+        }
+    }
+
+    /// Creates a state-selected ticker that dispatches to [`BlockEntity::tick`].
+    #[must_use]
+    pub const fn for_entity_tick(block_entity_type: BlockEntityTypeRef) -> Self {
+        Self::new(block_entity_type, Self::tick_entity)
+    }
+
+    /// Creates the default entity callback only when Vanilla's requested type matches.
+    #[must_use]
+    pub fn for_matching_entity_tick(
+        actual: BlockEntityTypeRef,
+        expected: BlockEntityTypeRef,
+    ) -> Option<Self> {
+        ptr::eq(actual, expected).then(|| Self::for_entity_tick(expected))
+    }
+
+    /// Returns whether this ticker accepts the concrete block-entity type.
+    #[must_use]
+    pub fn accepts(self, block_entity_type: BlockEntityTypeRef) -> bool {
+        ptr::eq(self.block_entity_type, block_entity_type)
+    }
+
+    pub(crate) fn tick(
+        self,
+        world: &Arc<World>,
+        pos: BlockPos,
+        state: BlockStateId,
+        block_entity: &dyn BlockEntity,
+    ) {
+        (self.tick)(world, pos, state, block_entity);
+    }
+
+    fn tick_entity(
+        world: &Arc<World>,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        block_entity: &dyn BlockEntity,
+    ) {
+        block_entity.tick(world);
+    }
+}
+
 struct BlockEntityLifecycle {
     block_state: BlockStateId,
-    removed: bool,
     events: SmallVec<[BlockEntityLifecycleEvent; 2]>,
     dispatching_events: bool,
 }
@@ -73,6 +140,8 @@ pub struct BlockEntityBase {
     block_entity_type: BlockEntityTypeRef,
     level: Weak<World>,
     pos: BlockPos,
+    /// Lock-free removal snapshot; lifecycle writers remain serialized below.
+    removed: AtomicBool,
     lifecycle: SyncMutex<BlockEntityLifecycle>,
 }
 
@@ -115,9 +184,9 @@ impl BlockEntityBase {
             block_entity_type,
             level,
             pos,
+            removed: AtomicBool::new(false),
             lifecycle: SyncMutex::new(BlockEntityLifecycle {
                 block_state,
-                removed: false,
                 events: SmallVec::new(),
                 dispatching_events: false,
             }),
@@ -165,12 +234,12 @@ impl BlockEntityBase {
 
     #[must_use]
     fn is_removed(&self) -> bool {
-        self.lifecycle.lock().removed
+        self.removed.load(Ordering::Relaxed)
     }
 
     fn queue_set_removed(&self) -> bool {
         let mut lifecycle = self.lifecycle.lock();
-        lifecycle.removed = true;
+        self.removed.store(true, Ordering::Relaxed);
         lifecycle.events.push(BlockEntityLifecycleEvent::SetRemoved);
         if lifecycle.dispatching_events {
             false
@@ -182,10 +251,10 @@ impl BlockEntityBase {
 
     fn queue_clear_removed(&self) -> bool {
         let mut lifecycle = self.lifecycle.lock();
-        if !lifecycle.removed {
+        if !self.removed.load(Ordering::Relaxed) {
             return false;
         }
-        lifecycle.removed = false;
+        self.removed.store(false, Ordering::Relaxed);
         lifecycle
             .events
             .push(BlockEntityLifecycleEvent::ClearRemoved);
@@ -354,17 +423,10 @@ pub trait BlockEntity: ErasedType + Send + Sync {
         None
     }
 
-    /// Returns whether this block entity should be ticked every game tick.
-    ///
-    /// Block entities that return `true` will have their `tick()` method called
-    /// each game tick.
-    fn is_ticking(&self) -> bool {
-        false
-    }
-
     /// Called every game tick for ticking block entities.
     ///
-    /// Only called if `is_ticking()` returns `true`.
+    /// The live block behavior selects this callback through its block-entity
+    /// ticker, matching Vanilla's state-owned ticker selection.
     #[expect(
         unused_variables,
         reason = "default trait impl; parameter used by overrides"

@@ -4,10 +4,11 @@ use std::f32::consts::{PI, TAU};
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
+use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::BlockStateProperties;
-use steel_registry::vanilla_game_events;
+use steel_registry::{vanilla_block_entity_types, vanilla_game_events};
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
@@ -15,7 +16,7 @@ use crate::behavior::{
     BlockBehavior, BlockEntityCreation, BlockHitResult, BlockPlaceContext, InteractionResult,
     InventoryAccess,
 };
-use crate::block_entity::entities::DaylightDetectorBlockEntity;
+use crate::block_entity::{BlockEntityTicker, entities::DaylightDetectorBlockEntity};
 use crate::player::Player;
 use crate::world::game_event_context::GameEventContext;
 use crate::world::{LevelReader, SignalQueryContext, World};
@@ -135,6 +136,21 @@ impl BlockBehavior for DaylightDetectorBlock {
             level, pos, state,
         )))
     }
+
+    fn get_block_entity_ticker(
+        &self,
+        world: &Arc<World>,
+        _state: BlockStateId,
+        block_entity_type: BlockEntityTypeRef,
+    ) -> Option<BlockEntityTicker> {
+        if !world.dimension_type.has_skylight {
+            return None;
+        }
+        BlockEntityTicker::for_matching_entity_tick(
+            block_entity_type,
+            &vanilla_block_entity_types::DAYLIGHT_DETECTOR,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -148,11 +164,12 @@ mod tests {
     use crate::test_support::fresh_test_world;
 
     #[test]
-    fn daylight_detector_creates_ticking_vanilla_block_entity() {
+    fn daylight_detector_selects_vanilla_server_ticker_in_skylight_dimensions() {
         init_test_registry();
         let world = fresh_test_world("daylight_detector_block_entity");
         let state = vanilla_blocks::DAYLIGHT_DETECTOR.default_state();
-        let entity = DaylightDetectorBlock::new(&vanilla_blocks::DAYLIGHT_DETECTOR)
+        let behavior = DaylightDetectorBlock::new(&vanilla_blocks::DAYLIGHT_DETECTOR);
+        let entity = behavior
             .new_block_entity(Arc::downgrade(&world), BlockPos::ZERO, state)
             .into_created()
             .expect("daylight detector should create block entity");
@@ -161,7 +178,20 @@ mod tests {
             &vanilla_block_entity_types::DAYLIGHT_DETECTOR
         );
         assert_eq!(entity.get_block_state(), state);
-        assert!(entity.is_ticking());
+        assert!(
+            behavior
+                .get_block_entity_ticker(
+                    &world,
+                    state,
+                    &vanilla_block_entity_types::DAYLIGHT_DETECTOR,
+                )
+                .is_some()
+        );
+        assert!(
+            behavior
+                .get_block_entity_ticker(&world, state, &vanilla_block_entity_types::CHEST)
+                .is_none()
+        );
     }
 
     #[test]

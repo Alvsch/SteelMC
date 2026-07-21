@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::slice;
 use std::sync::{Arc, OnceLock};
 
 use steel_registry::blocks::BlockRef;
@@ -64,6 +65,12 @@ pub(crate) fn insert_ready_full_chunk(world: &Arc<World>, pos: ChunkPos) -> Arc<
         Some(TickingReadiness::Unready)
     );
     let _ = world.chunk_map.chunks.insert_sync(pos, Arc::clone(&holder));
+    world.on_entity_chunk_loaded(pos);
+    world.update_entity_chunk_visibility(pos, holder.entity_visibility());
+    world
+        .chunk_map
+        .activate_block_entities(slice::from_ref(&holder));
+    world.chunk_map.rebuild_ticking_chunk_snapshot();
     holder
 }
 

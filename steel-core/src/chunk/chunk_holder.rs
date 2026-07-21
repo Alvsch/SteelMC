@@ -20,7 +20,6 @@ use std::time::Duration;
 #[cfg(feature = "slow_chunk_gen")]
 pub static SLOW_CHUNK_GEN: AtomicBool = AtomicBool::new(false);
 
-use crate::block_entity::BlockEntityLifecycleExt as _;
 use crate::chunk::chunk_generation_task::{NeighborReady, StaticCache2D};
 use crate::chunk::chunk_ticket_manager::{
     ChunkTicketLevel, generation_status, is_entity_ticking, is_full,
@@ -313,12 +312,12 @@ impl ChunkHolder {
     }
 
     /// Stores the current load ticket level and returns the previous level.
-    pub fn swap_load_level(&self, level: ChunkTicketLevel) -> Option<ChunkTicketLevel> {
+    pub(crate) fn swap_load_level(&self, level: ChunkTicketLevel) -> Option<ChunkTicketLevel> {
         optional_ticket_level_from_raw(self.load_level.swap(level.raw(), Ordering::Relaxed))
     }
 
     /// Clears the current load ticket level.
-    pub fn clear_load_level(&self) {
+    pub(crate) fn clear_load_level(&self) {
         self.load_level.store(NO_TICKET_LEVEL, Ordering::Relaxed);
     }
 
@@ -328,7 +327,7 @@ impl ChunkHolder {
     }
 
     /// Stores the current simulation ticket level.
-    pub fn set_simulation_level(&self, level: Option<ChunkTicketLevel>) {
+    pub(crate) fn set_simulation_level(&self, level: Option<ChunkTicketLevel>) {
         self.simulation_level
             .store(optional_ticket_level_raw(level), Ordering::Relaxed);
     }
@@ -1185,11 +1184,10 @@ impl ChunkHolder {
                     let LevelChunkPromotion {
                         chunk: full,
                         pending_entities,
-                        lifecycle_dispatchers,
                     } = LevelChunk::from_proto(proto, min_y, height, level);
                     let pos = full.pos;
                     *chunk = ChunkAccess::Full(full);
-                    Some((pos, pending_entities, lifecycle_dispatchers))
+                    Some((pos, pending_entities))
                 }
                 ChunkAccess::Full(full) => {
                     *chunk = ChunkAccess::Full(full);
@@ -1198,13 +1196,10 @@ impl ChunkHolder {
                 ChunkAccess::Unloaded => panic!("Chunk is unloaded, cannot upgrade to full"),
             }
         });
-        if let Some((pos, pending_entities, lifecycle_dispatchers)) = promoted_entities {
-            for block_entity in lifecycle_dispatchers {
-                block_entity.dispatch_lifecycle_events();
-            }
-            if let Some(world) = world {
-                world.register_loaded_chunk_entities(pos, ChunkStatus::Full, pending_entities);
-            }
+        if let Some((pos, pending_entities)) = promoted_entities
+            && let Some(world) = world
+        {
+            world.register_loaded_chunk_entities(pos, ChunkStatus::Full, pending_entities);
         }
     }
 

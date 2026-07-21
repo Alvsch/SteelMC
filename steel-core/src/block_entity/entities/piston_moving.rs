@@ -623,10 +623,6 @@ impl BlockEntity for PistonMovingBlockEntity {
         Some(self.save_custom_only())
     }
 
-    fn is_ticking(&self) -> bool {
-        true
-    }
-
     fn tick(&self, world: &Arc<World>) {
         let game_time = world.game_time();
         let (moving, new_progress) = {

@@ -183,6 +183,7 @@ impl ClipHitResult {
     }
 }
 
+mod block_entity_ticker;
 mod block_event;
 mod border;
 pub(crate) mod clock;
@@ -440,6 +441,8 @@ pub struct World {
     neighbor_updater: CollectingNeighborUpdater,
     /// Central runtime entity ownership and lookup.
     entity_manager: WorldEntityManager,
+    /// World-global ordered block-entity ticker phase.
+    block_entity_tickers: block_entity_ticker::WorldBlockEntityTickers,
     /// Entity tracker for managing which players can see which entities.
     entity_tracker: EntityTracker,
     /// Runtime IDs for pathfinder mobs currently visible to the active world.
@@ -566,6 +569,7 @@ impl World {
                 block_events: SyncMutex::new(BlockEventQueue::default()),
                 neighbor_updater: CollectingNeighborUpdater::new(max_chained_neighbor_updates),
                 entity_manager: WorldEntityManager::new(),
+                block_entity_tickers: block_entity_ticker::WorldBlockEntityTickers::new(),
                 entity_tracker: EntityTracker::new(),
                 navigating_mobs: NavigatingMobTracker::new(),
                 weather: SyncMutex::new(weather),
@@ -2497,8 +2501,12 @@ impl World {
             start.elapsed()
         };
 
-        self.chunk_map
-            .tick_block_entities(&mut chunk_map_timings, runs_normally);
+        {
+            let _span = tracing::trace_span!("block_entities").entered();
+            let start = Instant::now();
+            self.block_entity_tickers.tick(self, runs_normally);
+            chunk_map_timings.tick_block_entities = start.elapsed();
+        }
 
         {
             let _span = tracing::trace_span!("entity_tracker_send_changes").entered();
@@ -4764,6 +4772,14 @@ impl World {
     #[must_use]
     pub(crate) const fn entity_manager(&self) -> &WorldEntityManager {
         &self.entity_manager
+    }
+
+    /// Returns the world-global block-entity ticker owner.
+    #[must_use]
+    pub(crate) const fn block_entity_tickers(
+        &self,
+    ) -> &block_entity_ticker::WorldBlockEntityTickers {
+        &self.block_entity_tickers
     }
 
     /// Returns the entity tracker for managing player-entity visibility.
