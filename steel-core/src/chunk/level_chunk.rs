@@ -189,15 +189,22 @@ impl LevelChunk {
             next_section_index = section_index + 1;
             let section = &self.sections.sections[section_index];
             let section_base_y = self.min_y + (section_index as i32 * 16);
+            // Keep the guard across no-op samples. Extreme random tick speeds may
+            // delay concurrent writers, but avoid lock churn in normal ticking.
+            let mut section_guard = None;
 
             for _ in 0..random_tick_speed {
                 let (local_x, local_y, local_z) = random_positions.next_local();
-                // Copy the sampled state and release the guard before either
-                // callback; the block callback may mutate this section.
-                let state = section.read().states.get(local_x, local_y, local_z);
+                let state = section_guard
+                    .get_or_insert_with(|| section.read())
+                    .states
+                    .get(local_x, local_y, local_z);
                 let Some((tick_block, tick_fluid)) = random_tick_kinds(state) else {
                     continue;
                 };
+                // Either callback may write this section. Reacquire lazily so
+                // the next sample observes all changes made by this tick.
+                drop(section_guard.take());
                 let pos = BlockPos::new(
                     chunk_base_x + local_x as i32,
                     section_base_y + local_y as i32,
