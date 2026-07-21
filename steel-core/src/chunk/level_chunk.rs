@@ -26,8 +26,13 @@ use steel_utils::{
 
 use steel_utils::locks::SyncMutex;
 
-use crate::behavior::{BLOCK_BEHAVIORS, BlockStateBehaviorExt, FLUID_BEHAVIORS};
-use crate::block_entity::{BlockEntityStorage, SharedBlockEntity};
+use crate::behavior::{
+    BLOCK_BEHAVIORS, BlockEntityCreation, BlockStateBehaviorExt, FLUID_BEHAVIORS,
+};
+use crate::block_entity::{
+    BlockEntity, BlockEntityInsert, BlockEntityLifecycleExt as _, BlockEntityLookup,
+    BlockEntityStorage, DetachedBlockEntity, LifecycleDispatchers, SharedBlockEntity,
+};
 use crate::chunk::{
     heightmap::{ChunkHeightmaps, HeightmapType},
     light::{
@@ -96,6 +101,8 @@ pub struct LevelChunkPromotion {
     pub chunk: LevelChunk,
     /// Entities that should be registered after the full chunk is published.
     pub pending_entities: Vec<SharedEntity>,
+    /// Block-entity lifecycle callbacks staged until the holder write lock is released.
+    pub lifecycle_dispatchers: Vec<SharedBlockEntity>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +110,14 @@ pub(crate) enum LevelChunkBlockSetResult {
     Changed(BlockStateId),
     Unchanged,
     Stale(BlockStateId),
+}
+
+enum PendingPromotionCommit {
+    Retry,
+    Complete {
+        block_entity: Option<SharedBlockEntity>,
+        lifecycle_dispatchers: LifecycleDispatchers,
+    },
 }
 
 impl LevelChunk {
@@ -187,6 +202,8 @@ impl LevelChunk {
         height: i32,
         level: Weak<World>,
     ) -> LevelChunkPromotion {
+        let (proto_block_entities, pending_block_entities) =
+            proto_chunk.block_entities.into_transfer_snapshot();
         // Ensure full chunks always have populated final heightmaps. Some stages
         // may not touch blocks (carvers are currently empty), so lazy final
         // heightmaps are not guaranteed to exist before promotion.
@@ -211,7 +228,6 @@ impl LevelChunk {
         let mut fluid_ticks = proto_chunk.fluid_ticks.into_inner();
         block_ticks.unpack();
         fluid_ticks.unpack();
-        let block_entities = proto_chunk.block_entities;
         let pending_entities = proto_chunk.entities.get_all();
         let sky_light_sources = proto_chunk.sky_light_sources.into_inner();
         let mut light = proto_chunk.light.into_inner();
@@ -229,7 +245,7 @@ impl LevelChunk {
             min_y,
             height,
             level,
-            block_entities,
+            block_entities: BlockEntityStorage::new(),
             unregistered_tick_lists: SyncMutex::new(Some(ChunkTickLists::new(
                 block_ticks,
                 fluid_ticks,
@@ -240,9 +256,21 @@ impl LevelChunk {
             sky_light_sources: SyncRwLock::new(sky_light_sources),
             light: SyncRwLock::new(light),
         };
+        // Vanilla transfers concrete proto entities before retaining packed entities for lazy
+        // promotion. Its source iteration is a HashMap; Steel deliberately keeps native map
+        // order at this load-only boundary rather than emulating JVM HashMap history.
+        let mut lifecycle_dispatchers = Vec::new();
+        for block_entity in proto_block_entities {
+            let (_, staged) = chunk.add_and_register_block_entity_staged(block_entity);
+            lifecycle_dispatchers.extend(staged);
+        }
+        for pos in pending_block_entities {
+            chunk.set_pending_block_entity(pos);
+        }
         LevelChunkPromotion {
             chunk,
             pending_entities,
+            lifecycle_dispatchers,
         }
     }
 
@@ -614,7 +642,257 @@ impl LevelChunk {
     /// Returns `None` if no block entity exists at the position.
     #[must_use]
     pub fn get_block_entity(&self, pos: BlockPos) -> Option<SharedBlockEntity> {
-        self.block_entities.get(pos)
+        loop {
+            match self.block_entities.lookup(pos) {
+                BlockEntityLookup::Concrete(block_entity) => {
+                    if block_entity.is_removed() {
+                        if self
+                            .block_entities
+                            .remove_if_same_and_removed(pos, &block_entity)
+                        {
+                            return None;
+                        }
+                        continue;
+                    }
+                    return Some(block_entity);
+                }
+                BlockEntityLookup::Pending => return self.promote_pending_block_entity(pos),
+                BlockEntityLookup::Absent => return None,
+            }
+        }
+    }
+
+    /// Gets a block entity, creating the live block's implementation when storage is missing.
+    ///
+    /// This is Vanilla's `EntityCreationType.IMMEDIATE` path used by `Level.getBlockEntity`.
+    #[must_use]
+    pub(crate) fn get_block_entity_immediate(&self, pos: BlockPos) -> Option<SharedBlockEntity> {
+        if ChunkPos::from_block_pos(pos) != self.pos {
+            return None;
+        }
+        loop {
+            match self.block_entities.lookup(pos) {
+                BlockEntityLookup::Concrete(block_entity) => {
+                    if block_entity.is_removed() {
+                        self.block_entities
+                            .remove_if_same_and_removed(pos, &block_entity);
+                        continue;
+                    }
+                    return Some(block_entity);
+                }
+                BlockEntityLookup::Pending => return self.promote_pending_block_entity(pos),
+                BlockEntityLookup::Absent => {}
+            }
+
+            let state = self.get_block_state(pos);
+            if !state.has_block_entity() {
+                let state_unchanged =
+                    self.with_locked_block_state(pos, |live_state| live_state == state);
+                if state_unchanged {
+                    return None;
+                }
+                continue;
+            }
+
+            let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
+            match behavior.new_block_entity(self.level.clone(), pos, state) {
+                BlockEntityCreation::Created(block_entity) => {
+                    let valid = block_entity.get_block_pos() == pos
+                        && block_entity.is_valid_block_state(state);
+                    let should_tick = valid && block_entity.is_ticking();
+                    let inserted = self.with_locked_block_state(pos, |live_state| {
+                        if live_state != state {
+                            return None;
+                        }
+                        if !valid {
+                            return Some(None);
+                        }
+                        Some(Some(
+                            self.block_entities.insert_if_absent_and_register_staged(
+                                &block_entity,
+                                state,
+                                should_tick,
+                            ),
+                        ))
+                    });
+                    let Some(inserted) = inserted else {
+                        continue;
+                    };
+                    let inserted = inserted?;
+                    match inserted {
+                        BlockEntityInsert::Existing(existing) => return Some(existing),
+                        BlockEntityInsert::Inserted(lifecycle_dispatchers) => {
+                            for entity in lifecycle_dispatchers {
+                                entity.dispatch_lifecycle_events();
+                            }
+                            self.mark_unsaved();
+                            return Some(block_entity);
+                        }
+                    }
+                }
+                BlockEntityCreation::NoEntity => {
+                    let state_unchanged =
+                        self.with_locked_block_state(pos, |live_state| live_state == state);
+                    if state_unchanged {
+                        return None;
+                    }
+                }
+                BlockEntityCreation::Unimplemented => {
+                    let inserted = self.with_locked_block_state(pos, |live_state| {
+                        live_state == state && self.block_entities.set_pending(pos)
+                    });
+                    if inserted {
+                        self.mark_unsaved();
+                    }
+                    return None;
+                }
+            }
+        }
+    }
+
+    fn promote_pending_block_entity(&self, pos: BlockPos) -> Option<SharedBlockEntity> {
+        loop {
+            match self.block_entities.lookup(pos) {
+                BlockEntityLookup::Concrete(block_entity) => {
+                    if block_entity.is_removed() {
+                        self.block_entities
+                            .remove_if_same_and_removed(pos, &block_entity);
+                        continue;
+                    }
+                    return Some(block_entity);
+                }
+                BlockEntityLookup::Pending => {}
+                BlockEntityLookup::Absent => return None,
+            }
+
+            let state = self.get_block_state(pos);
+            if !state.has_block_entity() {
+                let state_unchanged = self.with_locked_block_state(pos, |live_state| {
+                    if live_state != state {
+                        return false;
+                    }
+                    self.block_entities.remove_pending(pos);
+                    true
+                });
+                if !state_unchanged {
+                    continue;
+                }
+                log::warn!(
+                    "Tried to promote a pending block entity at {pos:?}, but block {} does not allow one",
+                    state.get_block().key,
+                );
+                return None;
+            }
+
+            let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
+            let creation = behavior.new_block_entity(self.level.clone(), pos, state);
+            match self.commit_pending_creation(pos, state, creation) {
+                PendingPromotionCommit::Retry => {}
+                PendingPromotionCommit::Complete {
+                    block_entity,
+                    lifecycle_dispatchers,
+                } => {
+                    for entity in lifecycle_dispatchers {
+                        entity.dispatch_lifecycle_events();
+                    }
+                    return block_entity;
+                }
+            }
+        }
+    }
+
+    fn commit_pending_creation(
+        &self,
+        pos: BlockPos,
+        expected_state: BlockStateId,
+        creation: BlockEntityCreation,
+    ) -> PendingPromotionCommit {
+        match creation {
+            BlockEntityCreation::Created(block_entity) => {
+                let valid = block_entity.get_block_pos() == pos
+                    && ChunkPos::from_block_pos(pos) == self.pos
+                    && block_entity.is_valid_block_state(expected_state);
+                let should_tick = valid && block_entity.is_ticking();
+                self.with_locked_block_state(pos, |live_state| {
+                    // The block behavior owns its factory. A result created from an obsolete
+                    // state must never consume a marker installed by the replacement block, even
+                    // when both states accept the same block-entity type.
+                    if live_state != expected_state {
+                        return PendingPromotionCommit::Retry;
+                    }
+                    if !valid {
+                        return PendingPromotionCommit::Complete {
+                            block_entity: None,
+                            lifecycle_dispatchers: LifecycleDispatchers::new(),
+                        };
+                    }
+                    let (block_entity, lifecycle_dispatchers) =
+                        self.block_entities.promote_and_register_staged(
+                            pos,
+                            expected_state,
+                            block_entity,
+                            should_tick,
+                        );
+                    PendingPromotionCommit::Complete {
+                        block_entity,
+                        lifecycle_dispatchers,
+                    }
+                })
+            }
+            BlockEntityCreation::NoEntity => self.with_locked_block_state(pos, |live_state| {
+                if live_state != expected_state {
+                    return PendingPromotionCommit::Retry;
+                }
+                self.block_entities.remove_pending(pos);
+                PendingPromotionCommit::Complete {
+                    block_entity: None,
+                    lifecycle_dispatchers: LifecycleDispatchers::new(),
+                }
+            }),
+            // Keep Steel's marker until this block gains a factory. Vanilla consumes it because
+            // every Vanilla EntityBlock factory is implemented; retaining it prevents permanent
+            // data loss for intentionally deferred block implementations.
+            BlockEntityCreation::Unimplemented => self.with_locked_block_state(pos, |live_state| {
+                if live_state == expected_state {
+                    PendingPromotionCommit::Complete {
+                        block_entity: None,
+                        lifecycle_dispatchers: LifecycleDispatchers::new(),
+                    }
+                } else {
+                    PendingPromotionCommit::Retry
+                }
+            }),
+        }
+    }
+
+    /// Attempts every packed promotion after generation postprocessing.
+    ///
+    /// Intentional `Unimplemented` markers remain packed until Steel gains their block factory.
+    pub(crate) fn promote_pending_block_entities(&self) {
+        let positions = self.pending_block_entity_positions();
+        for pos in positions {
+            let _ = self.promote_pending_block_entity(pos);
+        }
+    }
+
+    /// Returns packed block-entity positions without causing promotion.
+    #[must_use]
+    pub fn pending_block_entity_positions(&self) -> Vec<BlockPos> {
+        self.block_entities.pending_positions()
+    }
+
+    /// Retains a Vanilla `DUMMY` marker for lazy promotion if no concrete entity exists.
+    pub fn set_pending_block_entity(&self, pos: BlockPos) {
+        if ChunkPos::from_block_pos(pos) != self.pos {
+            log::warn!(
+                "Trying to set a pending block entity at {pos:?} in chunk {:?}",
+                self.pos,
+            );
+            return;
+        }
+        if self.block_entities.set_pending(pos) {
+            self.mark_unsaved();
+        }
     }
 
     /// Removes a block entity at the given position.
@@ -626,6 +904,20 @@ impl LevelChunk {
         removed
     }
 
+    /// Removes only the entity that still owns its position.
+    pub(crate) fn remove_block_entity_if_same(&self, expected: &dyn BlockEntity) -> bool {
+        let pos = expected.get_block_pos();
+        let (removed, lifecycle_dispatchers) =
+            self.block_entities.remove_if_same_staged(pos, expected);
+        for entity in lifecycle_dispatchers {
+            entity.dispatch_lifecycle_events();
+        }
+        if removed {
+            self.mark_unsaved();
+        }
+        removed
+    }
+
     /// Adds a block entity and registers it for ticking if needed.
     ///
     /// This is the main entry point for adding block entities. It:
@@ -633,51 +925,178 @@ impl LevelChunk {
     /// 2. Registers it for ticking if `is_ticking()` returns true
     ///
     /// Note: The world reference should be passed at block entity construction time.
-    pub fn add_and_register_block_entity(&self, block_entity: SharedBlockEntity) {
-        let _ = self.try_add_and_register_block_entity(block_entity);
+    /// Returns false when the entity's position or type does not match the live state.
+    #[must_use]
+    pub fn add_and_register_block_entity(&self, block_entity: SharedBlockEntity) -> bool {
+        let (valid, lifecycle_dispatchers) =
+            self.add_and_register_block_entity_staged(block_entity);
+        for entity in lifecycle_dispatchers {
+            entity.dispatch_lifecycle_events();
+        }
+        valid
     }
 
-    /// Adds a block entity if the live block state accepts it.
-    ///
-    /// Returns false when the entity's position or type does not match the
-    /// current block state.
-    pub fn try_add_and_register_block_entity(&self, block_entity: SharedBlockEntity) -> bool {
+    /// Adds a factory result only while its owning block state is still live.
+    #[must_use]
+    pub(crate) fn add_and_register_block_entity_if_state(
+        &self,
+        block_entity: SharedBlockEntity,
+        expected_state: BlockStateId,
+    ) -> bool {
         let pos = block_entity.get_block_pos();
-        let cached_state = block_entity.get_block_state();
-        let block_entity_type = block_entity.get_type();
-        let state = self.get_block_state(pos);
-        if !state.has_block_entity() {
-            log::warn!(
-                "Trying to set block entity {} at {pos:?}, but block {} does not allow one",
-                block_entity_type.key,
-                state.get_block().key,
+        let valid = ChunkPos::from_block_pos(pos) == self.pos
+            && expected_state.has_block_entity()
+            && block_entity.is_valid_block_state(expected_state);
+        let should_tick = valid && block_entity.is_ticking();
+        let committed = self.with_locked_block_state(pos, |live_state| {
+            if live_state != expected_state {
+                return None;
+            }
+            if !valid {
+                return Some((false, LifecycleDispatchers::new()));
+            }
+            let (_, lifecycle_dispatchers) = self.block_entities.add_and_register_staged(
+                &block_entity,
+                expected_state,
+                should_tick,
             );
+            Some((true, lifecycle_dispatchers))
+        });
+        let Some((valid, lifecycle_dispatchers)) = committed else {
+            return false;
+        };
+        for entity in lifecycle_dispatchers {
+            entity.dispatch_lifecycle_events();
+        }
+        if valid {
+            self.mark_unsaved();
+        }
+        valid
+    }
+
+    /// Removes an entity or marker only while `expected_state` is still live.
+    pub(crate) fn remove_block_entity_if_state(
+        &self,
+        pos: BlockPos,
+        expected_state: BlockStateId,
+    ) -> bool {
+        if ChunkPos::from_block_pos(pos) != self.pos {
             return false;
         }
+        let removed = self.with_locked_block_state(pos, |live_state| {
+            (live_state == expected_state).then(|| self.block_entities.remove_staged(pos))
+        });
+        let Some((removed, lifecycle_dispatchers)) = removed else {
+            return false;
+        };
+        for entity in lifecycle_dispatchers {
+            entity.dispatch_lifecycle_events();
+        }
+        if removed {
+            self.mark_unsaved();
+        }
+        removed
+    }
 
-        if state != cached_state {
-            if !block_entity_type.is_valid(state.get_block()) {
+    /// Sets a packed marker only while `expected_state` is still live.
+    pub(crate) fn set_pending_block_entity_if_state(
+        &self,
+        pos: BlockPos,
+        expected_state: BlockStateId,
+    ) -> bool {
+        if ChunkPos::from_block_pos(pos) != self.pos {
+            return false;
+        }
+        let inserted = self.with_locked_block_state(pos, |live_state| {
+            live_state == expected_state && self.block_entities.set_pending(pos)
+        });
+        if inserted {
+            self.mark_unsaved();
+        }
+        inserted
+    }
+
+    fn add_and_register_block_entity_staged(
+        &self,
+        block_entity: SharedBlockEntity,
+    ) -> (bool, LifecycleDispatchers) {
+        let pos = block_entity.get_block_pos();
+        if ChunkPos::from_block_pos(pos) != self.pos {
+            log::warn!(
+                "Trying to set block entity {} at {pos:?} in chunk {:?}",
+                block_entity.get_type().key,
+                self.pos,
+            );
+            return (false, LifecycleDispatchers::new());
+        }
+
+        loop {
+            let state = self.get_block_state(pos);
+            let valid = state.has_block_entity() && block_entity.is_valid_block_state(state);
+            if !valid {
+                let state_unchanged =
+                    self.with_locked_block_state(pos, |live_state| live_state == state);
+                if !state_unchanged {
+                    continue;
+                }
                 log::warn!(
                     "Trying to set block entity {} at {pos:?}, but block {} does not accept that type",
-                    block_entity_type.key,
+                    block_entity.get_type().key,
                     state.get_block().key,
                 );
-                return false;
+                return (false, LifecycleDispatchers::new());
             }
+
+            let cached_state = block_entity.get_block_state();
+            let should_tick = block_entity.is_ticking();
+            let committed = self.with_locked_block_state(pos, |live_state| {
+                if live_state != state {
+                    return None;
+                }
+                Some(
+                    self.block_entities
+                        .add_and_register_staged(&block_entity, state, should_tick),
+                )
+            });
+            let Some((_, lifecycle_dispatchers)) = committed else {
+                continue;
+            };
             if state.get_block() != cached_state.get_block() {
                 log::warn!(
                     "Updating mismatched block entity {} state at {pos:?}: {} != {}",
-                    block_entity_type.key,
+                    block_entity.get_type().key,
                     state.get_block().key,
                     cached_state.get_block().key,
                 );
             }
-            block_entity.set_block_state(state);
+
+            self.mark_unsaved();
+            return (true, lifecycle_dispatchers);
+        }
+    }
+
+    fn with_locked_block_state<R>(&self, pos: BlockPos, f: impl FnOnce(BlockStateId) -> R) -> R {
+        let y = pos.y();
+        if y < self.min_y || y >= self.min_y + self.height {
+            return f(REGISTRY.blocks.get_base_state_id(&vanilla_blocks::AIR));
         }
 
-        self.block_entities.add_and_register(block_entity);
-        self.mark_unsaved();
-        true
+        let section_index = self.get_section_index(y);
+        if section_index >= self.sections.sections.len() {
+            return f(REGISTRY.blocks.get_base_state_id(&vanilla_blocks::AIR));
+        }
+
+        let section = self.sections.sections[section_index].read();
+        let state = if section.is_empty() {
+            REGISTRY.blocks.get_base_state_id(&vanilla_blocks::AIR)
+        } else {
+            section.states.get(
+                (pos.x() & 15) as usize,
+                (y & 15) as usize,
+                (pos.z() & 15) as usize,
+            )
+        };
+        f(state)
     }
 
     /// Updates the ticking status of a block entity.
@@ -688,6 +1107,118 @@ impl LevelChunk {
         self.block_entities.update_ticker(block_entity);
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping the ownership retry loop together makes reconciliation auditable"
+    )]
+    fn reconcile_block_entity_after_set(&self, pos: BlockPos, state: BlockStateId) {
+        loop {
+            if self.get_block_state(pos) != state {
+                return;
+            }
+
+            if let Some(block_entity) = self.get_block_entity(pos) {
+                if block_entity.is_valid_block_state(state) {
+                    let should_tick = block_entity.is_ticking();
+                    let committed = self.with_locked_block_state(pos, |live_state| {
+                        if live_state != state {
+                            return None;
+                        }
+                        Some(self.block_entities.update_if_same_staged(
+                            pos,
+                            &block_entity,
+                            state,
+                            should_tick,
+                        ))
+                    });
+                    let Some((updated, lifecycle_dispatchers)) = committed else {
+                        return;
+                    };
+                    for entity in lifecycle_dispatchers {
+                        entity.dispatch_lifecycle_events();
+                    }
+                    if updated {
+                        return;
+                    }
+                    continue;
+                }
+
+                let removed = self.with_locked_block_state(pos, |live_state| {
+                    if live_state != state {
+                        return None;
+                    }
+                    Some(
+                        self.block_entities
+                            .remove_if_same_staged(pos, block_entity.as_ref()),
+                    )
+                });
+                let Some((removed, lifecycle_dispatchers)) = removed else {
+                    return;
+                };
+                for entity in lifecycle_dispatchers {
+                    entity.dispatch_lifecycle_events();
+                }
+                if !removed {
+                    continue;
+                }
+                log::warn!(
+                    "Removed mismatched block entity at {pos:?}: type = {}, state = {}",
+                    block_entity.get_type().key,
+                    state.get_block().key,
+                );
+                // Removal hooks may synchronously replace either the block or its entity.
+                continue;
+            }
+
+            let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
+            match behavior.new_block_entity(self.level.clone(), pos, state) {
+                BlockEntityCreation::Created(block_entity) => {
+                    let valid = block_entity.get_block_pos() == pos
+                        && block_entity.is_valid_block_state(state);
+                    let should_tick = valid && block_entity.is_ticking();
+                    let inserted = self.with_locked_block_state(pos, |live_state| {
+                        if live_state != state {
+                            return None;
+                        }
+                        if !valid {
+                            return Some(None);
+                        }
+                        Some(Some(
+                            self.block_entities.insert_if_absent_and_register_staged(
+                                &block_entity,
+                                state,
+                                should_tick,
+                            ),
+                        ))
+                    });
+                    let Some(inserted) = inserted else {
+                        return;
+                    };
+                    let Some(inserted) = inserted else {
+                        debug_assert!(false, "block-entity factory returned an invalid entity");
+                        return;
+                    };
+                    if let BlockEntityInsert::Inserted(lifecycle_dispatchers) = inserted {
+                        for entity in lifecycle_dispatchers {
+                            entity.dispatch_lifecycle_events();
+                        }
+                        return;
+                    }
+                }
+                BlockEntityCreation::NoEntity => return,
+                BlockEntityCreation::Unimplemented => {
+                    let inserted = self.with_locked_block_state(pos, |live_state| {
+                        live_state == state && self.block_entities.set_pending(pos)
+                    });
+                    if inserted {
+                        self.mark_unsaved();
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
     /// Returns all block entities in this chunk.
     #[must_use]
     pub fn get_block_entities(&self) -> Vec<SharedBlockEntity> {
@@ -696,15 +1227,14 @@ impl LevelChunk {
 
     /// Returns a reference to the block entity storage.
     #[must_use]
-    pub const fn block_entity_storage(&self) -> &BlockEntityStorage {
+    pub(crate) const fn block_entity_storage(&self) -> &BlockEntityStorage {
         &self.block_entities
     }
 
-    /// Clears all block entities from this chunk.
-    ///
-    /// Marks all entities as removed.
-    pub fn clear_all_block_entities(&self) {
-        self.block_entities.clear();
+    /// Clears entity ownership while deferring lifecycle callbacks to an outer-lock-free caller.
+    #[must_use]
+    pub(crate) fn clear_all_block_entities_staged(&self) -> Vec<SharedBlockEntity> {
+        self.block_entities.clear_and_stage_lifecycle_callbacks()
     }
 
     /// Ticks all ticking block entities in this chunk.
@@ -733,6 +1263,10 @@ impl LevelChunk {
     /// Sets a block state at the given position.
     ///
     /// Returns the old block state, or `None` if nothing changed.
+    ///
+    /// The world scheduler serializes gameplay mutations. This method makes the palette and
+    /// block-entity ownership transition atomic, but its later Vanilla-ordered callbacks and
+    /// derived-cache updates are not a general concurrent transaction for the same position.
     ///
     /// # Arguments
     /// * `pos` - The absolute block position
@@ -794,21 +1328,49 @@ impl LevelChunk {
         let local_y = (y & 15) as usize;
         let local_z = (pos.0.z & 15) as usize;
 
-        let (old_state, was_empty, is_empty) = {
+        let mut keep_block_entity_decision = None;
+        let (old_state, was_empty, is_empty, detached_block_entity) = loop {
             let mut section_guard = section.write();
-            let current_state = section_guard.states.get(local_x, local_y, local_z);
-            if expected_state.is_some_and(|expected| current_state != expected) {
-                return Some(LevelChunkBlockSetResult::Stale(current_state));
+            let observed_state = section_guard.states.get(local_x, local_y, local_z);
+            if expected_state.is_some_and(|expected| observed_state != expected) {
+                return Some(LevelChunkBlockSetResult::Stale(observed_state));
             }
+            if observed_state == state {
+                return Some(LevelChunkBlockSetResult::Unchanged);
+            }
+
+            // Behavior decisions run without section/storage locks. The following palette write
+            // verifies the exact observed state before using the decision.
+            let old_block = observed_state.get_block();
+            let new_block = state.get_block();
+            let block_changed = old_block != new_block;
+            let detach_block_entity = if block_changed && observed_state.has_block_entity() {
+                let Some((decision_state, should_keep)) = keep_block_entity_decision else {
+                    drop(section_guard);
+                    let should_keep = BLOCK_BEHAVIORS
+                        .get_behavior(new_block)
+                        .should_keep_block_entity(observed_state, state);
+                    keep_block_entity_decision = Some((observed_state, should_keep));
+                    continue;
+                };
+                if decision_state != observed_state {
+                    drop(section_guard);
+                    keep_block_entity_decision = None;
+                    continue;
+                }
+                !should_keep
+            } else {
+                false
+            };
+
             let was_empty = section_guard.is_empty();
             let old_state = section_guard.set_block_state(local_x, local_y, local_z, state);
+            debug_assert_eq!(old_state, observed_state);
+            let detached_block_entity =
+                detach_block_entity.then(|| self.block_entities.detach_and_queue_removal(pos));
             let is_empty = section_guard.is_empty();
-            (old_state, was_empty, is_empty)
+            break (old_state, was_empty, is_empty, detached_block_entity);
         };
-
-        if old_state == state {
-            return Some(LevelChunkBlockSetResult::Unchanged);
-        }
 
         let min_y = self.min_y;
         let sections = &self.sections;
@@ -845,35 +1407,39 @@ impl LevelChunk {
             self.update_sky_light_sources(local_x, y, local_z);
         }
 
-        if let Some(level) = self.get_level() {
-            if light_properties_changed || empty_section_change.is_some() {
-                level.queue_light_change_after_block_set(
-                    pos,
-                    old_state,
-                    state,
-                    empty_section_change,
-                );
+        let block_changed = old_block != new_block;
+        let moved_by_piston = flags.contains(UpdateFlags::UPDATE_MOVE_BY_PISTON);
+        let side_effects = !flags.contains(UpdateFlags::UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS);
+
+        let block_behaviors = &*BLOCK_BEHAVIORS;
+        let old_behavior = block_behaviors.get_behavior(old_block);
+        let new_behavior = block_behaviors.get_behavior(new_block);
+
+        let level = self.get_level();
+        if let Some(level) = &level
+            && (light_properties_changed || empty_section_change.is_some())
+        {
+            level.queue_light_change_after_block_set(pos, old_state, state, empty_section_change);
+        }
+
+        if let Some(DetachedBlockEntity {
+            entity,
+            dispatch_removed,
+        }) = detached_block_entity
+            && let Some(block_entity) = entity
+        {
+            // The exact old owner was detached with the palette write, so a concurrent/reentrant
+            // replacement cannot be drained or removed by this operation. Unlike Vanilla's
+            // single-threaded map, the entity is no longer discoverable during this callback.
+            if side_effects && level.is_some() {
+                block_entity.pre_remove_side_effects(pos, old_state);
             }
-
-            let block_changed = old_block != new_block;
-            let moved_by_piston = flags.contains(UpdateFlags::UPDATE_MOVE_BY_PISTON);
-            let side_effects = !flags.contains(UpdateFlags::UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS);
-
-            let block_behaviors = &*BLOCK_BEHAVIORS;
-            let old_behavior = block_behaviors.get_behavior(old_block);
-            let new_behavior = block_behaviors.get_behavior(new_block);
-
-            // Block entity removal when block type changes
-            if block_changed && old_behavior.has_block_entity() {
-                let should_keep = new_behavior.should_keep_block_entity(old_state, state);
-                if !should_keep {
-                    if side_effects && let Some(block_entity) = self.get_block_entity(pos) {
-                        block_entity.pre_remove_side_effects(pos, old_state);
-                    }
-                    self.remove_block_entity(pos);
-                }
+            if dispatch_removed {
+                block_entity.dispatch_lifecycle_events();
             }
+        }
 
+        if let Some(level) = level {
             // Notify neighbors that we were removed (for rails, etc.)
             if (block_changed || new_behavior.is_rail())
                 && (flags.contains(UpdateFlags::UPDATE_NEIGHBORS) || moved_by_piston)
@@ -886,8 +1452,8 @@ impl LevelChunk {
                 );
             }
 
-            // Removal callbacks may synchronously replace this position. Vanilla
-            // re-reads here and does not place or create data for the stale request.
+            // Removal callbacks may synchronously replace this position. Vanilla does not run
+            // placement callbacks for the stale request.
             let current_state = section.read().states.get(local_x, local_y, local_z);
             if current_state.get_block() != new_block {
                 return Some(LevelChunkBlockSetResult::Stale(current_state));
@@ -897,28 +1463,12 @@ impl LevelChunk {
             if !flags.contains(UpdateFlags::UPDATE_SKIP_ON_PLACE) {
                 new_behavior.on_place(state, &level, pos, old_state, moved_by_piston);
             }
+        }
 
-            // Block entity creation after on_place
-            let requested_block_remains = section
-                .read()
-                .states
-                .get(local_x, local_y, local_z)
-                .get_block()
-                == new_block;
-            if new_behavior.has_block_entity() && requested_block_remains {
-                if let Some(existing) = self.get_block_entity(pos) {
-                    // Update existing block entity's state
-                    existing.set_block_state(state);
-                    self.update_block_entity_ticker(&existing);
-                } else {
-                    // Create new block entity
-                    if let Some(entity) =
-                        new_behavior.new_block_entity(self.level.clone(), pos, state)
-                    {
-                        self.add_and_register_block_entity(entity);
-                    }
-                }
-            }
+        // Block-entity reconciliation is an exact-state transaction. Placement callbacks or
+        // concurrent writers that replace this request own the resulting entity instead.
+        if state.has_block_entity() {
+            self.reconcile_block_entity_after_set(pos, state);
         }
 
         self.mark_unsaved();
@@ -958,6 +1508,10 @@ impl LevelChunk {
     #[must_use]
     pub fn get_block_state(&self, pos: BlockPos) -> BlockStateId {
         let y = pos.0.y;
+        if y < self.min_y || y >= self.min_y + self.height {
+            return REGISTRY.blocks.get_base_state_id(&vanilla_blocks::AIR);
+        }
+
         let section_index = self.get_section_index(y);
 
         // `LevelChunk` returns air outside its section array; `World` handles void air.
@@ -1005,7 +1559,25 @@ impl LevelChunk {
             section.read().write(&mut cursor);
         });
 
-        let heightmaps_guard = self.heightmaps.read();
+        let heightmaps = {
+            let heightmaps = self.heightmaps.read();
+            vec![
+                (
+                    ProtocolHeightmapType::WorldSurface,
+                    heightmaps.get(HeightmapType::WorldSurface).get_raw_data(),
+                ),
+                (
+                    ProtocolHeightmapType::MotionBlocking,
+                    heightmaps.get(HeightmapType::MotionBlocking).get_raw_data(),
+                ),
+                (
+                    ProtocolHeightmapType::MotionBlockingNoLeaves,
+                    heightmaps
+                        .get(HeightmapType::MotionBlockingNoLeaves)
+                        .get_raw_data(),
+                ),
+            ]
+        };
 
         // Collect block entity data for client sync
         let block_entities: Vec<BlockEntityInfo> = self
@@ -1027,28 +1599,7 @@ impl LevelChunk {
             .collect();
 
         ChunkPacketData {
-            heightmaps: Heightmaps {
-                heightmaps: vec![
-                    (
-                        ProtocolHeightmapType::WorldSurface,
-                        heightmaps_guard
-                            .get(HeightmapType::WorldSurface)
-                            .get_raw_data(),
-                    ),
-                    (
-                        ProtocolHeightmapType::MotionBlocking,
-                        heightmaps_guard
-                            .get(HeightmapType::MotionBlocking)
-                            .get_raw_data(),
-                    ),
-                    (
-                        ProtocolHeightmapType::MotionBlockingNoLeaves,
-                        heightmaps_guard
-                            .get(HeightmapType::MotionBlockingNoLeaves)
-                            .get_raw_data(),
-                    ),
-                ],
-            },
+            heightmaps: Heightmaps { heightmaps },
             data: cursor.into_inner(),
             block_entities,
         }
@@ -1069,11 +1620,17 @@ mod tests {
         thread,
     };
 
-    use steel_registry::test_support::init_test_registry;
-    use steel_utils::ChunkPos;
+    use simdnbt::owned::NbtCompound;
+    use steel_registry::{
+        blocks::properties::BlockStateProperties, test_support::init_test_registry,
+        vanilla_block_entity_types, vanilla_blocks,
+    };
+    use steel_utils::{ChunkPos, Downcast as _};
 
     use super::*;
     use crate::behavior::init_behaviors;
+    use crate::block_entity::entities::ComparatorBlockEntity;
+    use crate::block_entity::{SharedBlockEntity, entities::RawBlockEntity};
     use crate::chunk::{
         light::{LightSection, LightSectionData},
         proto_chunk::ProtoChunk,
@@ -1260,5 +1817,306 @@ mod tests {
 
         assert_eq!(changed, 1);
         assert_ne!(chunk.get_block_state(pos), stone);
+    }
+
+    #[test]
+    fn block_change_replaces_a_structurally_valid_raw_entity_with_the_new_factory() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let pos = BlockPos::new(1, 2, 3);
+        let chest = vanilla_blocks::CHEST.default_state();
+        let comparator = vanilla_blocks::COMPARATOR.default_state();
+        assert!(
+            chunk
+                .set_block_state(pos, chest, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        let old: SharedBlockEntity = Arc::new(RawBlockEntity::new(
+            &vanilla_block_entity_types::CHEST,
+            Weak::new(),
+            pos,
+            chest,
+        ));
+        assert!(chunk.add_and_register_block_entity(Arc::clone(&old)));
+
+        assert_eq!(
+            chunk.set_block_state(pos, comparator, UpdateFlags::UPDATE_NONE),
+            Some(chest)
+        );
+        let Some(replacement) = chunk.get_block_entity(pos) else {
+            panic!("comparator behavior should create its concrete block entity");
+        };
+        assert!(old.is_removed());
+        assert!(
+            replacement
+                .downcast_ref::<ComparatorBlockEntity>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn breaking_an_unimplemented_entity_block_removes_its_raw_entity() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let pos = BlockPos::new(2, 2, 2);
+        let chest = vanilla_blocks::CHEST.default_state();
+        assert!(
+            chunk
+                .set_block_state(pos, chest, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        let old: SharedBlockEntity = Arc::new(RawBlockEntity::new(
+            &vanilla_block_entity_types::CHEST,
+            Weak::new(),
+            pos,
+            chest,
+        ));
+        assert!(chunk.add_and_register_block_entity(Arc::clone(&old)));
+
+        assert_eq!(
+            chunk.set_block_state(
+                pos,
+                vanilla_blocks::STONE.default_state(),
+                UpdateFlags::UPDATE_NONE,
+            ),
+            Some(chest)
+        );
+        assert!(old.is_removed());
+        assert!(chunk.get_block_entity(pos).is_none());
+    }
+
+    #[test]
+    fn copper_chest_transformation_preserves_entity_identity() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let pos = BlockPos::new(3, 2, 1);
+        let copper = vanilla_blocks::COPPER_CHEST.default_state();
+        let exposed = vanilla_blocks::EXPOSED_COPPER_CHEST.default_state();
+        assert!(
+            chunk
+                .set_block_state(pos, copper, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        let mut data = NbtCompound::new();
+        data.insert("test_marker", 37_i32);
+        let original: SharedBlockEntity = Arc::new(RawBlockEntity::with_data(
+            &vanilla_block_entity_types::CHEST,
+            Weak::new(),
+            pos,
+            copper,
+            data,
+        ));
+        assert!(chunk.add_and_register_block_entity(Arc::clone(&original)));
+
+        assert_eq!(
+            chunk.set_block_state(pos, exposed, UpdateFlags::UPDATE_NONE),
+            Some(copper)
+        );
+        let Some(transformed) = chunk.get_block_entity(pos) else {
+            panic!("copper chest transformation should retain its entity");
+        };
+        assert!(Arc::ptr_eq(&original, &transformed));
+        assert_eq!(transformed.get_block_state(), exposed);
+        assert!(!transformed.is_removed());
+        let mut saved = NbtCompound::new();
+        transformed.save_additional(&mut saved);
+        assert_eq!(saved.int("test_marker"), Some(37));
+    }
+
+    #[test]
+    fn same_block_property_change_preserves_entity_data_and_updates_cached_state() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let pos = BlockPos::new(3, 2, 2);
+        let comparator = vanilla_blocks::COMPARATOR.default_state();
+        assert!(
+            chunk
+                .set_block_state(pos, comparator, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        let Some(original) = chunk.get_block_entity(pos) else {
+            panic!("comparator placement should create its entity");
+        };
+        let Some(original_comparator) = original.downcast_ref::<ComparatorBlockEntity>() else {
+            panic!("comparator should use its concrete entity");
+        };
+        original_comparator.set_output_signal(11);
+        let powered = comparator.set_value(&BlockStateProperties::POWERED, true);
+
+        assert_eq!(
+            chunk.set_block_state(pos, powered, UpdateFlags::UPDATE_NONE),
+            Some(comparator)
+        );
+        let Some(updated) = chunk.get_block_entity(pos) else {
+            panic!("property update should retain the comparator entity");
+        };
+        assert!(Arc::ptr_eq(&original, &updated));
+        assert_eq!(updated.get_block_state(), powered);
+        assert_eq!(original_comparator.output_signal(), 11);
+    }
+
+    #[test]
+    fn shared_entity_type_does_not_imply_cross_block_preservation() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let pos = BlockPos::new(4, 2, 1);
+        let chest = vanilla_blocks::CHEST.default_state();
+        let trapped_chest = vanilla_blocks::TRAPPED_CHEST.default_state();
+        assert!(
+            chunk
+                .set_block_state(pos, chest, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        let original: SharedBlockEntity = Arc::new(RawBlockEntity::new(
+            &vanilla_block_entity_types::CHEST,
+            Weak::new(),
+            pos,
+            chest,
+        ));
+        assert!(chunk.add_and_register_block_entity(Arc::clone(&original)));
+
+        assert_eq!(
+            chunk.set_block_state(pos, trapped_chest, UpdateFlags::UPDATE_NONE),
+            Some(chest)
+        );
+        assert!(original.is_removed());
+        assert!(
+            !chunk
+                .get_block_entity(pos)
+                .is_some_and(|entity| Arc::ptr_eq(&original, &entity))
+        );
+    }
+
+    #[test]
+    fn insertion_rejects_an_entity_owned_by_another_chunk() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let local_pos = BlockPos::new(0, 2, 0);
+        let foreign_pos = BlockPos::new(16, 2, 0);
+        let chest = vanilla_blocks::CHEST.default_state();
+        assert!(
+            chunk
+                .set_block_state(local_pos, chest, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        let foreign: SharedBlockEntity = Arc::new(RawBlockEntity::new(
+            &vanilla_block_entity_types::CHEST,
+            Weak::new(),
+            foreign_pos,
+            chest,
+        ));
+
+        assert!(!chunk.add_and_register_block_entity(foreign));
+        assert!(chunk.get_block_entity(local_pos).is_none());
+        assert!(chunk.get_block_entity(foreign_pos).is_none());
+    }
+
+    #[test]
+    fn insertion_below_world_does_not_alias_the_bottom_section() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let bottom_section_pos = BlockPos::new(0, 15, 0);
+        let below_world_pos = BlockPos::new(0, -1, 0);
+        let chest = vanilla_blocks::CHEST.default_state();
+        assert!(
+            chunk
+                .set_block_state(bottom_section_pos, chest, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        let below_world: SharedBlockEntity = Arc::new(RawBlockEntity::new(
+            &vanilla_block_entity_types::CHEST,
+            Weak::new(),
+            below_world_pos,
+            chest,
+        ));
+
+        assert!(!chunk.add_and_register_block_entity(below_world));
+        assert!(chunk.get_block_entity(below_world_pos).is_none());
+    }
+
+    #[test]
+    fn stale_no_entity_promotion_cannot_consume_a_replacement_marker() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let pos = BlockPos::new(2, 3, 4);
+        let moving_piston = vanilla_blocks::MOVING_PISTON.default_state();
+        assert!(
+            chunk
+                .set_block_state(pos, moving_piston, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        chunk.set_pending_block_entity(pos);
+
+        let chest = vanilla_blocks::CHEST.default_state();
+        assert_eq!(
+            chunk.set_block_state(pos, chest, UpdateFlags::UPDATE_NONE),
+            Some(moving_piston)
+        );
+        assert_eq!(chunk.pending_block_entity_positions(), [pos]);
+
+        assert!(matches!(
+            chunk.commit_pending_creation(pos, moving_piston, BlockEntityCreation::NoEntity),
+            PendingPromotionCommit::Retry
+        ));
+        assert_eq!(chunk.pending_block_entity_positions(), [pos]);
+    }
+
+    #[test]
+    fn stale_worldgen_factory_cannot_replace_the_current_state_marker() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let pos = BlockPos::new(2, 3, 4);
+        let copper = vanilla_blocks::COPPER_CHEST.default_state();
+        let exposed = vanilla_blocks::EXPOSED_COPPER_CHEST.default_state();
+        assert!(
+            chunk
+                .set_block_state(pos, copper, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        assert_eq!(
+            chunk.set_block_state(pos, exposed, UpdateFlags::UPDATE_NONE),
+            Some(copper)
+        );
+        let stale: SharedBlockEntity = Arc::new(RawBlockEntity::new(
+            &vanilla_block_entity_types::CHEST,
+            Weak::new(),
+            pos,
+            copper,
+        ));
+
+        assert!(!chunk.add_and_register_block_entity_if_state(stale, copper));
+        assert_eq!(chunk.pending_block_entity_positions(), [pos]);
+        assert!(chunk.get_block_entity(pos).is_none());
+    }
+
+    #[test]
+    fn immediate_lookup_recovers_a_missing_implemented_entity() {
+        init_test_registry();
+        init_behaviors();
+        let chunk = test_chunk();
+        let pos = BlockPos::new(2, 3, 4);
+        let sign = vanilla_blocks::OAK_SIGN.default_state();
+        assert!(
+            chunk
+                .set_block_state(pos, sign, UpdateFlags::UPDATE_NONE)
+                .is_some()
+        );
+        assert!(chunk.remove_block_entity(pos));
+        assert!(chunk.get_block_entity(pos).is_none());
+
+        let Some(recovered) = chunk.get_block_entity_immediate(pos) else {
+            panic!("immediate lookup should recreate the sign entity");
+        };
+        assert_eq!(recovered.get_block_state(), sign);
+        assert!(!recovered.is_removed());
     }
 }

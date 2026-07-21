@@ -12,10 +12,9 @@ use steel_utils::{BlockPos, BlockStateId, Downcast as _, WorldAabb};
 
 use super::diode_block::DiodeBlock;
 use crate::behavior::{
-    BLOCK_BEHAVIORS, BlockBehavior, BlockHitResult, BlockPlaceContext, InteractionResult,
-    InventoryAccess, PlacementSource,
+    BLOCK_BEHAVIORS, BlockBehavior, BlockEntityCreation, BlockHitResult, BlockPlaceContext,
+    InteractionResult, InventoryAccess, PlacementSource,
 };
-use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::ComparatorBlockEntity;
 use crate::entity::Entity;
 use crate::entity::entities::ItemFrameEntity;
@@ -377,17 +376,13 @@ impl BlockBehavior for ComparatorBlock {
         block_entity.trigger_event(param_a, param_b)
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(ComparatorBlockEntity::new(level, pos, state)))
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::Created(Arc::new(ComparatorBlockEntity::new(level, pos, state)))
     }
 
     // `animateTick` emits client-local dust particles only.
@@ -448,6 +443,7 @@ mod tests {
                 BlockPos::new(0, 64, 0),
                 vanilla_blocks::COMPARATOR.default_state(),
             )
+            .into_created()
             .expect("comparator should create its block entity");
         assert!(entity.downcast_ref::<ComparatorBlockEntity>().is_some());
     }

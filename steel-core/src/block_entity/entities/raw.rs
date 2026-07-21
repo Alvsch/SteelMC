@@ -43,7 +43,7 @@ impl RawBlockEntity {
 
     /// Creates a raw block entity with already-owned additional NBT.
     #[must_use]
-    pub const fn with_data(
+    pub fn with_data(
         block_entity_type: BlockEntityTypeRef,
         level: Weak<World>,
         pos: BlockPos,
@@ -111,5 +111,17 @@ mod tests {
         assert!(!custom.contains("id"));
         assert!(!custom.contains("x"));
         assert_eq!(custom.int("custom"), Some(7));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid block entity minecraft:barrel state minecraft:stone")]
+    fn constructor_rejects_a_type_state_mismatch() {
+        init_test_registry();
+        let _ = RawBlockEntity::new(
+            &vanilla_block_entity_types::BARREL,
+            Weak::new(),
+            BlockPos::new(2, 70, -4),
+            vanilla_blocks::STONE.default_state(),
+        );
     }
 }

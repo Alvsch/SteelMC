@@ -11,10 +11,10 @@ use steel_registry::vanilla_blocks;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::{
-    BLOCK_BEHAVIORS, BlockBehavior, BlockCollisionBoxes, BlockCollisionContext, BlockHitResult,
-    BlockLootContext, BlockPlaceContext, InteractionResult, InventoryAccess,
+    BLOCK_BEHAVIORS, BlockBehavior, BlockCollisionBoxes, BlockCollisionContext,
+    BlockEntityCreation, BlockHitResult, BlockLootContext, BlockPlaceContext, InteractionResult,
+    InventoryAccess,
 };
-use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::PistonMovingBlockEntity;
 use crate::entity::ai::path::PathComputationType;
 use crate::player::Player;
@@ -37,17 +37,13 @@ impl BlockBehavior for MovingPistonBlock {
         Some(vanilla_blocks::MOVING_PISTON.default_state())
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         _level: Weak<World>,
         _pos: BlockPos,
         _state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        None
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::NoEntity
     }
 
     fn get_collision_boxes(

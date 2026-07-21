@@ -171,13 +171,17 @@ impl Container for BarrelContainer {
 
 #[cfg(test)]
 mod tests {
-    use steel_registry::{test_support::init_test_registry, vanilla_items};
+    use steel_registry::{test_support::init_test_registry, vanilla_blocks, vanilla_items};
 
     use super::*;
 
     fn test_barrel() -> BarrelBlockEntity {
         init_test_registry();
-        BarrelBlockEntity::new(Weak::new(), BlockPos::new(1, 2, 3), BlockStateId::default())
+        BarrelBlockEntity::new(
+            Weak::new(),
+            BlockPos::new(1, 2, 3),
+            vanilla_blocks::BARREL.default_state(),
+        )
     }
 
     #[test]
@@ -199,7 +203,10 @@ mod tests {
             .lock()
             .set_item(0, ItemStack::new(&vanilla_items::STONE));
 
-        barrel.pre_remove_side_effects(BlockPos::new(1, 2, 3), BlockStateId::default());
+        barrel.pre_remove_side_effects(
+            BlockPos::new(1, 2, 3),
+            vanilla_blocks::BARREL.default_state(),
+        );
 
         let container = barrel.container.lock();
         assert_eq!(container.items.len(), BARREL_SLOTS);

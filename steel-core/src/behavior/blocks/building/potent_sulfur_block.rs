@@ -12,9 +12,11 @@ use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_game_events;
 use steel_utils::{BlockPos, BlockStateId, Direction, Downcast as _};
 
-use crate::behavior::{BlockBehavior, BlockPlaceContext, BlockStateBehaviorExt as _};
+use crate::behavior::{
+    BlockBehavior, BlockEntityCreation, BlockPlaceContext, BlockStateBehaviorExt as _,
+};
+use crate::block_entity::BLOCK_ENTITIES;
 use crate::block_entity::entities::PotentSulfurBlockEntity;
-use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
 use crate::fluid::FluidStateExt as _;
 use crate::world::{LevelReader, ScheduledTickAccess, World, game_event_context::GameEventContext};
 
@@ -159,21 +161,17 @@ impl BlockBehavior for PotentSulfurBlock {
         true
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        BLOCK_ENTITIES.create(
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::from_registered_factory(BLOCK_ENTITIES.create(
             &vanilla_block_entity_types::POTENT_SULFUR,
             level,
             pos,
             state,
-        )
+        ))
     }
 }

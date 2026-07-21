@@ -692,10 +692,11 @@ impl ChunkAccess {
     }
 
     /// Adds a block entity and registers it for ticking if needed.
-    pub fn add_and_register_block_entity(&self, block_entity: SharedBlockEntity) {
+    #[must_use]
+    pub fn add_and_register_block_entity(&self, block_entity: SharedBlockEntity) -> bool {
         match self {
             Self::Full(chunk) => chunk.add_and_register_block_entity(block_entity),
-            Self::Proto(proto_chunk) => proto_chunk.add_and_register_block_entity(block_entity),
+            Self::Proto(proto_chunk) => proto_chunk.set_block_entity(block_entity),
             Self::Unloaded => unreachable!(),
         }
     }
@@ -711,6 +712,19 @@ impl ChunkAccess {
         }
     }
 
+    /// Clears storage and stages Full-chunk lifecycle callbacks for lock-free dispatch.
+    #[must_use]
+    pub(crate) fn clear_all_block_entities_staged(&self) -> Vec<SharedBlockEntity> {
+        match self {
+            Self::Full(chunk) => chunk.clear_all_block_entities_staged(),
+            Self::Proto(proto_chunk) => {
+                proto_chunk.clear_all_block_entities();
+                Vec::new()
+            }
+            Self::Unloaded => Vec::new(),
+        }
+    }
+
     /// Returns all block entities in this chunk.
     #[must_use]
     pub fn get_block_entities(&self) -> Vec<SharedBlockEntity> {
@@ -718,6 +732,18 @@ impl ChunkAccess {
             Self::Full(chunk) => chunk.get_block_entities(),
             Self::Proto(proto_chunk) => proto_chunk.get_block_entities(),
             Self::Unloaded => unreachable!(),
+        }
+    }
+
+    /// Atomically snapshots concrete and packed block entities for persistence.
+    #[must_use]
+    pub(crate) fn block_entity_save_snapshot(&self) -> (Vec<SharedBlockEntity>, Vec<BlockPos>) {
+        match self {
+            Self::Full(chunk) => chunk.block_entity_storage().save_snapshot(),
+            Self::Proto(proto_chunk) => proto_chunk
+                .block_entities
+                .save_snapshot_without_lifecycle_filter(),
+            Self::Unloaded => (Vec::new(), Vec::new()),
         }
     }
 

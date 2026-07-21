@@ -12,9 +12,9 @@ use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::{
-    BlockBehavior, BlockHitResult, BlockPlaceContext, InteractionResult, InventoryAccess,
+    BlockBehavior, BlockEntityCreation, BlockHitResult, BlockPlaceContext, InteractionResult,
+    InventoryAccess,
 };
-use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::DaylightDetectorBlockEntity;
 use crate::player::Player;
 use crate::world::game_event_context::GameEventContext;
@@ -125,17 +125,13 @@ impl BlockBehavior for DaylightDetectorBlock {
         i32::from(state.get_value(&BlockStateProperties::POWER))
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(DaylightDetectorBlockEntity::new(
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::Created(Arc::new(DaylightDetectorBlockEntity::new(
             level, pos, state,
         )))
     }
@@ -158,6 +154,7 @@ mod tests {
         let state = vanilla_blocks::DAYLIGHT_DETECTOR.default_state();
         let entity = DaylightDetectorBlock::new(&vanilla_blocks::DAYLIGHT_DETECTOR)
             .new_block_entity(Arc::downgrade(&world), BlockPos::ZERO, state)
+            .into_created()
             .expect("daylight detector should create block entity");
         assert_eq!(
             entity.get_type(),

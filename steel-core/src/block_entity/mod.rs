@@ -35,12 +35,16 @@ use std::{
 
 use simdnbt::borrow::BaseNbtCompound as BorrowedNbtCompound;
 use simdnbt::owned::NbtCompound;
+use smallvec::SmallVec;
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_utils::{BlockPos, BlockStateId, ErasedType, locks::SyncMutex};
 
 pub use registry::{BLOCK_ENTITIES, BlockEntityFactory, BlockEntityRegistry, init_block_entities};
-pub use storage::BlockEntityStorage;
+pub(crate) use storage::{
+    BlockEntityInsert, BlockEntityLookup, BlockEntityStorage, DetachedBlockEntity,
+    LifecycleDispatchers,
+};
 
 use crate::inventory::lock::ContainerRef;
 use crate::player::Player;
@@ -50,6 +54,15 @@ use crate::world::World;
 struct BlockEntityLifecycle {
     block_state: BlockStateId,
     removed: bool,
+    events: SmallVec<[BlockEntityLifecycleEvent; 2]>,
+    dispatching_events: bool,
+}
+
+#[derive(Clone, Copy)]
+enum BlockEntityLifecycleEvent {
+    SetRemoved,
+    ClearRemoved,
+    BlockStateChanged(BlockStateId),
 }
 
 /// Immutable block-entity identity and its short-lived lifecycle state.
@@ -63,15 +76,41 @@ pub struct BlockEntityBase {
     lifecycle: SyncMutex<BlockEntityLifecycle>,
 }
 
+struct BlockEntityLifecycleDispatchGuard<'a> {
+    base: &'a BlockEntityBase,
+    armed: bool,
+}
+
+impl Drop for BlockEntityLifecycleDispatchGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut lifecycle = self.base.lifecycle.lock();
+        lifecycle.events.clear();
+        lifecycle.dispatching_events = false;
+    }
+}
+
 impl BlockEntityBase {
     /// Creates common metadata for one block entity.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `block_state` is not accepted by `block_entity_type`.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         block_entity_type: BlockEntityTypeRef,
         level: Weak<World>,
         pos: BlockPos,
         block_state: BlockStateId,
     ) -> Self {
+        assert!(
+            block_entity_type.is_valid(block_state.get_block()),
+            "invalid block entity {} state {} at {pos:?}",
+            block_entity_type.key,
+            block_state.get_block().key,
+        );
         Self {
             block_entity_type,
             level,
@@ -79,6 +118,8 @@ impl BlockEntityBase {
             lifecycle: SyncMutex::new(BlockEntityLifecycle {
                 block_state,
                 removed: false,
+                events: SmallVec::new(),
+                dispatching_events: false,
             }),
         }
     }
@@ -98,8 +139,28 @@ impl BlockEntityBase {
         self.lifecycle.lock().block_state
     }
 
-    fn set_block_state(&self, state: BlockStateId) {
-        self.lifecycle.lock().block_state = state;
+    fn queue_block_state_change(&self, state: BlockStateId) -> bool {
+        assert!(
+            self.block_entity_type.is_valid(state.get_block()),
+            "invalid block entity {} state {} at {:?}",
+            self.block_entity_type.key,
+            state.get_block().key,
+            self.pos,
+        );
+        let mut lifecycle = self.lifecycle.lock();
+        if lifecycle.block_state == state {
+            return false;
+        }
+        lifecycle.block_state = state;
+        lifecycle
+            .events
+            .push(BlockEntityLifecycleEvent::BlockStateChanged(state));
+        if lifecycle.dispatching_events {
+            false
+        } else {
+            lifecycle.dispatching_events = true;
+            true
+        }
     }
 
     #[must_use]
@@ -107,12 +168,33 @@ impl BlockEntityBase {
         self.lifecycle.lock().removed
     }
 
-    fn set_removed(&self) {
-        self.lifecycle.lock().removed = true;
+    fn queue_set_removed(&self) -> bool {
+        let mut lifecycle = self.lifecycle.lock();
+        lifecycle.removed = true;
+        lifecycle.events.push(BlockEntityLifecycleEvent::SetRemoved);
+        if lifecycle.dispatching_events {
+            false
+        } else {
+            lifecycle.dispatching_events = true;
+            true
+        }
     }
 
-    fn clear_removed(&self) {
-        self.lifecycle.lock().removed = false;
+    fn queue_clear_removed(&self) -> bool {
+        let mut lifecycle = self.lifecycle.lock();
+        if !lifecycle.removed {
+            return false;
+        }
+        lifecycle.removed = false;
+        lifecycle
+            .events
+            .push(BlockEntityLifecycleEvent::ClearRemoved);
+        if lifecycle.dispatching_events {
+            false
+        } else {
+            lifecycle.dispatching_events = true;
+            true
+        }
     }
 
     #[must_use]
@@ -171,31 +253,30 @@ pub trait BlockEntity: ErasedType + Send + Sync {
         self.base().block_state()
     }
 
-    /// Updates the cached block state.
+    /// Returns whether this entity's registered type accepts `state`.
     ///
-    /// Called when the block state changes but the block entity is kept.
-    fn set_block_state(&self, state: BlockStateId) {
-        self.base().set_block_state(state);
+    /// Mirrors Vanilla `BlockEntity.isValidBlockState`.
+    fn is_valid_block_state(&self, state: BlockStateId) -> bool {
+        self.get_type().is_valid(state.get_block())
     }
 
-    /// Returns whether this block entity has been marked for removal.
-    fn is_removed(&self) -> bool {
-        self.base().is_removed()
-    }
-
-    /// Marks this block entity as removed.
+    /// Called after the cached block state changes.
     ///
-    /// Removed block entities will be cleaned up and should not be ticked.
-    fn set_removed(&self) {
-        self.base().set_removed();
-    }
+    /// Storage and section locks are not held during this callback. This is Steel's staged
+    /// equivalent of Vanilla block entities overriding `setBlockState`; implementations should
+    /// derive any cached fields from `state` here.
+    fn on_block_state_changed(&self, _state: BlockStateId) {}
 
-    /// Clears the removed flag.
+    /// Called after each invocation that marks this entity removed.
     ///
-    /// Used when re-adding a block entity that was previously removed.
-    fn clear_removed(&self) {
-        self.base().clear_removed();
-    }
+    /// Storage locks are not held during this callback. This mirrors Vanilla overrides of
+    /// `setRemoved`, which run even if the entity was already marked removed.
+    fn on_set_removed(&self) {}
+
+    /// Called after this entity transitions from removed back to active.
+    ///
+    /// Storage locks are not held during this callback.
+    fn on_clear_removed(&self) {}
 
     /// Called when the block entity's data changes.
     ///
@@ -295,6 +376,70 @@ pub trait BlockEntity: ErasedType + Send + Sync {
         None
     }
 }
+
+/// Final block-entity common-state operations.
+///
+/// This blanket implementation prevents concrete entities from replacing metadata transitions.
+/// Custom behavior belongs in the corresponding `BlockEntity::on_*` hook, which runs after the
+/// update without storage or section locks.
+pub trait BlockEntityLifecycleExt: BlockEntity {
+    /// Returns whether this block entity has been marked for removal.
+    fn is_removed(&self) -> bool {
+        self.base().is_removed()
+    }
+
+    /// Updates the cached block state and orders its callback.
+    fn set_block_state(&self, state: BlockStateId) {
+        if self.base().queue_block_state_change(state) {
+            self.dispatch_lifecycle_events();
+        }
+    }
+
+    /// Marks this block entity as removed and orders its lifecycle callback.
+    fn set_removed(&self) {
+        if self.base().queue_set_removed() {
+            self.dispatch_lifecycle_events();
+        }
+    }
+
+    /// Reactivates this block entity and orders its lifecycle callback when the flag changed.
+    fn clear_removed(&self) {
+        if self.base().queue_clear_removed() {
+            self.dispatch_lifecycle_events();
+        }
+    }
+
+    /// Drains lifecycle callbacks in flag-update order without retaining the lifecycle lock.
+    ///
+    /// A callback may re-enter the entity. Its event is appended and drained by the active
+    /// dispatcher rather than recursively invoking another callback.
+    fn dispatch_lifecycle_events(&self) {
+        let mut guard = BlockEntityLifecycleDispatchGuard {
+            base: self.base(),
+            armed: true,
+        };
+        loop {
+            let event = {
+                let mut lifecycle = self.base().lifecycle.lock();
+                if lifecycle.events.is_empty() {
+                    lifecycle.dispatching_events = false;
+                    guard.armed = false;
+                    return;
+                }
+                lifecycle.events.remove(0)
+            };
+            match event {
+                BlockEntityLifecycleEvent::SetRemoved => self.on_set_removed(),
+                BlockEntityLifecycleEvent::ClearRemoved => self.on_clear_removed(),
+                BlockEntityLifecycleEvent::BlockStateChanged(state) => {
+                    self.on_block_state_changed(state);
+                }
+            }
+        }
+    }
+}
+
+impl<T: BlockEntity + ?Sized> BlockEntityLifecycleExt for T {}
 
 /// A stable shared block entity without a whole-object mutex.
 pub type SharedBlockEntity = Arc<dyn BlockEntity>;

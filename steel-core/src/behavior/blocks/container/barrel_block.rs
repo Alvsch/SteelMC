@@ -13,9 +13,9 @@ use steel_utils::{BlockPos, BlockStateId, translations};
 use text_components::TextComponent;
 
 use crate::behavior::InventoryAccess;
-use crate::behavior::block::BlockBehavior;
+use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
-use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
+use crate::block_entity::BLOCK_ENTITIES;
 use crate::inventory::chest_menu::ChestMenuProvider;
 use crate::inventory::container::calculate_redstone_signal_from_container;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
@@ -86,17 +86,18 @@ impl BlockBehavior for BarrelBlock {
         InteractionResult::Success
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        BLOCK_ENTITIES.create(&vanilla_block_entity_types::BARREL, level, pos, state)
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::from_registered_factory(BLOCK_ENTITIES.create(
+            &vanilla_block_entity_types::BARREL,
+            level,
+            pos,
+            state,
+        ))
     }
 
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {

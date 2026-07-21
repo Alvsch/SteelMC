@@ -19,7 +19,7 @@ use steel_utils::{
 
 use crate::behavior::{BLOCK_BEHAVIORS, BlockCollisionBoxes, BlockCollisionContext};
 use crate::block_entity::block_state_nbt;
-use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::block_entity::{BlockEntity, BlockEntityBase, BlockEntityLifecycleExt as _};
 use crate::entity::Entity;
 use crate::physics::MoverType;
 use crate::world::{LevelReader, World};
@@ -176,9 +176,11 @@ impl PistonMovingBlockEntity {
             *moving
         };
         let pos = self.get_block_pos();
-        world.remove_block_entity(pos);
+        let owned_position = world.remove_block_entity_if_same(self);
         self.set_removed();
-        moving.finish_movement_early(world, pos);
+        if owned_position {
+            moving.finish_movement_early(world, pos);
+        }
         true
     }
 }
@@ -636,9 +638,11 @@ impl BlockEntity for PistonMovingBlockEntity {
         };
         let pos = self.get_block_pos();
         let Some(new_progress) = new_progress else {
-            world.remove_block_entity(pos);
+            let owned_position = world.remove_block_entity_if_same(self);
             self.set_removed();
-            moving.finish_tick(world, pos);
+            if owned_position {
+                moving.finish_tick(world, pos);
+            }
             return;
         };
 
@@ -778,5 +782,49 @@ mod tests {
 
         assert!(piston.final_tick(&world));
         assert!(piston.is_removed());
+    }
+
+    #[test]
+    fn stale_final_tick_cannot_remove_or_finish_a_replacement() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("stale_piston_final_tick");
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(&world, ChunkPos::from_block_pos(pos));
+        let state = vanilla_blocks::MOVING_PISTON
+            .default_state()
+            .set_value(&BlockStateProperties::FACING, Direction::East);
+        assert!(world.set_block(pos, state, UpdateFlags::UPDATE_NONE));
+        let stale_piston = Arc::new(PistonMovingBlockEntity::new_moving(
+            Arc::downgrade(&world),
+            pos,
+            state,
+            vanilla_blocks::STONE.default_state(),
+            Direction::East,
+            true,
+            false,
+        ));
+        let stale_entity: SharedBlockEntity = stale_piston.clone();
+        assert!(world.set_block_entity(stale_entity));
+        let replacement = Arc::new(PistonMovingBlockEntity::new_moving(
+            Arc::downgrade(&world),
+            pos,
+            state,
+            vanilla_blocks::GOLD_BLOCK.default_state(),
+            Direction::East,
+            true,
+            false,
+        ));
+        let replacement_entity: SharedBlockEntity = replacement.clone();
+        assert!(world.set_block_entity(Arc::clone(&replacement_entity)));
+
+        assert!(stale_piston.final_tick(&world));
+
+        let Some(current) = world.get_block_entity(pos) else {
+            panic!("the replacement should remain stored");
+        };
+        assert!(Arc::ptr_eq(&current, &replacement_entity));
+        assert_eq!(world.get_block_state(pos), state);
+        assert!(!replacement.is_removed());
     }
 }

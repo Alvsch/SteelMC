@@ -25,6 +25,7 @@ use tracing::instrument;
 
 use crate::behavior::BlockStateBehaviorExt;
 use crate::behavior::{BLOCK_BEHAVIORS, FLUID_BEHAVIORS};
+use crate::block_entity::BlockEntityLifecycleExt as _;
 use crate::chunk::chunk_holder::{
     ChunkHolder, ChunkSaveDependency, PostProcessGenerationError, TickingReadiness,
 };
@@ -2214,19 +2215,23 @@ impl ChunkMap {
     fn process_unloads(self: &Arc<Self>, staged_revivals: &FxHashSet<ChunkPos>) {
         self.propagate_queued_light_changes();
 
-        let light_updates = self.light_updates.lock();
-        self.unloading_chunks.retain_sync(|pos, holder| {
-            // Prepared ticket changes publish only at the next lifecycle boundary.
-            if staged_revivals.contains(pos) {
-                return true;
-            }
+        let mut finalized = Vec::new();
+        {
+            let light_updates = self.light_updates.lock();
+            self.unloading_chunks.retain_sync(|pos, holder| {
+                // Prepared ticket changes publish only at the next lifecycle boundary.
+                if staged_revivals.contains(pos) {
+                    return true;
+                }
 
-            if light_updates.touches_chunk(*pos) {
-                return true;
-            }
+                if light_updates.touches_chunk(*pos) {
+                    return true;
+                }
 
-            if Arc::strong_count(holder) == 1 {
-                // Check if dirty by trying to get chunk access
+                if Arc::strong_count(holder) != 1 {
+                    return true;
+                }
+
                 let is_dirty = holder
                     .try_chunk(ChunkStatus::StructureStarts)
                     .is_some_and(|chunk| chunk.is_dirty());
@@ -2237,37 +2242,45 @@ impl ChunkMap {
                     .has_save_pending_for_chunk(*pos);
 
                 if is_dirty || has_save_pending_entities {
-                    // Save the chunk, keep until next tick when it's clean
                     let save_dependency = holder.add_save_dependency();
-                    let holder_clone = holder.clone();
-                    let map_clone = self.clone();
+                    let holder_clone = Arc::clone(holder);
+                    let map_clone = Arc::clone(self);
                     self.task_tracker.spawn(async move {
                         map_clone.save_chunk(&holder_clone, save_dependency).await;
                     });
-                    true // keep until clean
-                } else if holder.try_chunk(ChunkStatus::Empty).is_none() {
-                    let world = self.world_gen_context.world();
-                    world.unregister_full_chunk_ticks(*pos);
-                    world.on_entity_chunk_unload_finalized(*pos);
-                    false
-                } else {
-                    // Clean and no refs - release region handle and remove
-                    let pos = *pos;
-                    let world = self.world_gen_context.world();
-                    world.unregister_full_chunk_ticks(pos);
-                    world.on_entity_chunk_unload_finalized(pos);
-                    let map_clone = self.clone();
-                    self.task_tracker.spawn(async move {
-                        if let Err(e) = map_clone.storage.release_chunk(pos).await {
-                            tracing::error!(?pos, "Error releasing chunk: {e}");
-                        }
-                    });
-                    false // remove
+                    return true;
                 }
+
+                let has_chunk = holder.try_chunk(ChunkStatus::Empty).is_some();
+                finalized.push((*pos, Arc::clone(holder), has_chunk));
+                false
+            });
+        }
+
+        let world = self.world_gen_context.world();
+        for (pos, holder, has_chunk) in finalized {
+            let lifecycle_dispatchers = if has_chunk {
+                holder
+                    .try_chunk(ChunkStatus::Empty)
+                    .map_or_else(Vec::new, |chunk| chunk.clear_all_block_entities_staged())
             } else {
-                true // keep, still has refs
+                Vec::new()
+            };
+            for block_entity in lifecycle_dispatchers {
+                block_entity.dispatch_lifecycle_events();
             }
-        });
+
+            world.unregister_full_chunk_ticks(pos);
+            world.on_entity_chunk_unload_finalized(pos);
+            if has_chunk {
+                let map_clone = Arc::clone(self);
+                self.task_tracker.spawn(async move {
+                    if let Err(e) = map_clone.storage.release_chunk(pos).await {
+                        tracing::error!(?pos, "Error releasing chunk: {e}");
+                    }
+                });
+            }
+        }
     }
 
     /// Updates the player's status in the chunk map.
@@ -2522,6 +2535,7 @@ impl ChunkMap {
 mod tests {
     use super::*;
     use crate::behavior::init_behaviors;
+    use crate::block_entity::{SharedBlockEntity, entities::ComparatorBlockEntity};
     use crate::chunk::heightmap::ChunkHeightmaps;
     use crate::chunk::level_chunk::LevelChunk;
     use crate::chunk::light::ChunkLightData;
@@ -2651,6 +2665,26 @@ mod tests {
             thread::sleep(Duration::from_millis(1));
         }
         panic!("chunk ticket revision did not commit");
+    }
+
+    fn add_test_comparator(chunk: &ChunkAccess, pos: BlockPos) -> SharedBlockEntity {
+        let Some(full) = chunk.as_full() else {
+            panic!("test comparator requires a full chunk");
+        };
+        let Ok(relative_y) = usize::try_from(pos.y() - full.min_y()) else {
+            panic!("test comparator position must be inside the chunk height");
+        };
+        let state = vanilla_blocks::COMPARATOR.default_state();
+        full.sections.set_relative_block(
+            (pos.x() & 15) as usize,
+            relative_y,
+            (pos.z() & 15) as usize,
+            state,
+        );
+        let block_entity: SharedBlockEntity =
+            Arc::new(ComparatorBlockEntity::new(full.level_weak(), pos, state));
+        assert!(full.add_and_register_block_entity(Arc::clone(&block_entity)));
+        block_entity
     }
 
     #[test]
@@ -3349,6 +3383,8 @@ mod tests {
         let Some(chunk) = holder.try_chunk(ChunkStatus::Full) else {
             panic!("inserted test chunk must remain Full");
         };
+        let block_entity_pos = BlockPos::new(1, 64, 1);
+        let block_entity = add_test_comparator(&chunk, block_entity_pos);
         chunk.take_dirty();
         drop(chunk);
         assert!(world.has_registered_full_chunk_ticks(chunk_pos));
@@ -3360,6 +3396,7 @@ mod tests {
 
         assert!(!world.chunk_map.unloading_chunks.contains_sync(&chunk_pos));
         assert!(!world.has_registered_full_chunk_ticks(chunk_pos));
+        assert!(block_entity.is_removed());
     }
 
     #[test]
@@ -3371,6 +3408,11 @@ mod tests {
         let block_pos = BlockPos::new(1, 64, 1);
         let original = insert_ready_full_chunk(&world, chunk_pos);
         world.schedule_block_tick(block_pos, &vanilla_blocks::STONE, 3, TickPriority::Normal);
+        let Some(chunk) = original.try_chunk(ChunkStatus::Full) else {
+            panic!("inserted test chunk must remain Full");
+        };
+        let block_entity = add_test_comparator(&chunk, block_pos);
+        drop(chunk);
 
         world.chunk_map.update_chunk_level(chunk_pos, None, None);
         assert!(world.has_registered_full_chunk_ticks(chunk_pos));
@@ -3384,6 +3426,14 @@ mod tests {
 
         assert!(Arc::ptr_eq(&original, &revived));
         assert!(world.has_scheduled_block_tick(block_pos, &vanilla_blocks::STONE));
+        let Some(revived_chunk) = revived.try_chunk(ChunkStatus::Full) else {
+            panic!("revived chunk must remain Full");
+        };
+        let Some(revived_block_entity) = revived_chunk.get_block_entity(block_pos) else {
+            panic!("revival should preserve the block entity");
+        };
+        assert!(Arc::ptr_eq(&block_entity, &revived_block_entity));
+        assert!(!block_entity.is_removed());
     }
 
     #[test]

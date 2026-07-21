@@ -57,7 +57,8 @@ pub const REGION_MAGIC: [u8; 4] = *b"STLR";
 /// v19: Added shared entity save-data persistence.
 /// v20: Added chunk-owned light section persistence.
 /// v21: Matched vanilla scheduled-tick persistence by rebuilding sub-tick order on load.
-pub const FORMAT_VERSION: u16 = 21;
+/// v22: Preserve Vanilla pending `DUMMY` block entities across chunk stages.
+pub const FORMAT_VERSION: u16 = 22;
 
 /// Number of chunks per region side (32×32 = 1024 chunks per region).
 pub const REGION_SIZE: usize = 32;
@@ -439,8 +440,8 @@ pub struct PersistentBlockEntity {
     pub y: i16,
     /// Relative Z position within chunk (0-15).
     pub z: u8,
-    /// Block entity type identifier (e.g., "minecraft:chest").
-    pub entity_type: Identifier,
+    /// Block entity type identifier, or `None` for Vanilla's pending `DUMMY` marker.
+    pub entity_type: Option<Identifier>,
     /// Serialized NBT data (simdnbt binary format).
     /// Contains the block entity's custom data from `save_additional`.
     pub nbt_data: Vec<u8>,

@@ -99,7 +99,7 @@ use crate::{
     ChunkMap,
     behavior::BlockStateBehaviorExt,
     behavior::{BLOCK_BEHAVIORS, BlockCollisionContext, BlockLootContext, FLUID_BEHAVIORS},
-    block_entity::{SharedBlockEntity, entities::EndGatewayBlockEntity},
+    block_entity::{BlockEntity, SharedBlockEntity, entities::EndGatewayBlockEntity},
     chunk::{heightmap::HeightmapType, player_chunk_view::PlayerChunkView},
     chunk_saver::{ChunkStorage, RamOnlyStorage, RegionManager},
     entity::{
@@ -1912,6 +1912,11 @@ impl World {
     ///
     /// Returns `true` if the block was successfully set, `false` otherwise.
     /// Uses the default update limit of 512 (matching vanilla).
+    ///
+    /// Live gameplay callers must run in Steel's serialized world-mutation phase. Palette and
+    /// block-entity ownership claims are atomic, but the following Vanilla-ordered callbacks,
+    /// neighbor updates, and derived-cache writes are intentionally not one concurrent
+    /// transaction for the same position.
     pub fn set_block(
         self: &Arc<Self>,
         pos: BlockPos,
@@ -1927,6 +1932,7 @@ impl World {
     /// itself still occurs when the limit is zero or negative, matching vanilla.
     ///
     /// Returns `true` if the block was successfully set, `false` otherwise.
+    /// See [`Self::set_block`] for the serialized world-mutation requirement.
     pub fn set_block_with_limit(
         self: &Arc<Self>,
         pos: BlockPos,
@@ -2376,7 +2382,9 @@ impl World {
         let chunk_pos = Self::chunk_pos_for_block(pos);
         self.chunk_map
             .with_full_chunk(chunk_pos, |chunk| {
-                chunk.as_full().and_then(|lc| lc.get_block_entity(pos))
+                chunk
+                    .as_full()
+                    .and_then(|lc| lc.get_block_entity_immediate(pos))
             })
             .flatten()
     }
@@ -2392,13 +2400,14 @@ impl World {
             .with_full_chunk(Self::chunk_pos_for_block(pos), |chunk| {
                 chunk
                     .as_full()
-                    .is_some_and(|chunk| chunk.try_add_and_register_block_entity(block_entity))
+                    .is_some_and(|chunk| chunk.add_and_register_block_entity(block_entity))
             })
             .unwrap_or(false)
     }
 
-    /// Removes a block entity from a loaded full chunk.
-    pub(crate) fn remove_block_entity(&self, pos: BlockPos) -> bool {
+    /// Removes a block entity only while it still owns its position.
+    pub(crate) fn remove_block_entity_if_same(&self, expected: &dyn BlockEntity) -> bool {
+        let pos = expected.get_block_pos();
         if !self.is_in_valid_bounds(pos) {
             return false;
         }
@@ -2407,7 +2416,7 @@ impl World {
             .with_full_chunk(Self::chunk_pos_for_block(pos), |chunk| {
                 chunk
                     .as_full()
-                    .is_some_and(|chunk| chunk.remove_block_entity(pos))
+                    .is_some_and(|chunk| chunk.remove_block_entity_if_same(expected))
             })
             .unwrap_or(false)
     }

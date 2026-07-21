@@ -377,7 +377,7 @@ mod tests {
         vanilla_blocks, vanilla_items,
     };
     use steel_utils::types::UpdateFlags;
-    use steel_utils::{BlockPos, BlockStateId, ChunkPos, locks::SyncMutex};
+    use steel_utils::{BlockPos, ChunkPos, locks::SyncMutex};
 
     use super::{ContainerId, ContainerLockGuard, ContainerRef};
     use crate::behavior::{BLOCK_BEHAVIORS, init_behaviors};
@@ -410,10 +410,11 @@ mod tests {
 
     #[test]
     fn block_entity_container_capability_is_independently_lockable() {
+        init_test_registry();
         let barrel = Arc::new(BarrelBlockEntity::new(
             Weak::new(),
             BlockPos::new(1, 2, 3),
-            BlockStateId::default(),
+            vanilla_blocks::BARREL.default_state(),
         ));
         let block_entity: SharedBlockEntity = barrel.clone();
         let Some(container_ref) = ContainerRef::from_block_entity(block_entity) else {
@@ -427,11 +428,12 @@ mod tests {
 
     #[test]
     fn non_container_block_entity_ref_is_rejected() {
+        init_test_registry();
         let block_entity: SharedBlockEntity = Arc::new(RawBlockEntity::new(
             &vanilla_block_entity_types::END_PORTAL,
             Weak::new(),
             BlockPos::new(1, 2, 3),
-            BlockStateId::default(),
+            vanilla_blocks::END_PORTAL.default_state(),
         ));
 
         assert!(ContainerRef::from_block_entity(block_entity).is_none());

@@ -25,7 +25,7 @@ use steel_utils::{
     BlockPos, BlockStateId, ChunkPos, PackedSectionBlockPos, SectionPos, types::UpdateFlags,
 };
 
-use crate::behavior::{BLOCK_BEHAVIORS, FLUID_BEHAVIORS};
+use crate::behavior::{BLOCK_BEHAVIORS, BlockEntityCreation, FLUID_BEHAVIORS};
 use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
 use crate::chunk::{
     chunk_access::{ChunkAccess, ChunkStatus},
@@ -362,7 +362,17 @@ impl<'a> WorldGenRegion<'a> {
         let chunk_x = SectionPos::block_to_section_coord(pos.x());
         let chunk_z = SectionPos::block_to_section_coord(pos.z());
         self.with_cached_chunk(chunk_x, chunk_z, ChunkStatus::Empty, |chunk| {
-            chunk.get_block_entity(pos)
+            let block_entity = match chunk {
+                ChunkAccess::Full(full) => full.get_block_entity(pos),
+                ChunkAccess::Proto(proto) => proto
+                    .get_block_entity(pos)
+                    .or_else(|| proto.promote_pending_block_entity(pos)),
+                ChunkAccess::Unloaded => unreachable!(),
+            };
+            if block_entity.is_none() && chunk.get_block_state(pos).has_block_entity() {
+                log::warn!("Tried to access a block entity before it was created at {pos:?}");
+            }
+            block_entity
         })
     }
 
@@ -408,9 +418,45 @@ impl<'a> WorldGenRegion<'a> {
         else {
             return false;
         };
-
         self.with_cached_chunk(chunk_x, chunk_z, status, |chunk| {
-            chunk.set_block_state(pos, state, flags);
+            let old_state = chunk.set_block_state(pos, state, flags);
+            if state.has_block_entity() {
+                match chunk {
+                    ChunkAccess::Full(full) => {
+                        let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
+                        match behavior.new_block_entity(chunk.level_weak(), pos, state) {
+                            BlockEntityCreation::Created(block_entity) => {
+                                let added = full
+                                    .add_and_register_block_entity_if_state(block_entity, state);
+                                debug_assert!(
+                                    added || full.get_block_state(pos) != state,
+                                    "worldgen block-entity factory returned an invalid entity"
+                                );
+                            }
+                            BlockEntityCreation::NoEntity => {
+                                full.remove_block_entity_if_state(pos, state);
+                            }
+                            BlockEntityCreation::Unimplemented => {
+                                full.set_pending_block_entity_if_state(pos, state);
+                            }
+                        }
+                    }
+                    ChunkAccess::Proto(proto) => {
+                        proto.set_pending_block_entity_if_state(pos, state);
+                    }
+                    ChunkAccess::Unloaded => unreachable!(),
+                }
+            } else if old_state.is_some_and(|old_state| old_state.has_block_entity()) {
+                match chunk {
+                    ChunkAccess::Full(full) => {
+                        full.remove_block_entity_if_state(pos, state);
+                    }
+                    ChunkAccess::Proto(proto) => {
+                        proto.remove_block_entity_if_state(pos, state);
+                    }
+                    ChunkAccess::Unloaded => unreachable!(),
+                }
+            }
         });
         if !flags.contains(UpdateFlags::UPDATE_KNOWN_SHAPE)
             && let Some(postprocess_pos) = Self::postprocess_pos_for_state(state, pos)
@@ -453,6 +499,14 @@ impl<'a> WorldGenRegion<'a> {
         else {
             return false;
         };
+        if !block_entity_type.is_valid(state.get_block()) {
+            log::warn!(
+                "Worldgen block entity {} at {pos:?} does not accept block {}",
+                block_entity_type.key,
+                state.get_block().key,
+            );
+            return false;
+        }
 
         self.with_cached_chunk(chunk_x, chunk_z, status, |chunk| {
             let entity = BLOCK_ENTITIES.create_and_load_owned_or_raw(
@@ -462,9 +516,8 @@ impl<'a> WorldGenRegion<'a> {
                 state,
                 nbt,
             );
-            chunk.add_and_register_block_entity(entity);
-        });
-        true
+            chunk.add_and_register_block_entity(entity)
+        })
     }
 
     /// Removes block entity data at a writable worldgen position.

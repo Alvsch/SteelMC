@@ -20,6 +20,7 @@ use std::time::Duration;
 #[cfg(feature = "slow_chunk_gen")]
 pub static SLOW_CHUNK_GEN: AtomicBool = AtomicBool::new(false);
 
+use crate::block_entity::BlockEntityLifecycleExt as _;
 use crate::chunk::chunk_generation_task::{NeighborReady, StaticCache2D};
 use crate::chunk::chunk_ticket_manager::{
     ChunkTicketLevel, generation_status, is_entity_ticking, is_full,
@@ -1184,10 +1185,11 @@ impl ChunkHolder {
                     let LevelChunkPromotion {
                         chunk: full,
                         pending_entities,
+                        lifecycle_dispatchers,
                     } = LevelChunk::from_proto(proto, min_y, height, level);
                     let pos = full.pos;
                     *chunk = ChunkAccess::Full(full);
-                    Some((pos, pending_entities))
+                    Some((pos, pending_entities, lifecycle_dispatchers))
                 }
                 ChunkAccess::Full(full) => {
                     *chunk = ChunkAccess::Full(full);
@@ -1196,8 +1198,13 @@ impl ChunkHolder {
                 ChunkAccess::Unloaded => panic!("Chunk is unloaded, cannot upgrade to full"),
             }
         });
-        if let (Some(world), Some((pos, pending_entities))) = (world, promoted_entities) {
-            world.register_loaded_chunk_entities(pos, ChunkStatus::Full, pending_entities);
+        if let Some((pos, pending_entities, lifecycle_dispatchers)) = promoted_entities {
+            for block_entity in lifecycle_dispatchers {
+                block_entity.dispatch_lifecycle_events();
+            }
+            if let Some(world) = world {
+                world.register_loaded_chunk_entities(pos, ChunkStatus::Full, pending_entities);
+            }
         }
     }
 
@@ -1217,6 +1224,11 @@ impl ChunkHolder {
         if let Some((world, pos, min_y, postprocessing)) = postprocessing {
             LevelChunk::post_process_generation(&world, pos, min_y, postprocessing);
         }
+        let chunk = self.data.read();
+        let ChunkAccess::Full(full) = &*chunk else {
+            return Err(PostProcessGenerationError::ChunkNotFull);
+        };
+        full.promote_pending_block_entities();
         Ok(())
     }
 

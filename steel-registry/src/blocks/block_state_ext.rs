@@ -14,6 +14,11 @@ use steel_utils::BlockStateId;
 pub trait BlockStateExt {
     fn get_block(&self) -> BlockRef;
     fn is_air(&self) -> bool;
+    /// Returns whether this block structurally supports a block entity.
+    ///
+    /// Extracted Vanilla type memberships match `EntityBlock` exactly. Steel extends that into a
+    /// registration contract: plugin blocks must be accepted by at least one registered block
+    /// entity type, while the owning block behavior remains responsible for instance creation.
     fn has_block_entity(&self) -> bool;
     fn get_value<P: Property>(&self, property: &P) -> P::Value;
     /// Gets the value of a property, returning `None` if the block doesn't have this property.
@@ -91,11 +96,9 @@ impl BlockStateExt for BlockStateId {
     }
 
     fn has_block_entity(&self) -> bool {
-        let block = self.get_block();
         REGISTRY
             .block_entity_types
-            .iter()
-            .any(|(_, block_entity_type)| block_entity_type.is_valid(block))
+            .has_block_entity(self.get_block())
     }
 
     fn get_value<P: Property>(&self, property: &P) -> P::Value {

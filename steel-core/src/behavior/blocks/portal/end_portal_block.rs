@@ -7,11 +7,8 @@ use steel_registry::vanilla_dimension_types;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::BlockPlaceContext;
-use crate::behavior::block::BlockBehavior;
-use crate::block_entity::{
-    SharedBlockEntity,
-    entities::{EndGatewayBlockEntity, EndPortalBlockEntity},
-};
+use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
+use crate::block_entity::entities::{EndGatewayBlockEntity, EndPortalBlockEntity};
 use crate::entity::{Entity, InsideBlockEffectCollector};
 use crate::portal::PortalKind;
 use crate::world::LevelReader;
@@ -74,17 +71,13 @@ impl BlockBehavior for EndPortalBlock {
         false
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(EndPortalBlockEntity::new(level, pos, state)))
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::Created(Arc::new(EndPortalBlockEntity::new(level, pos, state)))
     }
 
     fn trigger_event(
@@ -156,17 +149,13 @@ impl BlockBehavior for EndGatewayBlock {
         false
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(EndGatewayBlockEntity::new(level, pos, state)))
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::Created(Arc::new(EndGatewayBlockEntity::new(level, pos, state)))
     }
 
     fn trigger_event(
@@ -292,9 +281,9 @@ mod tests {
         let state = vanilla_blocks::END_PORTAL.default_state();
         let pos = BlockPos::new(2, 70, -4);
 
-        assert!(behavior.has_block_entity());
         let block_entity = behavior
             .new_block_entity(Weak::new(), pos, state)
+            .into_created()
             .expect("end portal block entity");
         assert!(
             block_entity
@@ -334,9 +323,9 @@ mod tests {
         let state = vanilla_blocks::END_GATEWAY.default_state();
         let pos = BlockPos::new(2, 70, -4);
 
-        assert!(behavior.has_block_entity());
         let block_entity = behavior
             .new_block_entity(Weak::new(), pos, state)
+            .into_created()
             .expect("end gateway block entity");
         assert!(
             block_entity

@@ -16,9 +16,8 @@ use steel_registry::vanilla_blocks;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::InventoryAccess;
-use crate::behavior::block::BlockBehavior;
+use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
-use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::SignBlockEntity;
 use crate::entity::Entity;
 use crate::player::Player;
@@ -322,22 +321,13 @@ impl BlockBehavior for StandingSignBlock {
         )
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SignBlockEntity::new(level, pos, state)))
-    }
-
-    fn should_keep_block_entity(&self, _old_state: BlockStateId, _new_state: BlockStateId) -> bool {
-        // Signs don't keep their block entity when changing to a different block
-        false
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::Created(Arc::new(SignBlockEntity::new(level, pos, state)))
     }
 
     fn use_without_item(
@@ -410,21 +400,13 @@ impl BlockBehavior for WallSignBlock {
         None
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SignBlockEntity::new(level, pos, state)))
-    }
-
-    fn should_keep_block_entity(&self, _old_state: BlockStateId, _new_state: BlockStateId) -> bool {
-        false
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::Created(Arc::new(SignBlockEntity::new(level, pos, state)))
     }
 
     fn use_without_item(
@@ -536,21 +518,13 @@ impl BlockBehavior for CeilingHangingSignBlock {
         )
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SignBlockEntity::new_hanging(level, pos, state)))
-    }
-
-    fn should_keep_block_entity(&self, _old_state: BlockStateId, _new_state: BlockStateId) -> bool {
-        false
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::Created(Arc::new(SignBlockEntity::new_hanging(level, pos, state)))
     }
 
     fn use_without_item(
@@ -641,21 +615,13 @@ impl BlockBehavior for WallHangingSignBlock {
         None
     }
 
-    fn has_block_entity(&self) -> bool {
-        true
-    }
-
     fn new_block_entity(
         &self,
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        Some(Arc::new(SignBlockEntity::new_hanging(level, pos, state)))
-    }
-
-    fn should_keep_block_entity(&self, _old_state: BlockStateId, _new_state: BlockStateId) -> bool {
-        false
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::Created(Arc::new(SignBlockEntity::new_hanging(level, pos, state)))
     }
 
     fn use_without_item(

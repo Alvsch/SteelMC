@@ -15,11 +15,12 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::fluid::{FluidRef, FluidState};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entities;
 use steel_registry::{REGISTRY, RegistryEntry, RegistryExt, sound_events, vanilla_blocks};
 use steel_registry::{vanilla_damage_types, vanilla_items};
 use steel_utils::types::{GameType, InteractionHand, UpdateFlags};
-use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId, WorldAabb, axis::Axis};
+use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId, Identifier, WorldAabb, axis::Axis};
 
 use crate::behavior::blocks::vegetation::bonemealable::Bonemealable;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
@@ -52,6 +53,37 @@ pub(crate) fn default_can_be_replaced(
 pub struct PickupResult {
     pub filled_bucket: ItemStack,
     pub sound: Option<SoundEventRef>,
+}
+
+/// Result of invoking a block's Vanilla block-entity factory.
+///
+/// `NoEntity` is distinct from `Unimplemented`: some Vanilla blocks, notably the moving-piston
+/// placeholder, intentionally return no entity from normal block creation even though their
+/// state accepts an explicitly-created block entity.
+pub enum BlockEntityCreation {
+    /// The block factory created its entity.
+    Created(SharedBlockEntity),
+    /// The implemented Vanilla factory intentionally created no entity.
+    NoEntity,
+    /// Steel has not implemented this block's factory yet.
+    Unimplemented,
+}
+
+impl BlockEntityCreation {
+    /// Converts an optional registered implementation into a factory result.
+    #[must_use]
+    pub fn from_registered_factory(entity: Option<SharedBlockEntity>) -> Self {
+        entity.map_or(Self::Unimplemented, Self::Created)
+    }
+
+    /// Returns the created entity, if the factory produced one.
+    #[must_use]
+    pub fn into_created(self) -> Option<SharedBlockEntity> {
+        match self {
+            Self::Created(entity) => Some(entity),
+            Self::NoEntity | Self::Unimplemented => None,
+        }
+    }
 }
 
 /// Shared behavior exposed by blocks in vanilla's `BaseRailBlock` hierarchy.
@@ -1417,16 +1449,11 @@ pub trait BlockBehavior: Send + Sync {
         self.default_step_on(state, world, pos, entity);
     }
 
-    /// Returns whether this block has an associated block entity.
-    ///
-    /// Override to return `true` for blocks like chests, furnaces, signs, etc.
-    fn has_block_entity(&self) -> bool {
-        false
-    }
-
     /// Creates a new block entity for this block.
     ///
-    /// Only called if `has_block_entity()` returns `true`.
+    /// Structural block-entity presence comes from the extracted block-entity type registry.
+    /// The result distinguishes a missing Steel implementation from a Vanilla factory that
+    /// intentionally returns no entity.
     ///
     /// # Arguments
     /// * `level` - Weak reference to the world
@@ -1441,24 +1468,29 @@ pub trait BlockBehavior: Send + Sync {
         level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
-    ) -> Option<SharedBlockEntity> {
-        None
+    ) -> BlockEntityCreation {
+        BlockEntityCreation::Unimplemented
     }
 
-    /// Returns whether the block entity should be kept when the block state changes.
+    /// Returns whether this new block should keep the old state's block entity.
     ///
-    /// This is used when a block changes to a different block type that shares
-    /// the same block entity type (e.g., different chest variants).
+    /// Vanilla defaults to `false`; copper chests and copper golem statues explicitly
+    /// keep their entity across transformations within their respective block family.
+    /// Steel checks those two extracted tags here until those block classes have their
+    /// own complete behaviors, rather than registering partial block implementations.
+    /// Non-Vanilla behaviors must opt in explicitly even if a plugin extends either tag.
     ///
     /// # Arguments
     /// * `old_state` - The previous block state
-    /// * `new_state` - The new block state
-    #[expect(
-        unused_variables,
-        reason = "default trait implementation ignores all params"
-    )]
+    /// * `new_state` - The requested replacement state
     fn should_keep_block_entity(&self, old_state: BlockStateId, new_state: BlockStateId) -> bool {
-        false
+        let old_block = old_state.get_block();
+        let new_block = new_state.get_block();
+        new_block.key.namespace == Identifier::VANILLA_NAMESPACE
+            && ((old_block.has_tag(&BlockTag::COPPER_CHESTS)
+                && new_block.has_tag(&BlockTag::COPPER_CHESTS))
+                || (old_block.has_tag(&BlockTag::COPPER_GOLEM_STATUES)
+                    && new_block.has_tag(&BlockTag::COPPER_GOLEM_STATUES)))
     }
 
     /// Returns whether this block can provide an analog output signal to comparators.

@@ -33,7 +33,9 @@ use steel_registry::structure::{
 };
 use steel_registry::template_pool::{PoolElement, ProcessorList, Projection};
 use steel_registry::{
-    REGISTRY, Registry, RegistryEntry, RegistryExt, blocks::BlockRef, fluid::FluidRef,
+    REGISTRY, Registry, RegistryEntry, RegistryExt,
+    blocks::{BlockRef, block_state_ext::BlockStateExt as _},
+    fluid::FluidRef,
     vanilla_biomes,
 };
 use steel_utils::{
@@ -576,7 +578,7 @@ impl ChunkStorage {
 
         let pos = chunk.pos();
 
-        let block_entities = chunk.get_block_entities();
+        let (block_entities, pending_block_entities) = chunk.block_entity_save_snapshot();
 
         let mut seen_entity_ids = FxHashSet::default();
         let mut seen_entity_uuids = FxHashSet::default();
@@ -674,6 +676,7 @@ impl ChunkStorage {
         let persistent = Self::to_persistent(
             chunk.sections(),
             &block_entities,
+            &pending_block_entities,
             &entities,
             block_ticks,
             fluid_ticks,
@@ -728,6 +731,7 @@ impl ChunkStorage {
     fn to_persistent(
         sections: &Sections,
         block_entities: &[SharedBlockEntity],
+        pending_block_entities: &[BlockPos],
         entities: &[SharedEntity],
         block_ticks: Vec<PersistentTick>,
         fluid_ticks: Vec<PersistentTick>,
@@ -764,10 +768,21 @@ impl ChunkStorage {
                     x: (pos.0.x - chunk_pos.0.x * 16) as u8,
                     y: pos.0.y as i16,
                     z: (pos.0.z - chunk_pos.0.y * 16) as u8,
-                    entity_type: entity.get_type().key.clone(),
+                    entity_type: Some(entity.get_type().key.clone()),
                     nbt_data: nbt_bytes,
                 }
             })
+            .chain(
+                pending_block_entities
+                    .iter()
+                    .map(|pos| PersistentBlockEntity {
+                        x: (pos.0.x - chunk_pos.0.x * 16) as u8,
+                        y: pos.0.y as i16,
+                        z: (pos.0.z - chunk_pos.0.y * 16) as u8,
+                        entity_type: None,
+                        nbt_data: Vec::new(),
+                    }),
+            )
             .collect();
 
         let persistent_entities = Self::entities_to_persistent(entities);
@@ -1331,10 +1346,15 @@ impl ChunkStorage {
 
             // Load block entities
             for persistent_be in &persistent.block_entities {
+                if persistent_be.entity_type.is_none() {
+                    let block_entity_pos = Self::persistent_block_entity_pos(persistent_be, pos);
+                    chunk.set_pending_block_entity(block_entity_pos);
+                    continue;
+                }
                 if let Some(block_entity) =
                     Self::persistent_to_block_entity(persistent_be, pos, &chunk)
                 {
-                    chunk.add_and_register_block_entity(block_entity);
+                    let _ = chunk.add_and_register_block_entity(block_entity);
                 }
             }
 
@@ -1399,6 +1419,10 @@ impl ChunkStorage {
 
             for persistent_be in &persistent.block_entities {
                 let block_entity_pos = Self::persistent_block_entity_pos(persistent_be, pos);
+                if persistent_be.entity_type.is_none() {
+                    chunk.set_pending_block_entity(block_entity_pos);
+                    continue;
+                }
                 let state = chunk.get_block_state(block_entity_pos);
                 if let Some(block_entity) = Self::persistent_to_block_entity_at(
                     persistent_be,
@@ -1406,7 +1430,7 @@ impl ChunkStorage {
                     level.clone(),
                     state,
                 ) {
-                    chunk.add_and_register_block_entity(block_entity);
+                    let _ = chunk.set_block_entity(block_entity);
                 }
             }
 
@@ -1455,9 +1479,16 @@ impl ChunkStorage {
         state: BlockStateId,
     ) -> Option<SharedBlockEntity> {
         // Look up the block entity type
-        let block_entity_type = REGISTRY
-            .block_entity_types
-            .by_key(&persistent.entity_type)?;
+        let block_entity_type_key = persistent.entity_type.as_ref()?;
+        let block_entity_type = REGISTRY.block_entity_types.by_key(block_entity_type_key)?;
+        if !block_entity_type.is_valid(state.get_block()) {
+            log::warn!(
+                "Skipping block entity {} at {pos:?}: block {} does not accept that type",
+                block_entity_type.key,
+                state.get_block().key,
+            );
+            return None;
+        }
 
         // Parse and load NBT data
         if persistent.nbt_data.is_empty() {
@@ -1466,7 +1497,11 @@ impl ChunkStorage {
         } else {
             // Parse NBT from bytes as borrowed
             let Ok(nbt) = read_borrowed_compound(&mut Cursor::new(&persistent.nbt_data)) else {
-                return Some(BLOCK_ENTITIES.create_or_raw(block_entity_type, level, pos, state));
+                log::warn!(
+                    "Skipping block entity {} at {pos:?}: malformed NBT",
+                    block_entity_type.key,
+                );
+                return None;
             };
 
             // Create the block entity and load NBT
@@ -3076,6 +3111,7 @@ mod tests {
             &single_empty_section(),
             &[],
             &[],
+            &[],
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -3306,6 +3342,7 @@ mod tests {
             &single_empty_section(),
             &[],
             &[],
+            &[],
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -3395,14 +3432,17 @@ mod tests {
             .blocks
             .get_default_state_id(&vanilla_blocks::BARREL);
         proto.set_block_state(block_pos, barrel, UpdateFlags::UPDATE_NONE);
+        proto.set_pending_block_entity(block_pos);
 
-        assert!(proto.get_block_entity(block_pos).is_some());
+        assert!(proto.get_block_entity(block_pos).is_none());
+        assert_eq!(proto.pending_block_entity_positions(), [block_pos]);
 
         let chunk = ChunkAccess::Proto(proto);
         let Some(prepared) = ChunkStorage::prepare_chunk_save(&chunk, &[], false) else {
             panic!("dirty proto chunk should prepare for saving");
         };
         assert_eq!(prepared.persistent.block_entities.len(), 1);
+        assert!(prepared.persistent.block_entities[0].entity_type.is_none());
 
         let loaded = ChunkStorage::persistent_to_chunk(
             &prepared.persistent,
@@ -3415,10 +3455,78 @@ mod tests {
         let ChunkAccess::Proto(loaded_proto) = loaded.chunk else {
             panic!("features status should load as proto chunk");
         };
-        assert!(loaded_proto.get_block_entity(block_pos).is_some());
+        assert!(loaded_proto.get_block_entity(block_pos).is_none());
+        assert_eq!(loaded_proto.pending_block_entity_positions(), [block_pos]);
 
         let full = LevelChunk::from_proto(loaded_proto, 0, 16, Weak::new()).chunk;
-        assert!(full.get_block_entity(block_pos).is_some());
+        assert!(full.get_block_entities().is_empty());
+        assert_eq!(full.pending_block_entity_positions(), [block_pos]);
+
+        let full = ChunkAccess::Full(full);
+        let Some(full_save) = ChunkStorage::prepare_chunk_save(&full, &[], true) else {
+            panic!("forced full-chunk save should retain the pending marker");
+        };
+        assert_eq!(full_save.persistent.block_entities.len(), 1);
+        assert!(full_save.persistent.block_entities[0].entity_type.is_none());
+        let loaded = ChunkStorage::persistent_to_chunk(
+            &full_save.persistent,
+            pos,
+            ChunkStatus::Full,
+            0,
+            16,
+            Weak::new(),
+        );
+        let ChunkAccess::Full(loaded_full) = loaded.chunk else {
+            panic!("full status should load a full chunk");
+        };
+        assert!(loaded_full.get_block_entities().is_empty());
+        assert_eq!(loaded_full.pending_block_entity_positions(), [block_pos]);
+        assert!(loaded_full.get_block_entity(block_pos).is_some());
+        assert!(loaded_full.pending_block_entity_positions().is_empty());
+    }
+
+    #[test]
+    fn persistent_block_entity_with_invalid_live_state_is_rejected_before_construction() {
+        init_runtime_registries();
+        let persistent = PersistentBlockEntity {
+            x: 1,
+            y: 2,
+            z: 3,
+            entity_type: Some(vanilla_block_entity_types::BARREL.key.clone()),
+            nbt_data: Vec::new(),
+        };
+
+        assert!(
+            ChunkStorage::persistent_to_block_entity_at(
+                &persistent,
+                BlockPos::new(1, 2, 3),
+                Weak::new(),
+                vanilla_blocks::STONE.default_state(),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn persistent_block_entity_with_malformed_nbt_is_dropped() {
+        init_runtime_registries();
+        let persistent = PersistentBlockEntity {
+            x: 1,
+            y: 2,
+            z: 3,
+            entity_type: Some(vanilla_block_entity_types::BARREL.key.clone()),
+            nbt_data: vec![0xff],
+        };
+
+        assert!(
+            ChunkStorage::persistent_to_block_entity_at(
+                &persistent,
+                BlockPos::new(1, 2, 3),
+                Weak::new(),
+                vanilla_blocks::BARREL.default_state(),
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -3715,7 +3823,7 @@ mod tests {
             spawner,
             nbt,
         );
-        proto.add_and_register_block_entity(entity);
+        assert!(proto.set_block_entity(entity));
 
         let chunk = ChunkAccess::Proto(proto);
         let Some(prepared) = ChunkStorage::prepare_chunk_save(&chunk, &[], false) else {
