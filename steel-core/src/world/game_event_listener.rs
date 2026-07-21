@@ -1,8 +1,11 @@
 //! Game event listener registration and dispatch.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    mem,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use glam::DVec3;
@@ -179,6 +182,11 @@ struct SectionListeners {
     processing_depth: usize,
 }
 
+struct SectionProcessingResult {
+    removed: usize,
+    detached: Vec<SharedGameEventListener>,
+}
+
 impl SectionListeners {
     fn register(&mut self, listener: SharedGameEventListener) {
         if self.processing_depth == 0 {
@@ -188,17 +196,19 @@ impl SectionListeners {
         self.pending_additions.push(listener);
     }
 
-    fn unregister(&mut self, listener: &SharedGameEventListener) -> bool {
+    fn unregister(
+        &mut self,
+        listener: &SharedGameEventListener,
+    ) -> (bool, Option<SharedGameEventListener>) {
         if self.processing_depth == 0 {
             let Some(index) = self
                 .listeners
                 .iter()
                 .position(|existing| Arc::ptr_eq(existing, listener))
             else {
-                return false;
+                return (false, None);
             };
-            self.listeners.remove(index);
-            return true;
+            return (true, Some(self.listeners.remove(index)));
         }
 
         let is_registered = contains_listener(&self.listeners, listener)
@@ -206,25 +216,29 @@ impl SectionListeners {
         if !contains_listener(&self.pending_removals, listener) {
             self.pending_removals.push(Arc::clone(listener));
         }
-        is_registered
+        (is_registered, None)
     }
 
     const fn begin_processing(&mut self) {
         self.processing_depth += 1;
     }
 
-    fn end_processing(&mut self) -> usize {
+    fn end_processing(&mut self) -> SectionProcessingResult {
         self.processing_depth -= 1;
         if self.processing_depth != 0 {
-            return 0;
+            return SectionProcessingResult {
+                removed: 0,
+                detached: Vec::new(),
+            };
         }
 
         let mut removed = 0;
+        let mut detached = Vec::new();
         self.pending_removal_indices.sort_unstable();
         self.pending_removal_indices.dedup();
         for index in self.pending_removal_indices.drain(..).rev() {
             if index < self.listeners.len() {
-                self.listeners.remove(index);
+                detached.push(self.listeners.remove(index));
                 removed += 1;
             }
         }
@@ -232,13 +246,20 @@ impl SectionListeners {
         self.listeners.append(&mut self.pending_additions);
 
         if !self.pending_removals.is_empty() {
-            let old_len = self.listeners.len();
-            self.listeners
-                .retain(|listener| !contains_listener(&self.pending_removals, listener));
-            removed += old_len - self.listeners.len();
-            self.pending_removals.clear();
+            let pending_removals = mem::take(&mut self.pending_removals);
+            let mut retained = Vec::with_capacity(self.listeners.len());
+            for listener in self.listeners.drain(..) {
+                if contains_listener(&pending_removals, &listener) {
+                    detached.push(listener);
+                    removed += 1;
+                } else {
+                    retained.push(listener);
+                }
+            }
+            self.listeners = retained;
+            detached.extend(pending_removals);
         }
-        removed
+        SectionProcessingResult { removed, detached }
     }
 
     fn is_empty(&self) -> bool {
@@ -329,19 +350,22 @@ impl GameEventListenerStorage {
 
     /// Unregisters `listener` from the chunk's `section_y` registry.
     pub fn unregister(&self, section_y: i32, listener: &SharedGameEventListener) -> bool {
-        let mut listeners_by_section = self.listeners_by_section.lock();
-        let Some(section_listeners) = listeners_by_section.get_mut(&section_y) else {
-            return false;
+        let (removed, detached) = {
+            let mut listeners_by_section = self.listeners_by_section.lock();
+            let Some(section_listeners) = listeners_by_section.get_mut(&section_y) else {
+                return false;
+            };
+
+            let (removed, detached) = section_listeners.unregister(listener);
+            if removed && section_listeners.processing_depth == 0 {
+                self.listener_count.remove(1);
+            }
+            if section_listeners.is_empty() {
+                listeners_by_section.remove(&section_y);
+            }
+            (removed, detached)
         };
-
-        let removed = section_listeners.unregister(listener);
-        if removed && section_listeners.processing_depth == 0 {
-            self.listener_count.remove(1);
-        }
-        if section_listeners.is_empty() {
-            listeners_by_section.remove(&section_y);
-        }
-
+        drop(detached);
         removed
     }
 
@@ -410,41 +434,62 @@ impl GameEventListenerStorage {
         section_y: i32,
         cursor: &mut usize,
     ) -> Option<SharedGameEventListener> {
-        let mut listeners_by_section = self.listeners_by_section.lock();
-        let section_listeners = listeners_by_section.get_mut(&section_y)?;
-        while *cursor < section_listeners.listeners.len() {
-            let index = *cursor;
-            *cursor += 1;
-            if section_listeners.pending_removal_indices.contains(&index) {
-                continue;
-            }
-            let listener = Arc::clone(&section_listeners.listeners[index]);
-            if let Some(removal_index) = section_listeners
-                .pending_removals
-                .iter()
-                .position(|pending| Arc::ptr_eq(pending, &listener))
-            {
-                section_listeners
-                    .pending_removals
-                    .swap_remove(removal_index);
-                section_listeners.pending_removal_indices.push(index);
-                continue;
-            }
-            return Some(listener);
+        enum NextListener {
+            End,
+            Removed(SharedGameEventListener),
+            Found(SharedGameEventListener),
         }
-        None
+
+        loop {
+            let next = {
+                let mut listeners_by_section = self.listeners_by_section.lock();
+                let section_listeners = listeners_by_section.get_mut(&section_y)?;
+                if *cursor >= section_listeners.listeners.len() {
+                    NextListener::End
+                } else {
+                    let index = *cursor;
+                    *cursor += 1;
+                    if section_listeners.pending_removal_indices.contains(&index) {
+                        continue;
+                    }
+                    let listener = &section_listeners.listeners[index];
+                    if let Some(removal_index) = section_listeners
+                        .pending_removals
+                        .iter()
+                        .position(|pending| Arc::ptr_eq(pending, listener))
+                    {
+                        let removed = section_listeners
+                            .pending_removals
+                            .swap_remove(removal_index);
+                        section_listeners.pending_removal_indices.push(index);
+                        NextListener::Removed(removed)
+                    } else {
+                        NextListener::Found(Arc::clone(listener))
+                    }
+                }
+            };
+            match next {
+                NextListener::End => return None,
+                NextListener::Removed(listener) => drop(listener),
+                NextListener::Found(listener) => return Some(listener),
+            }
+        }
     }
 
     fn end_section_processing(&self, section_y: i32) {
-        let mut listeners_by_section = self.listeners_by_section.lock();
-        let Some(section_listeners) = listeners_by_section.get_mut(&section_y) else {
-            return;
+        let detached = {
+            let mut listeners_by_section = self.listeners_by_section.lock();
+            let Some(section_listeners) = listeners_by_section.get_mut(&section_y) else {
+                return;
+            };
+            let result = section_listeners.end_processing();
+            self.listener_count.remove(result.removed);
+            if section_listeners.is_empty() {
+                listeners_by_section.remove(&section_y);
+            }
+            result.detached
         };
-        let removed = section_listeners.end_processing();
-        self.listener_count.remove(removed);
-        if section_listeners.is_empty() {
-            listeners_by_section.remove(&section_y);
-        }
+        drop(detached);
     }
 }
 
@@ -464,7 +509,7 @@ fn exact_distance_sq(left: DVec3, right: DVec3) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
     use steel_registry::{
@@ -477,8 +522,8 @@ mod tests {
     use crate::world::World;
     use crate::world::game_event_context::GameEventContext;
     use crate::world::game_event_listener::{
-        GameEventDeliveryMode, GameEventListener, GameEventListenerCount, GameEventListenerStorage,
-        SharedGameEventListener,
+        GameEventDeliveryMode, GameEventDispatcher, GameEventListener, GameEventListenerCount,
+        GameEventListenerStorage, SharedGameEventListener,
     };
 
     struct FixedListener {
@@ -491,6 +536,48 @@ mod tests {
         id: u8,
         delivery_mode: GameEventDeliveryMode,
         events: Arc<SyncMutex<Vec<u8>>>,
+    }
+
+    struct ReentrantDropListener {
+        storage: Weak<GameEventListenerStorage>,
+        self_listener: Weak<ReentrantDropListener>,
+        replacement: SharedGameEventListener,
+        section_y: i32,
+    }
+
+    impl GameEventListener for ReentrantDropListener {
+        fn listener_pos(&self) -> Option<DVec3> {
+            Some(DVec3::new(0.0, 64.0, 0.0))
+        }
+
+        fn listener_radius(&self) -> i32 {
+            16
+        }
+
+        fn handle_game_event(
+            &self,
+            _world: &Arc<World>,
+            _event: GameEventRef,
+            _context: &GameEventContext<'_>,
+            _source_pos: DVec3,
+        ) -> bool {
+            let Some(storage) = self.storage.upgrade() else {
+                return false;
+            };
+            let Some(listener) = self.self_listener.upgrade() else {
+                return false;
+            };
+            let listener: SharedGameEventListener = listener;
+            storage.unregister(self.section_y, &listener)
+        }
+    }
+
+    impl Drop for ReentrantDropListener {
+        fn drop(&mut self) {
+            if let Some(storage) = self.storage.upgrade() {
+                storage.register(self.section_y, Arc::clone(&self.replacement));
+            }
+        }
     }
 
     impl GameEventListener for RecordingListener {
@@ -809,6 +896,41 @@ mod tests {
                 .collect_in_range(DVec3::new(0.5, 64.5, 0.5), 16)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn deferred_listener_destruction_runs_without_storage_lock() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("listener_drop_reentrancy");
+        let storage = Arc::new(GameEventListenerStorage::new());
+        let section_y = SectionPos::block_to_section_coord(64);
+        let replacement: SharedGameEventListener = Arc::new(FixedListener {
+            pos: DVec3::new(1.0, 64.0, 0.0),
+            radius: 16,
+        });
+        let listener = Arc::new_cyclic(|self_listener| ReentrantDropListener {
+            storage: Arc::downgrade(&storage),
+            self_listener: self_listener.clone(),
+            replacement: Arc::clone(&replacement),
+            section_y,
+        });
+        let listener: SharedGameEventListener = listener;
+        storage.register(section_y, listener);
+
+        let context = GameEventContext::default();
+        let mut dispatcher = GameEventDispatcher::new(
+            &world,
+            &vanilla_game_events::BLOCK_CHANGE,
+            DVec3::new(0.5, 64.5, 0.5),
+            &context,
+        );
+        dispatcher.visit_chunk(&storage, section_y, section_y);
+        dispatcher.finish();
+
+        let matches = storage.collect_in_range(DVec3::new(0.5, 64.5, 0.5), 16);
+        assert_eq!(matches.len(), 1);
+        assert!(Arc::ptr_eq(&matches[0].listener, &replacement));
     }
 
     #[test]

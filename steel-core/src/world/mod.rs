@@ -20,7 +20,7 @@ use crate::poi::OccupationStatus;
 use crate::portal::WorldChangeRequest;
 use crate::world::game_event_context::GameEventContext;
 use crate::world::game_event_listener::{
-    GameEventDispatcher, GameEventListenerCount, SharedGameEventListener,
+    GameEventDispatcher, GameEventListenerCount, GameEventListenerStorage, SharedGameEventListener,
 };
 use crate::{chunk::chunk_map::ChunkMapGameTickTimings, world::weather::Weather};
 use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
@@ -5382,15 +5382,10 @@ impl World {
         listener: SharedGameEventListener,
     ) {
         let chunk_pos = ChunkPos::new(section_pos.x(), section_pos.z());
-        let _ = self.chunk_map.with_full_chunk(chunk_pos, |chunk| {
-            let Some(chunk) = chunk.as_full() else {
-                return;
-            };
-            chunk
-                .game_event_listeners
-                .registry
-                .register(section_pos.y(), listener);
-        });
+        let registry = self.game_event_listener_storage(chunk_pos);
+        if let Some(registry) = registry {
+            registry.register(section_pos.y(), listener);
+        }
     }
 
     /// Unregisters a game event listener from a chunk section.
@@ -5400,16 +5395,22 @@ impl World {
         listener: &SharedGameEventListener,
     ) -> bool {
         let chunk_pos = ChunkPos::new(section_pos.x(), section_pos.z());
+        let registry = self.game_event_listener_storage(chunk_pos);
+        registry.is_some_and(|registry| registry.unregister(section_pos.y(), listener))
+    }
+
+    /// Returns a stable registry handle without retaining the chunk holder read guard.
+    fn game_event_listener_storage(
+        &self,
+        chunk_pos: ChunkPos,
+    ) -> Option<Arc<GameEventListenerStorage>> {
         self.chunk_map
             .with_full_chunk(chunk_pos, |chunk| {
-                chunk.as_full().is_some_and(|chunk| {
-                    chunk
-                        .game_event_listeners
-                        .registry
-                        .unregister(section_pos.y(), listener)
-                })
+                chunk
+                    .as_full()
+                    .map(|chunk| Arc::clone(&chunk.game_event_listeners.registry))
             })
-            .unwrap_or(false)
+            .flatten()
     }
 
     /// Dispatches a game event to all listeners in range.
@@ -5452,18 +5453,11 @@ impl World {
 
         for section_x in section_min_x..=section_max_x {
             for section_z in section_min_z..=section_max_z {
-                let _ =
-                    self.chunk_map
-                        .with_full_chunk(ChunkPos::new(section_x, section_z), |chunk| {
-                            let Some(chunk) = chunk.as_full() else {
-                                return;
-                            };
-                            dispatcher.visit_chunk(
-                                &chunk.game_event_listeners.registry,
-                                section_min_y,
-                                section_max_y,
-                            );
-                        });
+                let registry =
+                    self.game_event_listener_storage(ChunkPos::new(section_x, section_z));
+                if let Some(registry) = registry {
+                    dispatcher.visit_chunk(&registry, section_min_y, section_max_y);
+                }
             }
         }
 

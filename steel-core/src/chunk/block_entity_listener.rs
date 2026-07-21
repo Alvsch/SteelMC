@@ -31,7 +31,7 @@ pub(crate) enum ListenerSelectionCommit {
 /// dispatch gates access through the active Full holder, matching Vanilla without reordering
 /// listeners on revival.
 pub(crate) struct LevelChunkGameEventListeners {
-    pub(crate) registry: GameEventListenerStorage,
+    pub(crate) registry: Arc<GameEventListenerStorage>,
     block_entities: SyncMutex<FxHashMap<BlockPos, BlockEntityListenerBinding>>,
 }
 
@@ -39,24 +39,25 @@ impl LevelChunkGameEventListeners {
     #[must_use]
     pub(crate) fn new(listener_count: Arc<GameEventListenerCount>) -> Self {
         Self {
-            registry: GameEventListenerStorage::with_count(listener_count),
+            registry: Arc::new(GameEventListenerStorage::with_count(listener_count)),
             block_entities: SyncMutex::new(FxHashMap::default()),
         }
     }
 
     /// Removes the stored selection unless `current` is still its exact storage owner.
     pub(crate) fn remove_obsolete(&self, pos: BlockPos, current: Option<&SharedBlockEntity>) {
-        let mut bindings = self.block_entities.lock();
-        let keep = bindings.get(&pos).is_some_and(|binding| {
-            current.is_some_and(|current| Arc::ptr_eq(&binding.owner, current))
-        });
-        if keep {
-            return;
-        }
+        let binding = {
+            let mut bindings = self.block_entities.lock();
+            let keep = bindings.get(&pos).is_some_and(|binding| {
+                current.is_some_and(|current| Arc::ptr_eq(&binding.owner, current))
+            });
+            if keep {
+                return;
+            }
 
-        let Some(binding) = bindings.remove(&pos) else {
-            return;
+            bindings.remove(&pos)
         };
+        let Some(binding) = binding else { return };
         if let Some(listener) = binding.listener {
             let section_y = SectionPos::block_to_section_coord(pos.y());
             self.registry.unregister(section_y, &listener);
