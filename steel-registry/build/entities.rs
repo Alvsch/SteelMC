@@ -188,10 +188,6 @@ pub(crate) fn build() -> TokenStream {
             .class_hierarchy
             .iter()
             .any(|class| class.simple_name == "AbstractMinecart");
-        let is_vehicle_entity = entity_type
-            .class_hierarchy
-            .iter()
-            .any(|class| class.simple_name == "VehicleEntity");
         let is_projectile = entity_type
             .class_hierarchy
             .iter()
@@ -259,7 +255,6 @@ pub(crate) fn build() -> TokenStream {
                 can_serialize: #can_serialize,
                 is_abstract_boat: #is_abstract_boat,
                 is_abstract_minecart: #is_abstract_minecart,
-                is_vehicle_entity: #is_vehicle_entity,
                 is_projectile: #is_projectile,
                 is_abstract_arrow: #is_abstract_arrow,
                 flags: EntityFlags {

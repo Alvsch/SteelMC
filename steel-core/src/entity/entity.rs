@@ -1106,10 +1106,11 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     /// Returns vanilla's dimension-changing portal cooldown delay in ticks.
     ///
     /// Mirrors vanilla `getDimensionChangingDelay` overrides for players,
-    /// vehicle entities, projectiles, and base entities with a player passenger.
+    /// projectiles, and base entities with a player passenger. Concrete vehicle
+    /// implementations override this method directly.
     fn dimension_changing_delay(&self) -> i32 {
         let entity_type = self.entity_type();
-        if self.as_player().is_some() || entity_type.is_vehicle_entity {
+        if self.as_player().is_some() {
             return 10;
         }
         if entity_type.is_projectile {
