@@ -2066,9 +2066,13 @@ impl World {
             );
         }
 
-        self.poi_storage
-            .lock()
-            .on_block_state_change(pos, old_state, new_state);
+        if REGISTRY.poi_types.type_id_for_state(old_state)
+            != REGISTRY.poi_types.type_id_for_state(new_state)
+        {
+            self.poi_storage
+                .lock()
+                .on_block_state_change(pos, old_state, new_state);
+        }
     }
 
     fn update_navigating_mobs_after_block_collision_change(

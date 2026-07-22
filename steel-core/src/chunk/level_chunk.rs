@@ -827,9 +827,12 @@ impl LevelChunk {
                 let fluid_state = state.get_fluid_state();
 
                 if !fluid_state.is_empty() {
-                    FLUID_BEHAVIORS
-                        .get_behavior(fluid_state.fluid_id)
-                        .tick(world, pos);
+                    FLUID_BEHAVIORS.get_behavior(fluid_state.fluid_id).tick(
+                        world,
+                        pos,
+                        state,
+                        fluid_state,
+                    );
                 }
 
                 if state.get_block().config.liquid {

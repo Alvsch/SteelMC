@@ -2524,9 +2524,12 @@ impl ChunkMap {
                     continue;
                 }
 
-                fluid_behaviors
-                    .get_behavior(tick.tick_type)
-                    .tick(world, tick.pos);
+                fluid_behaviors.get_behavior(tick.tick_type).tick(
+                    world,
+                    tick.pos,
+                    state,
+                    fluid_state,
+                );
             }
         }
     }

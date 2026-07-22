@@ -43,7 +43,22 @@ impl BubbleColumnBlock {
         occupy_at: BlockPos,
         below_state: BlockStateId,
     ) {
-        let occupy_state = level.get_block_state(occupy_at);
+        Self::update_column_with_state(
+            bubble_column,
+            level,
+            occupy_at,
+            level.get_block_state(occupy_at),
+            below_state,
+        );
+    }
+
+    fn update_column_with_state(
+        bubble_column: BlockRef,
+        level: &dyn LevelAccessor,
+        occupy_at: BlockPos,
+        occupy_state: BlockStateId,
+        below_state: BlockStateId,
+    ) {
         if !Self::can_occupy(bubble_column, occupy_state) {
             return;
         }
@@ -176,8 +191,14 @@ impl BlockBehavior for BubbleColumnBlock {
         state
     }
 
-    fn tick(&self, _state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
-        Self::update_column(self.block, world, pos, world.get_block_state(pos.below()));
+    fn tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
+        Self::update_column_with_state(
+            self.block,
+            world,
+            pos,
+            state,
+            world.get_block_state(pos.below()),
+        );
     }
 
     fn entity_inside(
