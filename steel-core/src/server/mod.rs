@@ -4266,30 +4266,39 @@ impl Server {
         for (i, world) in self.worlds.values().enumerate() {
             let timings = world.chunk_map.advance_scheduling();
 
-            let total = timings.ticket_updates
-                + timings.block_entity_unloads
-                + timings.readiness_demotions
-                + timings.lifecycle_commit
-                + timings.readiness_reconcile
-                + timings.ticking_snapshot_rebuild
+            let background_elapsed = timings.ticket_updates
                 + timings.schedule_generation
                 + timings.run_generation
                 + timings.process_unloads;
+            let boundary_elapsed = timings.block_entity_unloads
+                + timings.readiness_demotions
+                + timings.lifecycle_commit
+                + timings.readiness_reconcile
+                + timings.ticking_snapshot_rebuild;
+            let work_elapsed = background_elapsed + boundary_elapsed;
 
-            if total >= SLOW_CHUNK_TICK_THRESHOLD {
+            if work_elapsed >= SLOW_CHUNK_TICK_THRESHOLD {
                 tracing::warn!(
                     world = i,
-                    elapsed = ?total,
+                    work_elapsed = ?work_elapsed,
+                    background_elapsed = ?background_elapsed,
+                    boundary_elapsed = ?boundary_elapsed,
                     ticket_updates = ?timings.ticket_updates,
                     block_entity_unloads = ?timings.block_entity_unloads,
                     readiness_demotions = ?timings.readiness_demotions,
                     lifecycle_commit = ?timings.lifecycle_commit,
                     readiness_reconcile = ?timings.readiness_reconcile,
                     post_process_generation = ?timings.post_process_generation,
-                    post_processed_count = timings.post_processed_count,
+                    post_process_chunk_count = timings.post_process_chunk_count,
+                    post_process_position_count = timings.post_process_position_count,
                     readiness_candidate_count = timings.readiness_candidate_count,
                     ticking_snapshot_rebuild = ?timings.ticking_snapshot_rebuild,
                     rebuilt_ticking_chunk_count = timings.rebuilt_ticking_chunk_count,
+                    lookup_cache_holder_hits = timings.lookup_cache.holder_hits,
+                    lookup_cache_missing_hits = timings.lookup_cache.missing_hits,
+                    lookup_cache_scc_lookups = timings.lookup_cache.scc_lookups,
+                    lookup_cache_foreign_map_bypasses = timings.lookup_cache.foreign_map_bypasses,
+                    lookup_cache_evictions = timings.lookup_cache.evictions,
                     schedule_generation = ?timings.schedule_generation,
                     scheduled_count = timings.scheduled_count,
                     run_generation = ?timings.run_generation,
@@ -4847,6 +4856,11 @@ impl Server {
                 tick_block_entities = ?cm.tick_block_entities,
                 tickable_count = cm.tickable_count,
                 total_chunks = cm.total_chunks,
+                lookup_cache_holder_hits = cm.lookup_cache.holder_hits,
+                lookup_cache_missing_hits = cm.lookup_cache.missing_hits,
+                lookup_cache_scc_lookups = cm.lookup_cache.scc_lookups,
+                lookup_cache_foreign_map_bypasses = cm.lookup_cache.foreign_map_bypasses,
+                lookup_cache_evictions = cm.lookup_cache.evictions,
                 "Game tick slow"
             );
         }

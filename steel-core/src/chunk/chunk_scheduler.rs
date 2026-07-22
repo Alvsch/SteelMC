@@ -9,6 +9,7 @@ use std::{
 use steel_utils::{ChunkPos, locks::SyncMutex};
 
 use crate::chunk::chunk_ticket_manager::{ChunkTicket, ChunkTicketManager, LevelChange};
+use crate::chunk::gameplay_chunk_lookup_cache::GameplayChunkLookupCacheStats;
 
 /// Timing information for one background epoch and its boundary commit.
 #[derive(Debug, Default)]
@@ -26,13 +27,17 @@ pub(crate) struct ChunkMapSchedulingTimings {
     /// Subset of `readiness_reconcile` spent running generation post-processing.
     pub(crate) post_process_generation: Duration,
     /// Number of chunks whose generation post-processing completed.
-    pub(crate) post_processed_count: usize,
+    pub(crate) post_process_chunk_count: usize,
+    /// Number of packed generation post-processing positions attempted.
+    pub(crate) post_process_position_count: usize,
     /// Number of readiness candidates considered during reconciliation.
     pub(crate) readiness_candidate_count: usize,
     /// Time spent rebuilding the published ticking-chunk snapshot.
     pub(crate) ticking_snapshot_rebuild: Duration,
     /// Number of block-ticking chunks in a snapshot rebuilt during this epoch.
     pub(crate) rebuilt_ticking_chunk_count: usize,
+    /// Scoped holder-cache activity during readiness reconciliation.
+    pub(crate) lookup_cache: GameplayChunkLookupCacheStats,
     /// Time spent creating or updating chunk-generation tasks.
     pub(crate) schedule_generation: Duration,
     /// Number of holders scheduled for generation.

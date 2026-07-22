@@ -46,6 +46,10 @@ use crate::chunk::full_chunk_readiness::{
     FullNeighborhoodCounts, FullNeighborhoodError, FullNeighborhoodIndex, FullPublication,
     FullPublicationQueue,
 };
+pub use crate::chunk::gameplay_chunk_lookup_cache::GameplayChunkLookupCacheStats;
+use crate::chunk::gameplay_chunk_lookup_cache::{
+    GameplayChunkLookupCacheScope, lookup_or_insert_with,
+};
 use crate::chunk::light::{
     LIGHT_CACHE_RADIUS, LightCacheLayout, LightCacheSetupRadius, LightLayer,
     LightSectionEmptinessChange, LightSectionRange, LightWorkWindowGate, LightWorkset,
@@ -91,6 +95,8 @@ pub struct ChunkMapGameTickTimings {
     pub tickable_count: usize,
     /// Total number of loaded chunks.
     pub total_chunks: usize,
+    /// Scoped holder-cache activity across the world game tick.
+    pub lookup_cache: GameplayChunkLookupCacheStats,
 }
 
 #[derive(Clone)]
@@ -186,7 +192,8 @@ struct TickingReadinessCandidate {
 struct ReadinessReconcileResult {
     snapshot_changed: bool,
     post_process_generation: Duration,
-    post_processed_count: usize,
+    post_process_chunk_count: usize,
+    post_process_position_count: usize,
     candidate_count: usize,
 }
 
@@ -628,26 +635,29 @@ impl ChunkMap {
         let _ = self.chunks.insert_sync(pos, holder);
     }
 
+    #[inline]
+    fn lookup_active_holder(&self, pos: ChunkPos) -> Option<Arc<ChunkHolder>> {
+        lookup_or_insert_with(self, pos, || {
+            self.chunks.read_sync(&pos, |_, holder| Arc::clone(holder))
+        })
+    }
+
     /// Returns whether an active full chunk is currently block ticking.
     #[must_use]
     pub(crate) fn is_block_ticking_full_chunk_loaded(&self, pos: ChunkPos) -> bool {
-        self.chunks
-            .read_sync(&pos, |_, holder| {
-                is_block_ticking(holder.load_level())
-                    && holder.ticking_readiness_snapshot().is_block_ticking()
-            })
-            .unwrap_or(false)
+        self.lookup_active_holder(pos).is_some_and(|holder| {
+            is_block_ticking(holder.load_level())
+                && holder.ticking_readiness_snapshot().is_block_ticking()
+        })
     }
 
     /// Returns whether the chunk is in block simulation range with confirmed r1 readiness.
     #[must_use]
     pub(crate) fn is_block_ticking_full_chunk_simulated(&self, pos: ChunkPos) -> bool {
-        self.chunks
-            .read_sync(&pos, |_, holder| {
-                is_block_ticking(holder.simulation_level())
-                    && holder.ticking_readiness_snapshot().is_block_ticking()
-            })
-            .unwrap_or(false)
+        self.lookup_active_holder(pos).is_some_and(|holder| {
+            is_block_ticking(holder.simulation_level())
+                && holder.ticking_readiness_snapshot().is_block_ticking()
+        })
     }
 
     /// Executes a function with access to a chunk at the requested generation status or later.
@@ -661,7 +671,7 @@ impl ChunkMap {
     where
         F: FnOnce(&ChunkAccess) -> R,
     {
-        let chunk_holder = self.chunks.read_sync(&pos, |_, chunk| chunk.clone())?;
+        let chunk_holder = self.lookup_active_holder(pos)?;
         // Holders retain completed higher-status data for saving and quick revival. Gameplay
         // lookups must still honor the currently permitted generation status.
         if chunk_holder.is_status_disallowed(status) {
@@ -833,7 +843,7 @@ impl ChunkMap {
             SectionPos::block_to_section_coord(pos.0.z),
         );
 
-        if let Some(holder) = self.chunks.read_sync(&chunk_pos, |_, h| h.clone())
+        if let Some(holder) = self.lookup_active_holder(chunk_pos)
             && holder.block_changed(pos)
         {
             // First change for this chunk - add to broadcast list
@@ -843,7 +853,7 @@ impl ChunkMap {
 
     /// Marks client-visible chunk packet content as changed.
     pub fn packet_content_changed(&self, chunk_pos: ChunkPos) {
-        if let Some(holder) = self.chunks.read_sync(&chunk_pos, |_, h| Arc::clone(h)) {
+        if let Some(holder) = self.lookup_active_holder(chunk_pos) {
             holder.mark_packet_content_changed();
         }
     }
@@ -852,7 +862,7 @@ impl ChunkMap {
     pub fn light_changed(&self, layer: LightLayer, section_pos: SectionPos) {
         let chunk_pos = ChunkPos::new(section_pos.x(), section_pos.z());
 
-        if let Some(holder) = self.chunks.read_sync(&chunk_pos, |_, h| Arc::clone(h)) {
+        if let Some(holder) = self.lookup_active_holder(chunk_pos) {
             if holder.light_changed(layer, section_pos) {
                 self.chunks_to_broadcast.lock().push(holder);
             }
@@ -1695,6 +1705,8 @@ impl ChunkMap {
         })
     }
 
+    // Readiness bookkeeping scans candidates once. Keep these lookups uncached so the
+    // four-entry gameplay cache remains focused on repeated callback locality.
     fn current_full_contributor(&self, pos: ChunkPos) -> Option<Arc<ChunkHolder>> {
         let holder = self
             .chunks
@@ -1832,11 +1844,15 @@ impl ChunkMap {
                 let start = Instant::now();
                 let post_process_result = candidate.holder.post_process_generation();
                 result.post_process_generation += start.elapsed();
-                if let Err(error) = post_process_result {
-                    Self::log_postprocessing_failure(candidate, error);
-                    continue;
-                }
-                result.post_processed_count += 1;
+                let post_process_position_count = match post_process_result {
+                    Ok(count) => count,
+                    Err(error) => {
+                        Self::log_postprocessing_failure(candidate, error);
+                        continue;
+                    }
+                };
+                result.post_process_chunk_count += 1;
+                result.post_process_position_count += post_process_position_count;
             }
 
             if current == TickingReadiness::Unready
@@ -2141,6 +2157,7 @@ impl ChunkMap {
             holders
         };
 
+        let lookup_cache_scope = GameplayChunkLookupCacheScope::enter(self);
         let readiness_result = {
             let _span = tracing::trace_span!("readiness_reconcile").entered();
             let start = Instant::now();
@@ -2165,8 +2182,10 @@ impl ChunkMap {
             timings.readiness_reconcile = start.elapsed();
             result
         };
+        timings.lookup_cache = lookup_cache_scope.finish();
         timings.post_process_generation = readiness_result.post_process_generation;
-        timings.post_processed_count = readiness_result.post_processed_count;
+        timings.post_process_chunk_count = readiness_result.post_process_chunk_count;
+        timings.post_process_position_count = readiness_result.post_process_position_count;
         timings.readiness_candidate_count = readiness_result.candidate_count;
 
         if rebuild_ticking_snapshot {
@@ -3309,6 +3328,83 @@ mod tests {
     }
 
     #[test]
+    fn cached_holder_rechecks_publication_and_generation_permission() {
+        init_test_registry();
+        let world = fresh_test_world("cached_holder_status_recheck");
+        let pos = ChunkPos::new(4, -3);
+        let load_level = ChunkTicketLevel::FULL_CHUNK;
+        let min_y = world.chunk_map.world_gen_context.min_y();
+        let height = world.chunk_map.world_gen_context.height();
+        let holder = Arc::new(ChunkHolder::new_with_full_publications(
+            pos,
+            load_level,
+            None,
+            min_y,
+            height,
+            Arc::downgrade(&world.chunk_map.full_publications),
+        ));
+        let _ = world.chunk_map.chunks.insert_sync(pos, Arc::clone(&holder));
+        let scope = GameplayChunkLookupCacheScope::enter(&world.chunk_map);
+
+        assert!(
+            world
+                .chunk_map
+                .with_chunk_at_status(pos, ChunkStatus::Empty, |_| ())
+                .is_none(),
+            "an unpublished status must remain unavailable after the holder is cached"
+        );
+
+        let sections = (0..height / 16)
+            .map(|_| ChunkSection::new_empty())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        holder.insert_chunk(
+            ChunkAccess::Proto(ProtoChunk::new(
+                Sections::from_owned(sections),
+                pos,
+                min_y,
+                height,
+                Arc::downgrade(&world),
+            )),
+            ChunkStatus::Empty,
+        );
+        assert!(
+            world
+                .chunk_map
+                .with_chunk_at_status(pos, ChunkStatus::Empty, |_| ())
+                .is_some(),
+            "publication must become visible through a cached holder"
+        );
+
+        holder.update_highest_allowed_status(None);
+        assert!(
+            world
+                .chunk_map
+                .with_chunk_at_status(pos, ChunkStatus::Empty, |_| ())
+                .is_none(),
+            "a cached holder must still honor generation permission revocation"
+        );
+
+        holder.update_highest_allowed_status(Some(load_level));
+        assert_eq!(
+            world
+                .chunk_map
+                .with_chunk_at_status(pos, ChunkStatus::Empty, |_| {
+                    world
+                        .chunk_map
+                        .with_chunk_at_status(pos, ChunkStatus::Empty, |_| ())
+                        .is_some()
+                }),
+            Some(true),
+            "callbacks must run after releasing the cache's RefCell borrow"
+        );
+
+        let stats = scope.finish();
+        assert_eq!(stats.scc_lookups, 1);
+        assert_eq!(stats.holder_hits, 4);
+    }
+
+    #[test]
     #[expect(
         clippy::too_many_lines,
         reason = "one lifecycle test documents both readiness radii and their transitions"
@@ -3346,10 +3442,12 @@ mod tests {
             }
         }
 
-        world
+        let readiness_result = world
             .chunk_map
-            .reconcile_ticking_readiness(&[])
+            .reconcile_ticking_readiness_measured(&[])
             .expect("a unique 3x3 Full square should reconcile");
+        assert_eq!(readiness_result.post_process_chunk_count, 1);
+        assert_eq!(readiness_result.post_process_position_count, 1);
         let center = center.expect("the center holder should be inserted");
         assert_eq!(
             center.ticking_readiness_snapshot().readiness(),

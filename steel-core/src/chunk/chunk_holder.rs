@@ -1181,7 +1181,8 @@ impl ChunkHolder {
         }
     }
 
-    pub(crate) fn post_process_generation(&self) -> Result<(), PostProcessGenerationError> {
+    /// Runs Full-load post-processing and returns the number of packed positions attempted.
+    pub(crate) fn post_process_generation(&self) -> Result<usize, PostProcessGenerationError> {
         let postprocessing = {
             let chunk = self.data.read();
             let ChunkAccess::Full(full) = &*chunk else {
@@ -1194,15 +1195,20 @@ impl ChunkHolder {
                 .map(|postprocessing| (world, full.pos, full.min_y(), postprocessing))
         };
 
-        if let Some((world, pos, min_y, postprocessing)) = postprocessing {
-            LevelChunk::post_process_generation(&world, pos, min_y, postprocessing);
-        }
+        let post_process_position_count =
+            if let Some((world, pos, min_y, postprocessing)) = postprocessing {
+                let position_count = postprocessing.iter().map(Vec::len).sum();
+                LevelChunk::post_process_generation(&world, pos, min_y, postprocessing);
+                position_count
+            } else {
+                0
+            };
         let chunk = self.data.read();
         let ChunkAccess::Full(full) = &*chunk else {
             return Err(PostProcessGenerationError::ChunkNotFull);
         };
         full.promote_pending_block_entities();
-        Ok(())
+        Ok(post_process_position_count)
     }
 
     /// Finishes a generated status on the async scheduler after the Rayon task returns.
@@ -1356,6 +1362,7 @@ where
 mod tests {
     use super::*;
     use std::{task::Poll, time::Duration as TestDuration};
+    use tokio::time::sleep as test_sleep;
 
     use crate::behavior::init_behaviors;
     use crate::chunk::proto_chunk::ProtoChunk;
@@ -1498,22 +1505,22 @@ mod tests {
         tokio::pin!(waiter);
         assert!(matches!(futures::poll!(&mut waiter), Poll::Pending));
 
-        let publisher = Arc::clone(&holder);
+        let publishing_holder = Arc::clone(&holder);
         let publish_task = tokio::spawn(async move {
-            publisher.insert_chunk(
+            publishing_holder.insert_chunk(
                 ChunkAccess::Proto(test_proto_chunk(ChunkStatus::Empty)),
                 ChunkStatus::Empty,
             );
         });
 
-        let published = tokio::select! {
+        let observed_status = tokio::select! {
             biased;
-            () = tokio::time::sleep(TestDuration::from_secs(1)) => {
+            () = test_sleep(TestDuration::from_secs(1)) => {
                 panic!("pending status waiter was not woken by publication");
             }
-            published = &mut waiter => published,
+            status = &mut waiter => status,
         };
-        assert_eq!(published, Some(ChunkStatus::Empty));
+        assert_eq!(observed_status, Some(ChunkStatus::Empty));
         assert!(publish_task.await.is_ok());
     }
 

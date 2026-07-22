@@ -12,6 +12,7 @@ use std::{
 
 use crate::chunk::chunk_access::{ChunkAccess, ChunkStatus};
 use crate::chunk::chunk_ticket_manager::{PersistentChunkTickets, TimedChunkTickets};
+use crate::chunk::gameplay_chunk_lookup_cache::GameplayChunkLookupCacheScope;
 use crate::chunk::level_chunk::{LevelChunk, LevelChunkBlockSetResult};
 use crate::chunk::light::{
     LightLayer, LightSectionEmptinessChange, MAX_LIGHT_LEVEL, has_different_light_properties,
@@ -2454,6 +2455,7 @@ impl World {
         runs_normally: bool,
     ) -> WorldGameTickTimings {
         let world_start = Instant::now();
+        let lookup_cache_scope = GameplayChunkLookupCacheScope::enter(&self.chunk_map);
         self.handling_tick.store(true, Ordering::Relaxed);
         self.set_tick_runs_normally(runs_normally);
         if runs_normally {
@@ -2579,6 +2581,7 @@ impl World {
             );
         }
 
+        chunk_map_timings.lookup_cache = lookup_cache_scope.finish();
         WorldGameTickTimings {
             elapsed: world_start.elapsed(),
             chunk_map: chunk_map_timings,
