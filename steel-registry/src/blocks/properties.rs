@@ -3,6 +3,7 @@
     reason = "property value lookup only unwraps values known to be declared by the property"
 )]
 
+use std::cmp::Ordering;
 use std::fmt::Debug;
 
 pub use steel_utils::{Direction, axis::Axis, codec::VarInt, serial::ReadFrom};
@@ -32,6 +33,9 @@ pub trait Property: Debug + Sync + Send {
     fn value_name_from_index(&self, index: usize) -> &str;
     fn get_possible_value_names(&self) -> Box<[&str]>;
     fn get_name(&self) -> &'static str;
+
+    /// Parses and compares two serialized values using Vanilla's `Comparable` order.
+    fn compare_value_names(&self, left: &str, right: &str) -> Option<Ordering>;
 }
 
 pub trait PropertyEnum: PartialEq + Clone + Debug + Sync + Send {
@@ -77,6 +81,10 @@ impl Property for BoolProperty {
 
     fn get_name(&self) -> &'static str {
         self.name
+    }
+
+    fn compare_value_names(&self, left: &str, right: &str) -> Option<Ordering> {
+        Some(self.get_value(left)?.cmp(&self.get_value(right)?))
     }
 
     fn get_value(&self, value: &str) -> Option<Self::Value> {
@@ -153,6 +161,10 @@ impl Property for IntProperty {
         self.name
     }
 
+    fn compare_value_names(&self, left: &str, right: &str) -> Option<Ordering> {
+        Some(self.get_value(left)?.cmp(&self.get_value(right)?))
+    }
+
     fn get_value(&self, value: &str) -> Option<Self::Value> {
         value
             .parse()
@@ -192,6 +204,7 @@ impl IntProperty {
 pub struct EnumProperty<T: PropertyEnum + 'static> {
     pub name: &'static str,
     pub possible_values: &'static [T],
+    comparison_values: &'static [T],
 }
 
 impl<T: PropertyEnum + 'static> Property for EnumProperty<T> {
@@ -214,6 +227,20 @@ impl<T: PropertyEnum + 'static> Property for EnumProperty<T> {
 
     fn get_name(&self) -> &'static str {
         self.name
+    }
+
+    fn compare_value_names(&self, left: &str, right: &str) -> Option<Ordering> {
+        let left = self.get_value(left)?;
+        let right = self.get_value(right)?;
+        let left = self
+            .comparison_values
+            .iter()
+            .position(|value| value == &left)?;
+        let right = self
+            .comparison_values
+            .iter()
+            .position(|value| value == &right)?;
+        Some(left.cmp(&right))
     }
 
     fn get_value(&self, value: &str) -> Option<Self::Value> {
@@ -240,10 +267,28 @@ impl<T: PropertyEnum + 'static> Property for EnumProperty<T> {
 }
 
 impl<T: PropertyEnum> EnumProperty<T> {
+    /// Creates an enum property whose state and natural comparison orders match.
     pub const fn new(name: &'static str, possible_values: &'static [T]) -> Self {
         Self {
             name,
             possible_values,
+            comparison_values: possible_values,
+        }
+    }
+
+    /// Creates a property whose state order differs from the enum's natural order.
+    ///
+    /// `comparison_values` must contain every possible value in the order used
+    /// by the Vanilla enum's `Comparable` implementation.
+    pub const fn with_comparison_order(
+        name: &'static str,
+        possible_values: &'static [T],
+        comparison_values: &'static [T],
+    ) -> Self {
+        Self {
+            name,
+            possible_values,
+            comparison_values,
         }
     }
 
@@ -963,7 +1008,7 @@ impl BlockStateProperties {
     pub const EAST: BoolProperty = BoolProperty::new("east");
     pub const SOUTH: BoolProperty = BoolProperty::new("south");
     pub const WEST: BoolProperty = BoolProperty::new("west");
-    pub const FACING: EnumProperty<Direction> = EnumProperty::new(
+    pub const FACING: EnumProperty<Direction> = EnumProperty::with_comparison_order(
         "facing",
         &[
             Direction::North,
@@ -972,6 +1017,14 @@ impl BlockStateProperties {
             Direction::West,
             Direction::Up,
             Direction::Down,
+        ],
+        &[
+            Direction::Down,
+            Direction::Up,
+            Direction::North,
+            Direction::South,
+            Direction::West,
+            Direction::East,
         ],
     );
     pub const FACING_HOPPER: EnumProperty<Direction> = EnumProperty::new(
@@ -1198,8 +1251,11 @@ impl BlockStateProperties {
         "tilt",
         &[Tilt::None, Tilt::Unstable, Tilt::Partial, Tilt::Full],
     );
-    pub const VERTICAL_DIRECTION: EnumProperty<Direction> =
-        EnumProperty::new("vertical_direction", &[Direction::Up, Direction::Down]);
+    pub const VERTICAL_DIRECTION: EnumProperty<Direction> = EnumProperty::with_comparison_order(
+        "vertical_direction",
+        &[Direction::Up, Direction::Down],
+        &[Direction::Down, Direction::Up],
+    );
     pub const DRIPSTONE_THICKNESS: EnumProperty<DripstoneThickness> = EnumProperty::new(
         "thickness",
         &[

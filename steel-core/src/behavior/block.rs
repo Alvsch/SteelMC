@@ -784,6 +784,15 @@ pub trait BlockBehavior: Send + Sync {
         // Default: no-op
     }
 
+    /// Called when a player starts attacking this block.
+    ///
+    /// Vanilla parity: `Block.attack(BlockState, Level, BlockPos, Player)`.
+    #[expect(
+        unused_variables,
+        reason = "default trait implementation ignores all params"
+    )]
+    fn attack(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos, player: &Player) {}
+
     /// Called before a player removes this block.
     ///
     /// Vanilla parity: `Block.playerWillDestroy(Level, BlockPos, BlockState, Player)`.
@@ -829,6 +838,27 @@ pub trait BlockBehavior: Send + Sync {
         context: &BlockLootContext<'_>,
     ) -> Option<Vec<ItemStack>> {
         None
+    }
+
+    /// Called for post-break effects such as experience drops.
+    ///
+    /// Vanilla parity: `Block.spawnAfterBreak(BlockState, ServerLevel, BlockPos,
+    /// ItemStack, boolean)`. Normal block destruction invokes this after loot;
+    /// other destruction paths retain their Vanilla-specific ordering. Ore
+    /// experience and similar non-item drops belong here rather than in the
+    /// loot-table override.
+    #[expect(
+        unused_variables,
+        reason = "default trait implementation ignores all params"
+    )]
+    fn spawn_after_break(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        tool: &ItemStack,
+        drop_experience: bool,
+    ) {
     }
 
     /// Called after this block is removed from the world, to affect neighbors.

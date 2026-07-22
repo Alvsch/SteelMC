@@ -108,7 +108,9 @@ use crate::{
         AddEntityError, Entity, EntityChangeSenders, EntityChunkCallback, EntityLifecycleChanges,
         EntityMovementSyncPacket, EntityOwnership, EntityTracker, EntityVisibility,
         InactiveEntityCallback, MobEffectSyncPacket, RemovalReason, SharedEntity,
-        WorldEntityManager, entities::ItemEntity, entity_loot_ref,
+        WorldEntityManager,
+        entities::{ExperienceOrbEntity, ItemEntity},
+        entity_loot_ref,
     },
     fluid::{FluidStateExt as _, fluid_state_to_block},
     level_data::{LevelDataManager, RespawnData, WorldBorderData, WorldGenerationSettings},
@@ -4679,7 +4681,6 @@ impl World {
     /// This is the no-tool/no-entity overload. Player block breaking uses
     /// `block_breaking::drop_block_loot` which includes tool context for
     /// fortune/silk touch.
-    // TODO: `spawnAfterBreak` (XP orbs for ores) not called yet.
     // TODO: block entity and entity drops
     pub fn drop_resources(self: &Arc<Self>, state: BlockStateId, pos: BlockPos) {
         self.drop_resources_with_entity(state, pos, None);
@@ -4697,6 +4698,9 @@ impl World {
                 self.pop_resource(pos, item);
             }
         }
+        BLOCK_BEHAVIORS
+            .get_behavior(state.get_block())
+            .spawn_after_break(state, self, pos, &ItemStack::empty(), true);
     }
 
     pub(crate) fn block_drops(
@@ -5173,6 +5177,25 @@ impl World {
         let entity = self.spawn_item(DVec3::new(x, y, z), item)?;
         entity.set_default_pickup_delay();
         Some(entity)
+    }
+
+    /// Spawns experience at a block position when block drops are enabled.
+    ///
+    /// Mirrors Vanilla's `Block.popExperience`.
+    pub fn pop_experience(self: &Arc<Self>, pos: BlockPos, amount: i32) {
+        if amount <= 0 || !self.get_game_rule(&BLOCK_DROPS) {
+            return;
+        }
+
+        ExperienceOrbEntity::award(
+            self,
+            DVec3::new(
+                f64::from(pos.x()) + 0.5,
+                f64::from(pos.y()) + 0.5,
+                f64::from(pos.z()) + 0.5,
+            ),
+            amount,
+        );
     }
 
     /// Drops an item from a block face with directional velocity.

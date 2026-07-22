@@ -504,13 +504,16 @@ pub struct PlacementSource<'a> {
 impl<'a> PlacementSource<'a> {
     /// Creates a placement source backed by a player's live hand.
     #[must_use]
-    pub fn player_hand(player: &'a Player, inv: InventoryAccess) -> Self {
+    pub fn player_hand(player: &'a Player, inv: &InventoryAccess) -> Self {
         let (rotation, pitch) = player.rotation();
         let hand = inv.hand;
         Self {
             player: Some(player),
             hand,
-            item: PlacementItemSource::PlayerHand(inv),
+            item: PlacementItemSource::PlayerHand(InventoryAccess::new(
+                Arc::clone(&inv.inventory),
+                hand,
+            )),
             orientation: PlacementOrientation::Player { rotation, pitch },
             is_secondary_use_active: player.is_secondary_use_active(),
         }
@@ -645,7 +648,7 @@ impl<'a> UseOnContext<'a> {
     pub fn build_place_context(&self) -> BlockPlaceContext<'a> {
         BlockPlaceContext::new(
             self.world,
-            PlacementSource::player_hand(self.player, self.inv.clone()),
+            PlacementSource::player_hand(self.player, &self.inv),
             &self.hit_result,
         )
     }
