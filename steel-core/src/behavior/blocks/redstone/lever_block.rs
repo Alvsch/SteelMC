@@ -229,9 +229,9 @@ mod tests {
         let sounds = level.block_sounds.borrow();
         assert_eq!(sounds.len(), 2);
         assert_eq!(sounds[0].sound, &sound_events::BLOCK_LEVER_CLICK);
-        assert_eq!(sounds[0].pitch, 0.6);
+        assert_eq!(sounds[0].pitch.to_bits(), 0.6_f32.to_bits());
         assert_eq!(sounds[0].exclude, None);
-        assert_eq!(sounds[1].pitch, 0.5);
+        assert_eq!(sounds[1].pitch.to_bits(), 0.5_f32.to_bits());
         assert_eq!(sounds[1].exclude, None);
 
         let events = level.game_events.borrow();

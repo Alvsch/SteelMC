@@ -128,6 +128,7 @@ mod tests {
     use std::sync::Arc;
 
     use glam::DVec3;
+    use steel_registry::entity_type::EntityTypeRef;
     use steel_registry::test_support::init_test_registry;
     use steel_registry::{vanilla_blocks, vanilla_entities, vanilla_items};
     use steel_utils::{ChunkPos, Identifier, WorldAabb};
@@ -163,7 +164,7 @@ mod tests {
             &self.base
         }
 
-        fn entity_type(&self) -> steel_registry::entity_type::EntityTypeRef {
+        fn entity_type(&self) -> EntityTypeRef {
             &vanilla_entities::PIG
         }
 

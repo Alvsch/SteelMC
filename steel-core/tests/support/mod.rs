@@ -20,6 +20,7 @@ use crate::chunk::chunk_ticket_manager::ChunkTicketLevel;
 use crate::chunk::level_chunk::LevelChunk;
 use crate::chunk::proto_chunk::ProtoChunk;
 use crate::chunk::section::{ChunkSection, Sections};
+use crate::entity::Entity;
 use crate::level_data::WorldGenerationSettings;
 use crate::world::game_event_context::GameEventContext;
 use crate::world::{
@@ -369,7 +370,7 @@ impl LevelAccessor for TestLevel {
         self.game_events.borrow_mut().push(RecordedGameEvent {
             event,
             pos,
-            source_entity_id: context.source_entity().map(|entity| entity.id()),
+            source_entity_id: context.source_entity().map(Entity::id),
             affected_state: context.affected_state(),
         });
     }
