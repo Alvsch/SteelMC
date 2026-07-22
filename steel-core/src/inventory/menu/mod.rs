@@ -10,10 +10,10 @@ mod layout;
 use crate::inventory::container::Container as _;
 pub use behavior::{MenuBehavior, RemoteSlot};
 pub use builder::{
-    ContainerSlots, DataSlot, FillDirection, MenuBuilder, PlayerInventorySections, Section,
-    SectionSource,
+    ContainerSlots, DataSlot, FillDirection, IntoSections, MenuBuilder, PlayerInventorySections,
+    Section, SectionSource,
 };
-pub use grid::{GridPlacer, Rect, Region};
+pub use grid::{ColSpan, GridPlacer, Rect, Region, RowSpan, SpanBounds};
 pub use kind::{MenuKind, MenuKindType};
 pub(crate) use layout::MenuLayout;
 #[cfg(test)]

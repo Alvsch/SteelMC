@@ -1,9 +1,8 @@
-//! A 2D layer over [`MenuBuilder`] for menus whose slot indices are row-major
-//! over a visual grid — the generic chest screens (`GENERIC_9X1` ...
-//! `GENERIC_9X6`).
+//! A grid builder for creating sections automatically by placing rectangles directly
+//! on the "canvas" instead of placing sections manually.
 //!
-//! Instead of counting flat slot runs by hand, place containers as rectangles
-//! and let the grid lower them into sections:
+//! Only works with menus that are row major, not menus that have protocol defined
+//! slot indices like for example anvils (these menus can still be built with [`MenuBuilder`]'s normal placements).
 //!
 //! ```rust
 //! use steel_registry::{vanilla_items, vanilla_menu_types};
@@ -18,15 +17,13 @@
 //!     let storage = SimpleContainer::new(3).into_shared();
 //!
 //!     let items = b.grid(3, |g| {
-//!         let items = g.place(Rect::new(3, 1, 3, 1), storage);
+//!         let items = g.place(Rect::cols(3..6).rows(1), storage);
 //!         g.paint_all(ItemStack::new(&vanilla_items::GRAY_STAINED_GLASS_PANE));
 //!         items
 //!     });
 //!
 //!     let player = b.player_inventory(&inventory);
-//!     for section in items.sections() {
-//!         b.route(section, [player.all()], FillDirection::Backward);
-//!     }
+//!     b.route(&items, [player.all()], FillDirection::Backward);
 //!     b.route(player.all(), &items, FillDirection::Forward);
 //!     b.build(MenuKindType::Basic(BasicKind {}))
 //! }
@@ -52,13 +49,10 @@
 //! - **Carving is sugar.** [`GridPlacer::rows`], [`GridPlacer::cols`] and
 //!   [`GridPlacer::rest`] are cursor-computed subgrids, so tiled layouts need
 //!   no coordinates at all. One carve axis per scope; nest to switch axes.
-//!
-//! This layer only fits menu types whose slot order is row-major over the
-//! screen. Vanilla work-station menus (crafting table, anvil, ...) have
-//! protocol-defined, non-geometric slot orders — build those with the plain
-//! [`MenuBuilder`] methods.
 
+use std::fmt;
 use std::iter::Copied;
+use std::ops::{Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive};
 use std::slice;
 use std::sync::Arc;
 
@@ -67,7 +61,7 @@ use steel_utils::locks::IntoShared;
 
 use crate::inventory::container::SimpleContainer;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
-use crate::inventory::menu::builder::{MenuBuilder, MenuInstanceId, Section};
+use crate::inventory::menu::builder::{IntoSections, MenuBuilder, MenuInstanceId, Section};
 use crate::inventory::slots::{
     MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot, ResultHandler, ResultSlot, SlotType,
 };
@@ -76,36 +70,215 @@ use crate::player::Player;
 /// The width of the generic chest screens.
 const GRID_WIDTH: usize = 9;
 
-/// A rectangle of grid cells. `x` is the column and `y` the row, both 0-based
-/// from the top-left of the enclosing grid scope.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A column or row selection for [`Rect::cols`] / [`Rect::rows`]: any range —
+/// `1..4`, `1..=3`, `2..` (to the scope's edge), `..3`, `..` (the whole axis)
+/// — or a bare index (`3` selects just that column/row).
+pub trait SpanBounds {
+    /// Lowers to `(start, exclusive end)`, `None` end meaning "to the scope's
+    /// edge".
+    #[doc(hidden)]
+    fn bounds(self) -> (usize, Option<usize>);
+}
+
+impl SpanBounds for usize {
+    fn bounds(self) -> (usize, Option<usize>) {
+        (self, Some(self + 1))
+    }
+}
+
+impl SpanBounds for Range<usize> {
+    fn bounds(self) -> (usize, Option<usize>) {
+        (self.start, Some(self.end))
+    }
+}
+
+impl SpanBounds for RangeInclusive<usize> {
+    fn bounds(self) -> (usize, Option<usize>) {
+        let (start, end) = self.into_inner();
+        (start, Some(end + 1))
+    }
+}
+
+impl SpanBounds for RangeFrom<usize> {
+    fn bounds(self) -> (usize, Option<usize>) {
+        (self.start, None)
+    }
+}
+
+impl SpanBounds for RangeTo<usize> {
+    fn bounds(self) -> (usize, Option<usize>) {
+        (0, Some(self.end))
+    }
+}
+
+impl SpanBounds for RangeToInclusive<usize> {
+    fn bounds(self) -> (usize, Option<usize>) {
+        (0, Some(self.end + 1))
+    }
+}
+
+impl SpanBounds for RangeFull {
+    fn bounds(self) -> (usize, Option<usize>) {
+        (0, None)
+    }
+}
+
+/// Lowers a [`SpanBounds`] to `(start, length)`, `None` length meaning "to
+/// the scope's edge".
+///
+/// # Panics
+/// If the range is empty.
+fn to_span(axis: &str, span: impl SpanBounds) -> (usize, Option<usize>) {
+    let (start, end) = span.bounds();
+    let len = end.map(|end| {
+        assert!(end > start, "{axis} range {start}..{end} is empty");
+        end - start
+    });
+    (start, len)
+}
+
+/// A rectangle of grid cells, selected by column and row ranges. Coordinates
+/// are 0-based from the top-left of the grid scope the rect is used in.
+///
+/// Built by giving both axes, in either order — see [`SpanBounds`] for the
+/// accepted range forms:
+///
+/// ```rust
+/// use steel_core::inventory::menu::Rect;
+///
+/// Rect::cols(3..6).rows(1);      // columns 3,4,5 of row 1
+/// Rect::rows(1..=2).cols(..4);   // the same rect, axes given in the other order
+/// Rect::cols(4..).rows(..);      // column 4 to the right edge, all rows
+/// Rect::cell(6, 2);              // single cell, shorthand for cols(6).rows(2)
+/// ```
+///
+/// Unbounded ends (`..`, `n..`) are resolved against the enclosing scope
+/// where the rect is placed, so the same rect means "to the edge" inside a
+/// subgrid too.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
+    x: usize,
+    y: usize,
+    /// `None` = to the scope's right edge.
+    w: Option<usize>,
+    /// `None` = to the scope's bottom edge.
+    h: Option<usize>,
+}
+
+impl Rect {
+    /// Starts a rect from a column selection; finish it with
+    /// [`ColSpan::rows`].
+    ///
+    /// # Panics
+    /// If the range is empty.
+    pub fn cols(cols: impl SpanBounds) -> ColSpan {
+        let (x, w) = to_span("column", cols);
+        ColSpan { x, w }
+    }
+
+    /// Starts a rect from a row selection; finish it with [`RowSpan::cols`].
+    ///
+    /// # Panics
+    /// If the range is empty.
+    pub fn rows(rows: impl SpanBounds) -> RowSpan {
+        let (y, h) = to_span("row", rows);
+        RowSpan { y, h }
+    }
+
+    /// A single cell at column `x`, row `y`; shorthand for
+    /// `Rect::cols(x).rows(y)`.
+    #[must_use]
+    pub const fn cell(x: usize, y: usize) -> Self {
+        Self {
+            x,
+            y,
+            w: Some(1),
+            h: Some(1),
+        }
+    }
+}
+
+impl fmt::Debug for Rect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn span(f: &mut fmt::Formatter<'_>, start: usize, len: Option<usize>) -> fmt::Result {
+            match len {
+                Some(len) => write!(f, "{}..{}", start, start + len),
+                None => write!(f, "{start}.."),
+            }
+        }
+        write!(f, "Rect(cols ")?;
+        span(f, self.x, self.w)?;
+        write!(f, ", rows ")?;
+        span(f, self.y, self.h)?;
+        write!(f, ")")
+    }
+}
+
+/// A [`Rect`] with only its columns given. Complete it with
+/// [`rows`](Self::rows).
+#[derive(Clone, Copy, Debug)]
+#[must_use = "give the rect its rows to complete it"]
+pub struct ColSpan {
+    x: usize,
+    w: Option<usize>,
+}
+
+impl ColSpan {
+    /// Completes the rect with a row selection.
+    ///
+    /// # Panics
+    /// If the range is empty.
+    #[must_use]
+    pub fn rows(self, rows: impl SpanBounds) -> Rect {
+        let (y, h) = to_span("row", rows);
+        Rect {
+            x: self.x,
+            y,
+            w: self.w,
+            h,
+        }
+    }
+}
+
+/// A [`Rect`] with only its rows given. Complete it with
+/// [`cols`](Self::cols).
+#[derive(Clone, Copy, Debug)]
+#[must_use = "give the rect its columns to complete it"]
+pub struct RowSpan {
+    y: usize,
+    h: Option<usize>,
+}
+
+impl RowSpan {
+    /// Completes the rect with a column selection.
+    ///
+    /// # Panics
+    /// If the range is empty.
+    #[must_use]
+    pub fn cols(self, cols: impl SpanBounds) -> Rect {
+        let (x, w) = to_span("column", cols);
+        Rect {
+            x,
+            y: self.y,
+            w,
+            h: self.h,
+        }
+    }
+}
+
+/// A [`Rect`] resolved against a concrete scope: absolute grid coordinates,
+/// concrete extent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Abs {
     x: usize,
     y: usize,
     w: usize,
     h: usize,
 }
 
-impl Rect {
-    /// Creates a rect at column `x`, row `y`, spanning `w` columns and `h` rows.
-    ///
-    /// # Panics
-    /// If `w` or `h` is zero.
-    #[must_use]
-    pub const fn new(x: usize, y: usize, w: usize, h: usize) -> Self {
-        assert!(w > 0 && h > 0, "Rect must span at least one cell");
-        Self { x, y, w, h }
-    }
-
-    /// A single cell at column `x`, row `y`.
-    #[must_use]
-    pub const fn cell(x: usize, y: usize) -> Self {
-        Self::new(x, y, 1, 1)
-    }
-
+impl Abs {
     /// The number of cells covered.
-    #[must_use]
-    pub const fn area(self) -> usize {
+    const fn area(self) -> usize {
         self.w * self.h
     }
 
@@ -125,27 +298,16 @@ impl Rect {
     }
 }
 
-/// The sections created by one grid placement.
-///
-/// A placement narrower than the grid is not contiguous in flat slot space, so
-/// it lowers to one [`Section`] per covered row; flat-adjacent rows (full-width
-/// placements) are merged. `&Region` iterates the sections, so it can be passed
-/// directly to [`MenuBuilder::drain`] and as [`MenuBuilder::route`] targets.
+/// The sections created by a grid placement.
 #[derive(Clone, Debug)]
 pub struct Region {
     sections: Vec<Section>,
 }
 
 impl Region {
-    /// Iterates the sections of this region, in flat slot order.
+    /// Iterates the sections of this region
     pub fn iter(&self) -> Copied<slice::Iter<'_, Section>> {
         self.sections.iter().copied()
-    }
-
-    /// The sections of this region, in flat slot order. Alias for
-    /// [`iter`](Self::iter).
-    pub fn sections(&self) -> Copied<slice::Iter<'_, Section>> {
-        self.iter()
     }
 
     /// Whether any section of this region contains the slot index.
@@ -179,6 +341,14 @@ impl<'a> IntoIterator for &'a Region {
     }
 }
 
+impl<'a> IntoSections for &'a Region {
+    type Iter = Copied<slice::Iter<'a, Section>>;
+
+    fn into_sections(self) -> Self::Iter {
+        self.iter()
+    }
+}
+
 /// What one grid cell resolved to.
 enum Cell {
     /// Not yet claimed by anything. A leftover `Empty` when a scope closes is
@@ -192,7 +362,7 @@ enum Cell {
 
 /// One container-backed placement, in absolute grid coordinates.
 struct Placement {
-    rect: Rect,
+    rect: Abs,
     kind: PlacementKind,
 }
 
@@ -255,17 +425,17 @@ impl GridState {
 /// inside [`GridPlacer::subgrid`] / the carving methods.
 struct Frame {
     /// This scope's area, in absolute grid coordinates.
-    rect: Rect,
+    rect: Abs,
     /// The axis locked in by the first `rows`/`cols` call in this scope.
     axis: Option<Axis>,
     /// Rows or columns (per `axis`) already carved off.
     cursor: usize,
     /// Closed subgrids of this scope, in absolute grid coordinates.
-    sealed: Vec<Rect>,
+    sealed: Vec<Abs>,
 }
 
 impl Frame {
-    const fn new(rect: Rect) -> Self {
+    const fn new(rect: Abs) -> Self {
         Self {
             rect,
             axis: None,
@@ -275,11 +445,9 @@ impl Frame {
     }
 }
 
-/// Places rectangles on a grid scope. Created by [`MenuBuilder::grid`]; see
-/// the [module documentation](self) for the rules.
+/// Places rectangles on a grid scope. Created by [`MenuBuilder::grid`].
 ///
-/// All coordinates are local to this scope: `(0, 0)` is its top-left cell,
-/// [`width`](Self::width) x [`height`](Self::height) its extent.
+/// All coordinates are local to this scope, which makes grids combineable
 pub struct GridPlacer<'a> {
     state: &'a mut GridState,
     frame: Frame,
@@ -298,10 +466,16 @@ impl GridPlacer<'_> {
         self.frame.rect.h
     }
 
-    /// The rect covering this whole scope.
+    /// The rect covering this whole scope; equivalent to
+    /// `Rect::cols(..).rows(..)`.
     #[must_use]
     pub const fn full(&self) -> Rect {
-        Rect::new(0, 0, self.frame.rect.w, self.frame.rect.h)
+        Rect {
+            x: 0,
+            y: 0,
+            w: Some(self.frame.rect.w),
+            h: Some(self.frame.rect.h),
+        }
     }
 
     /// Adds plain slots for the container over `rect`, covering its slots
@@ -328,7 +502,7 @@ impl GridPlacer<'_> {
     ) -> Region {
         let container = container.into();
         #[cfg(debug_assertions)]
-        Self::assert_container_size(&container, rect, offset);
+        Self::assert_container_size(&container, self.to_abs(rect), offset);
         self.claim_functional(rect, PlacementKind::Normal { container, offset })
     }
 
@@ -416,7 +590,7 @@ impl GridPlacer<'_> {
     ) -> Region {
         let container = container.into();
         #[cfg(debug_assertions)]
-        Self::assert_container_size(&container, rect, offset);
+        Self::assert_container_size(&container, self.to_abs(rect), offset);
         self.claim_functional(
             rect,
             PlacementKind::Restricted {
@@ -440,11 +614,12 @@ impl GridPlacer<'_> {
         handler: Arc<dyn ResultHandler + Send + Sync>,
         container: impl Into<ContainerRef>,
     ) -> Section {
+        let abs = self.to_abs(at);
         assert!(
-            at.area() == 1,
+            abs.area() == 1,
             "place_result requires a single cell, got a {}x{} rect",
-            at.w,
-            at.h
+            abs.w,
+            abs.h
         );
         let region = self.claim_functional(
             at,
@@ -575,11 +750,21 @@ impl GridPlacer<'_> {
         let (remaining, local) = match axis {
             Axis::Rows => (
                 self.height() - self.frame.cursor,
-                Rect::new(0, self.frame.cursor, self.width(), count),
+                Rect {
+                    x: 0,
+                    y: self.frame.cursor,
+                    w: None,
+                    h: Some(count),
+                },
             ),
             Axis::Cols => (
                 self.width() - self.frame.cursor,
-                Rect::new(self.frame.cursor, 0, count, self.height()),
+                Rect {
+                    x: self.frame.cursor,
+                    y: 0,
+                    w: Some(count),
+                    h: None,
+                },
             ),
         };
         assert!(
@@ -595,23 +780,27 @@ impl GridPlacer<'_> {
         self.subgrid(local, f)
     }
 
-    /// Translates a scope-local rect to absolute grid coordinates.
+    /// Resolves a scope-local rect against this scope: unbounded ends run to
+    /// the scope's edges, and the result is in absolute grid coordinates.
     ///
     /// # Panics
     /// If the rect does not fit this scope.
-    fn to_abs(&self, rect: Rect) -> Rect {
+    fn to_abs(&self, rect: Rect) -> Abs {
+        let frame = self.frame.rect;
+        let w = rect.w.unwrap_or_else(|| frame.w.saturating_sub(rect.x));
+        let h = rect.h.unwrap_or_else(|| frame.h.saturating_sub(rect.y));
         assert!(
-            rect.x + rect.w <= self.frame.rect.w && rect.y + rect.h <= self.frame.rect.h,
+            w > 0 && h > 0 && rect.x + w <= frame.w && rect.y + h <= frame.h,
             "rect {rect:?} exceeds the {}x{} grid area",
-            self.frame.rect.w,
-            self.frame.rect.h
+            frame.w,
+            frame.h
         );
-        Rect::new(
-            self.frame.rect.x + rect.x,
-            self.frame.rect.y + rect.y,
-            rect.w,
-            rect.h,
-        )
+        Abs {
+            x: frame.x + rect.x,
+            y: frame.y + rect.y,
+            w,
+            h,
+        }
     }
 
     /// Whether the absolute cell `(x, y)` lies in a closed subgrid of this scope.
@@ -651,7 +840,7 @@ impl GridPlacer<'_> {
 
     /// Mints the sections covering `abs`: one per row, with flat-adjacent rows
     /// (full-width placements) merged.
-    fn region_for(&self, abs: Rect) -> Region {
+    fn region_for(&self, abs: Abs) -> Region {
         let mut sections: Vec<(usize, usize)> = Vec::new();
         for y in abs.y..abs.y + abs.h {
             let start = self.state.base + y * self.state.width + abs.x;
@@ -686,7 +875,7 @@ impl GridPlacer<'_> {
     /// Asserts (in debug builds) that the container has enough slots for the
     /// placement.
     #[cfg(debug_assertions)]
-    fn assert_container_size(container: &ContainerRef, rect: Rect, offset: usize) {
+    fn assert_container_size(container: &ContainerRef, rect: Abs, offset: usize) {
         use crate::inventory::lock::ContainerLockGuard;
 
         let size = ContainerLockGuard::lock_all(slice::from_ref(container))
@@ -731,7 +920,12 @@ impl MenuBuilder {
         };
         let mut placer = GridPlacer {
             state: &mut state,
-            frame: Frame::new(Rect::new(0, 0, GRID_WIDTH, rows)),
+            frame: Frame::new(Abs {
+                x: 0,
+                y: 0,
+                w: GRID_WIDTH,
+                h: rows,
+            }),
         };
         let result = f(&mut placer);
         placer.check_coverage();
@@ -837,7 +1031,7 @@ mod tests {
     }
 
     fn ranges(region: &Region) -> Vec<(usize, usize)> {
-        region.sections().map(|s| (s.start(), s.end())).collect()
+        region.iter().map(|s| (s.start(), s.end())).collect()
     }
 
     #[test]
@@ -852,7 +1046,7 @@ mod tests {
     fn narrow_placement_yields_one_section_per_row() {
         let mut b = MenuBuilder::new(None, 0);
         let region = b.grid(3, |g| {
-            let region = g.place(Rect::new(1, 0, 3, 3), container(9));
+            let region = g.place(Rect::cols(1..4).rows(..), container(9));
             g.paint_all(ItemStack::empty());
             region
         });
@@ -901,7 +1095,7 @@ mod tests {
         let mut b = MenuBuilder::new(None, 0);
         let region = b.grid(2, |g| {
             let region = g.place_restricted(
-                Rect::new(2, 0, 3, 2),
+                Rect::cols(2..5).rows(..),
                 container(6),
                 |_slot, _stack| true,
                 Some(|_: usize, _: &ContainerLockGuard, _: &Player, _: &ItemStack| false),
@@ -918,8 +1112,8 @@ mod tests {
         let mut b = MenuBuilder::new(None, 0);
         b.grid(2, |g| {
             g.paint_all(ItemStack::empty());
-            g.place(Rect::new(0, 0, 2, 1), container(2));
-            g.place(Rect::new(2, 0, 2, 1), container(2));
+            g.place(Rect::cols(0..2).rows(0), container(2));
+            g.place(Rect::cols(2..4).rows(0), container(2));
         });
         assert_eq!(b.slot_count(), 18);
     }
@@ -963,8 +1157,8 @@ mod tests {
     fn overlapping_placements_panic() {
         let mut b = MenuBuilder::new(None, 0);
         b.grid(1, |g| {
-            g.place(Rect::new(0, 0, 5, 1), container(5));
-            g.place(Rect::new(4, 0, 5, 1), container(5));
+            g.place(Rect::cols(0..5).rows(0), container(5));
+            g.place(Rect::cols(4..9).rows(0), container(5));
         });
     }
 
@@ -973,7 +1167,7 @@ mod tests {
     fn out_of_bounds_placement_panics() {
         let mut b = MenuBuilder::new(None, 0);
         b.grid(1, |g| {
-            g.place(Rect::new(5, 0, 5, 1), container(5));
+            g.place(Rect::cols(5..10).rows(0), container(5));
         });
     }
 
@@ -982,7 +1176,7 @@ mod tests {
     fn uncovered_cells_panic() {
         let mut b = MenuBuilder::new(None, 0);
         b.grid(1, |g| {
-            g.place(Rect::new(0, 0, 4, 1), container(4));
+            g.place(Rect::cols(0..4).rows(0), container(4));
         });
     }
 
@@ -992,8 +1186,8 @@ mod tests {
         let mut b = MenuBuilder::new(None, 0);
         b.grid(2, |g| {
             g.paint_all(ItemStack::empty());
-            g.subgrid(Rect::new(0, 0, 4, 1), |g| {
-                g.place(Rect::new(0, 0, 2, 1), container(2));
+            g.subgrid(Rect::cols(0..4).rows(0), |g| {
+                g.place(Rect::cols(0..2).rows(0), container(2));
             });
         });
     }
@@ -1019,11 +1213,52 @@ mod tests {
     }
 
     #[test]
+    fn range_flavors_and_axis_orders_agree() {
+        let mut b = MenuBuilder::new(None, 0);
+        let (left, right) = b.grid(2, |g| {
+            let left = g.place(Rect::cols(..=3).rows(..), container(8));
+            let right = g.place(Rect::rows(..).cols(4..), container(10));
+            (left, right)
+        });
+        assert_eq!(ranges(&left), vec![(0, 4), (9, 13)]);
+        assert_eq!(ranges(&right), vec![(4, 9), (13, 18)]);
+    }
+
+    #[test]
+    fn unbounded_ends_resolve_against_the_subgrid() {
+        let mut b = MenuBuilder::new(None, 0);
+        let inner = b.grid(2, |g| {
+            g.paint_all(ItemStack::empty());
+            g.subgrid(Rect::cols(1..5).rows(0), |g| {
+                let inner = g.place(Rect::cols(2..).rows(..), container(2));
+                g.paint_all(ItemStack::empty());
+                inner
+            })
+        });
+        assert_eq!(ranges(&inner), vec![(3, 5)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "column range 3..3 is empty")]
+    fn empty_range_panics_at_construction() {
+        let _ = Rect::cols(3..3);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds the 9x1 grid area")]
+    fn from_range_starting_past_the_edge_panics() {
+        let mut b = MenuBuilder::new(None, 0);
+        b.grid(1, |g| {
+            g.place(Rect::cols(9..).rows(..), container(1));
+        });
+    }
+
+    #[test]
     #[should_panic(expected = "non-contiguous")]
     fn single_panics_on_multi_row_narrow_region() {
         let mut b = MenuBuilder::new(None, 0);
         b.grid(2, |g| {
-            let region = g.place(Rect::new(0, 0, 4, 2), container(8));
+            let region = g.place(Rect::cols(0..4).rows(..), container(8));
             g.paint_all(ItemStack::empty());
             let _ = region.single();
         });

@@ -24,10 +24,13 @@
 //! }
 //! ```
 
+use std::array::IntoIter;
+use std::iter;
 use std::range::Range;
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::vec;
 
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef};
 use steel_utils::locks::Shared;
@@ -116,6 +119,47 @@ impl Section {
     #[must_use]
     pub const fn range(self) -> Range<usize> {
         self.range
+    }
+}
+
+/// Converts different types into an Iterator of sections so they can be passed into `MenuBuilder::route`
+pub trait IntoSections {
+    /// The Iterator over the Section(s).
+    type Iter: Iterator<Item = Section>;
+
+    /// Converts self into the Iterator.
+    fn into_sections(self) -> Self::Iter;
+}
+
+impl IntoSections for Section {
+    type Iter = iter::Once<Section>;
+
+    fn into_sections(self) -> Self::Iter {
+        iter::once(self)
+    }
+}
+
+impl<const N: usize> IntoSections for [Section; N] {
+    type Iter = IntoIter<Section, N>;
+
+    fn into_sections(self) -> Self::Iter {
+        self.into_iter()
+    }
+}
+
+impl<'a> IntoSections for &'a [Section] {
+    type Iter = iter::Copied<slice::Iter<'a, Section>>;
+
+    fn into_sections(self) -> Self::Iter {
+        self.iter().copied()
+    }
+}
+
+impl IntoSections for Vec<Section> {
+    type Iter = vec::IntoIter<Section>;
+
+    fn into_sections(self) -> Self::Iter {
+        self.into_iter()
     }
 }
 
@@ -532,7 +576,11 @@ impl MenuBuilder {
         }
     }
 
-    /// Declares a shift-click route from one section into others.
+    /// Declares a shift-click route from each section of `from` into
+    /// `targets`.
+    ///
+    /// Both arguments accept anything [`IntoSections`]; a multi-section
+    /// `from` declares one route per source section.
     ///
     /// Most commonly:
     /// `player_inventory` -> `container` is [`FillDirection::Forward`]
@@ -542,17 +590,19 @@ impl MenuBuilder {
     /// In debug builds, if any section was created by a different [`MenuBuilder`].
     pub fn route(
         &mut self,
-        from: Section,
-        targets: impl IntoIterator<Item = Section>,
+        from: impl IntoSections,
+        targets: impl IntoSections,
         direction: FillDirection,
     ) -> &mut Self {
-        let from = self.owned(from);
-        let targets = targets.into_iter().map(|s| self.owned(s)).collect();
-        self.routes.push(Route {
-            from,
-            targets,
-            direction,
-        });
+        let targets: Vec<Range<usize>> = targets.into_sections().map(|s| self.owned(s)).collect();
+        for from in from.into_sections() {
+            let from = self.owned(from);
+            self.routes.push(Route {
+                from,
+                targets: targets.clone(),
+                direction,
+            });
+        }
         self
     }
 
@@ -588,8 +638,8 @@ impl MenuBuilder {
     /// b.drain([section]); // only 'section' gets drained when the menu is closed
     /// b.build(MenuKindType::Basic(BasicKind {}));
     /// ```
-    pub fn drain(&mut self, sections: impl IntoIterator<Item = Section>) -> &mut Self {
-        let ranges: Vec<_> = sections.into_iter().map(|s| self.owned(s)).collect();
+    pub fn drain(&mut self, sections: impl IntoSections) -> &mut Self {
+        let ranges: Vec<_> = sections.into_sections().map(|s| self.owned(s)).collect();
         self.drain_sections.extend(ranges);
         self
     }
@@ -625,7 +675,7 @@ impl MenuBuilder {
         self.slots.len()
     }
 
-    /// Appends a single slot without minting a section.
+    /// Appends a single slot without creating a section.
     pub(crate) fn push_slot(&mut self, slot: SlotType) {
         self.slots.push(slot);
     }
