@@ -266,9 +266,7 @@ impl ChunkAccess {
             return;
         }
 
-        for &(x, relative_y, z, value) in blocks {
-            self.sections().set_relative_block(x, relative_y, z, value);
-        }
+        self.sections().write_tracked_block_batch(blocks);
         self.refresh_light_emptiness_maps_after_generation_write();
     }
 

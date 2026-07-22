@@ -1131,6 +1131,38 @@ impl<T: TickKey> TickList<T> {
         self.scheduled.contains(&(pos, tick_type.key()))
     }
 
+    /// Returns the saved entries that have not yet been anchored to game time.
+    #[must_use]
+    pub(crate) fn pending_entries(&self) -> &[SavedTick<T>] {
+        self.pending_ticks.as_deref().unwrap_or_default()
+    }
+
+    /// Removes pending entries matching `predicate` while keeping deduplication in sync.
+    pub(crate) fn remove_pending_matching(
+        &mut self,
+        mut predicate: impl FnMut(&SavedTick<T>) -> bool,
+    ) -> usize {
+        let Self {
+            pending_ticks,
+            scheduled,
+            ..
+        } = self;
+        let Some(pending_ticks) = pending_ticks.as_mut() else {
+            return 0;
+        };
+
+        let old_len = pending_ticks.len();
+        pending_ticks.retain(|tick| {
+            if !predicate(tick) {
+                return true;
+            }
+
+            scheduled.remove(&(tick.pos, tick.tick_type.key()));
+            false
+        });
+        old_len - pending_ticks.len()
+    }
+
     /// Packs pending entries followed by live entries in Vanilla saved-list order.
     #[must_use]
     pub(crate) fn pack(&self, current_tick: i64) -> Vec<SavedTick<T>> {
@@ -2097,6 +2129,22 @@ mod tests {
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].delay, 7);
         assert_eq!(saved[0].priority, TickPriority::High);
+    }
+
+    #[test]
+    fn removing_pending_ticks_releases_their_deduplication_keys() {
+        let mut ticks = BlockTickList::new_pending();
+        let removed_pos = BlockPos::new(1, 2, 3);
+        let retained_pos = BlockPos::new(4, 5, 6);
+        assert!(ticks.schedule_pending(test_block(), removed_pos, TickPriority::Normal));
+        assert!(ticks.schedule_pending(test_block_2(), retained_pos, TickPriority::Low));
+
+        let removed = ticks.remove_pending_matching(|tick| tick.pos == removed_pos);
+
+        assert_eq!(removed, 1);
+        assert_eq!(ticks.pending_entries().len(), 1);
+        assert_eq!(ticks.pending_entries()[0].pos, retained_pos);
+        assert!(ticks.schedule_pending(test_block(), removed_pos, TickPriority::High));
     }
 
     #[test]

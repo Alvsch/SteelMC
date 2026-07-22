@@ -428,6 +428,24 @@ impl Sections {
         }
     }
 
+    /// Writes a batch of blocks while maintaining section counters and palette state.
+    ///
+    /// Blocks should be grouped by section index so each touched section only needs
+    /// one write guard.
+    pub(crate) fn write_tracked_block_batch(&self, blocks: &[(usize, usize, usize, BlockStateId)]) {
+        const DIM: usize = BlockPalette::SIZE;
+        let mut i = 0;
+        while i < blocks.len() {
+            let section_idx = blocks[i].1 / DIM;
+            let mut guard = self.sections[section_idx].write();
+            while i < blocks.len() && blocks[i].1 / DIM == section_idx {
+                let (x, relative_y, z, value) = blocks[i];
+                guard.set_block_state(x, relative_y % DIM, z, value);
+                i += 1;
+            }
+        }
+    }
+
     /// Sets a block at a relative position in the chunk and keeps section
     /// counters/palette serialization ready.
     pub fn set_relative_block(
