@@ -11,7 +11,7 @@ use glam::DVec3;
 use simdnbt::owned::{NbtList, NbtTag};
 use steel_protocol::packets::game::{
     CContainerClose, COpenScreen, SContainerButtonClick, SContainerClick, SContainerClose,
-    SContainerSlotStateChanged, SSetCarriedItem, SSetCreativeModeSlot,
+    SContainerSlotStateChanged, SRenameItem, SSetCarriedItem, SSetCreativeModeSlot,
 };
 use steel_registry::enchantment_effect::EnchantmentEffectComponent;
 use steel_registry::item_stack::ItemStack;
@@ -27,7 +27,7 @@ use crate::{
         container::{Container, clear_or_count_matching_stack},
         equipment::{EntityEquipment, EquipmentSlot},
         lock::{ContainerId, ContainerLockGuard},
-        menu::{Menu, kinds::INVENTORY_MENU_CONTAINER_ID},
+        menu::{Menu, MenuKindType, kinds::INVENTORY_MENU_CONTAINER_ID},
         slots::Slot,
     },
     player::Player,
@@ -903,6 +903,18 @@ impl Player {
         }
     }
 
+    /// Handles an anvil rename packet.
+    pub fn handle_rename_item(self: &Arc<Self>, packet: SRenameItem) {
+        let mut open_menu = self.open_menu.lock();
+        let Some(menu) = open_menu.as_mut() else {
+            log::debug!("rename item without an open menu");
+            return;
+        };
+        if matches!(menu.kind(), MenuKindType::Anvil(_)) && menu.still_valid(self) {
+            menu.set_anvil_item_name(packet.name, self);
+        }
+    }
+
     /// Handles a container slot state changed packet (e.g., crafter slot toggle).
     pub fn handle_container_slot_state_changed(&self, packet: SContainerSlotStateChanged) {
         log::debug!(
@@ -1279,14 +1291,14 @@ impl Player {
         }
 
         let inv_id = ContainerId::from_arc(&self.inventory);
-        if let Some(inv) = guard.get_mut(inv_id) {
+        let should_drop = if let Some(inv) = guard.get_mut(inv_id) {
             let added = inv.add(&mut item);
-            if !added || !item.is_empty() {
-                let _ = self.drop_item(item, false, false);
-            }
+            !added || !item.is_empty()
         } else {
-            // Inventory not in guard - this shouldn't happen but drop the item to be safe
-            let _ = self.drop_item(item, false, false);
+            true
+        };
+        if should_drop {
+            let _ = guard.run_unlocked(|| self.drop_item(item, false, false));
         }
     }
 }

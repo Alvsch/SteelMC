@@ -72,15 +72,12 @@ pub struct ChestKind {
 impl MenuKind for ChestKind {
     /// Returns true if the container is still valid for interaction.
     ///
-    /// Delegates to the container's `still_valid` method.
+    /// Checks the container's independently stored access capability.
     ///
     /// Note: Java's `ChestMenu::removed` also calls `container.stopOpen(player)`,
     /// but we don't have that callback implemented yet — so there is no `removed`
     /// override here (the default returns the carried item via [`Menu::removed`]).
-    fn still_valid(&self, behavior: &MenuBehavior, player: &Player) -> bool {
-        let guard = behavior.lock_all_containers();
-        guard
-            .get(self.container.container_id())
-            .is_some_and(|container| container.still_valid(player))
+    fn still_valid(&self, _behavior: &MenuBehavior, player: &Player) -> bool {
+        self.container.still_valid(player)
     }
 }

@@ -168,6 +168,37 @@ pub trait Slot {
         }
     }
 
+    /// Inserts up to `amount` items with Vanilla's `Slot::safeInsert` callback behavior.
+    fn safe_insert(
+        &self,
+        guard: &mut ContainerLockGuard,
+        mut input: ItemStack,
+        amount: i32,
+    ) -> ItemStack {
+        if input.is_empty() || !self.may_place(&input) {
+            return input;
+        }
+
+        let slot_stack = self.get_item(guard).clone();
+        let transferable = amount
+            .min(input.count)
+            .min(self.get_max_stack_size_for_item(guard, &input) - slot_stack.count);
+        if transferable <= 0 {
+            return input;
+        }
+
+        if slot_stack.is_empty() {
+            self.set_by_player(guard, input.split(transferable), &slot_stack);
+        } else if ItemStack::is_same_item_same_components(&slot_stack, &input) {
+            input.shrink(transferable);
+            let mut new_slot_stack = slot_stack.clone();
+            new_slot_stack.grow(transferable);
+            self.set_by_player(guard, new_slot_stack, &slot_stack);
+        }
+
+        input
+    }
+
     /// Marks the slot's container as changed.
     fn set_changed(&self, guard: &mut ContainerLockGuard);
 

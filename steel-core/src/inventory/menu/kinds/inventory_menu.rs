@@ -284,28 +284,23 @@ impl MenuKind for InventoryKind {
             return Some(ItemStack::empty());
         }
 
-        // Update the source slot with the remaining items
-        behavior.slots()[slot_index].set_item(guard, stack_mut.clone());
+        behavior.update_quick_move_source(guard, slot_index, &stack_mut, &clicked);
 
         // Check if unchanged
         if stack_mut.count == clicked.count {
             return Some(ItemStack::empty());
         }
 
-        behavior.slots()[slot_index].set_changed(guard);
+        if let Some(remainder) = behavior.slots()[slot_index].on_take(guard, &stack_mut, player) {
+            // Try to place crafting remainders (e.g., empty buckets) back in inventory
+            player.add_item_or_drop_with_guard(guard, remainder);
+        }
 
-        // Call on_take for the result slot to consume ingredients
-        // This must happen after set_item so the slot reflects the new state
         if self.result.contains(slot_index) {
-            if let Some(remainder) = behavior.slots()[slot_index].on_take(guard, &clicked, player) {
-                // Try to place crafting remainders (e.g., empty buckets) back in inventory
-                player.add_item_or_drop_with_guard(guard, remainder);
-            }
-
             // Java: if (slotIndex == 0) { player.drop(stack, false); }
             // Drop any items from the result slot that couldn't fit in the inventory
             if !stack_mut.is_empty() {
-                let _ = player.drop_item(stack_mut, false, true);
+                let _ = guard.run_unlocked(|| player.drop_item(stack_mut, false, true));
             }
         }
 

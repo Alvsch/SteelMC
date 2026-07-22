@@ -98,36 +98,21 @@ impl MenuLayout {
             return ItemStack::empty();
         }
 
-        let slot = &behavior.slots()[slot_index];
-        if remaining.is_empty() {
-            slot.set_by_player(guard, ItemStack::empty(), &clicked);
-        } else {
-            // Write the un-moved remainder back to the source. Fake/result slots
-            // don't store items (their contents are recomputed), so only touch
-            // real slots — otherwise the moved portion would be duplicated.
-            if !slot.is_fake() {
-                slot.set_item(guard, remaining.clone());
-            }
-            slot.set_changed(guard);
-        }
+        behavior.update_quick_move_source(guard, slot_index, &remaining, &clicked);
 
         // Nothing actually left the slot (e.g. the target was full).
         if remaining.count == clicked.count {
             return ItemStack::empty();
         }
 
-        // Result slots need their take callback to fire (recipe consumption,
-        // experience, etc.); the remainder is returned to the player.
-        if slot.is_fake() {
-            let taken = clicked.copy_with_count(clicked.count - remaining.count);
-            if let Some(leftover) = slot.on_take(guard, &taken, player) {
-                player.add_item_or_drop_with_guard(guard, leftover);
-            }
-            // Output that didn't fit in the inventory is dropped, matching
-            // vanilla's result-slot shift-click (`player.drop(stack, false)`).
-            if !remaining.is_empty() {
-                let _ = player.drop_item(remaining.clone(), false, true);
-            }
+        let slot = &behavior.slots()[slot_index];
+        if let Some(leftover) = slot.on_take(guard, &remaining, player) {
+            player.add_item_or_drop_with_guard(guard, leftover);
+        }
+        // Output that didn't fit in the inventory is dropped, matching
+        // vanilla's result-slot shift-click (`player.drop(stack, false)`).
+        if slot.is_fake() && !remaining.is_empty() {
+            let _ = guard.run_unlocked(|| player.drop_item(remaining.clone(), false, true));
         }
 
         clicked
