@@ -3998,9 +3998,7 @@ impl Server {
                 let mut tick_manager = self.tick_rate_manager.write();
                 tick_manager.tick();
                 let runs_normally = tick_manager.runs_normally();
-                if runs_normally {
-                    tick_manager.increment_tick_count();
-                }
+                tick_manager.increment_tick_count();
                 (tick_manager.tick_count, runs_normally)
             };
 
