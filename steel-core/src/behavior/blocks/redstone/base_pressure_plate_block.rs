@@ -13,7 +13,7 @@ use steel_utils::{BlockPos, BlockStateId, WorldAabb};
 use crate::behavior::BlockPlaceContext;
 use crate::entity::Entity;
 use crate::world::game_event_context::GameEventContext;
-use crate::world::{LevelReader, World};
+use crate::world::{LevelAccessor, LevelReader, World};
 
 const TOUCH_INSET: f64 = 1.0 / 16.0;
 const TOUCH_HEIGHT: f64 = 4.0 / 16.0;
@@ -99,6 +99,36 @@ impl BasePressurePlateBlock {
             .len()
     }
 
+    fn emit_transition_effects(
+        level: &dyn LevelAccessor,
+        source_entity: Option<&dyn Entity>,
+        pos: BlockPos,
+        is_pressed: bool,
+        sound_click_on: SoundEventRef,
+        sound_click_off: SoundEventRef,
+    ) {
+        level.play_block_sound(
+            if is_pressed {
+                sound_click_on
+            } else {
+                sound_click_off
+            },
+            pos,
+            1.0,
+            1.0,
+            None,
+        );
+        level.game_event(
+            if is_pressed {
+                &vanilla_game_events::BLOCK_ACTIVATE
+            } else {
+                &vanilla_game_events::BLOCK_DEACTIVATE
+            },
+            pos,
+            &GameEventContext::new(source_entity, None),
+        );
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "arguments mirror vanilla checkPressed state and variant hooks"
@@ -124,30 +154,78 @@ impl BasePressurePlateBlock {
             // is a server-side no-op.
         }
 
-        if !is_pressed && was_pressed {
-            world.play_block_sound(
+        if is_pressed != was_pressed {
+            Self::emit_transition_effects(
+                world,
+                source_entity,
+                pos,
+                is_pressed,
+                sound_click_on,
                 sound_click_off,
-                pos,
-                1.0,
-                1.0,
-                source_entity.map(Entity::id),
-            );
-            world.game_event(
-                &vanilla_game_events::BLOCK_DEACTIVATE,
-                pos,
-                &GameEventContext::new(source_entity, None),
-            );
-        } else if is_pressed && !was_pressed {
-            world.play_block_sound(sound_click_on, pos, 1.0, 1.0, source_entity.map(Entity::id));
-            world.game_event(
-                &vanilla_game_events::BLOCK_ACTIVATE,
-                pos,
-                &GameEventContext::new(source_entity, None),
             );
         }
 
         if is_pressed {
             world.schedule_block_tick_default(pos, self.block, pressed_time);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Weak;
+
+    use glam::DVec3;
+    use steel_registry::{
+        sound_events, test_support::init_test_registry, vanilla_entities, vanilla_game_events,
+    };
+
+    use super::*;
+    use crate::entity::entities::RawEntity;
+    use crate::test_support::TestLevel;
+
+    #[test]
+    fn redstone_transition_side_effects_match_vanilla_for_pressure_plates() {
+        init_test_registry();
+        let level = TestLevel::default();
+        let source = RawEntity::new(42, DVec3::ZERO, Weak::new(), &vanilla_entities::ARMOR_STAND);
+        let pos = BlockPos::new(3, 64, -2);
+
+        BasePressurePlateBlock::emit_transition_effects(
+            &level,
+            Some(&source),
+            pos,
+            true,
+            &sound_events::BLOCK_STONE_PRESSURE_PLATE_CLICK_ON,
+            &sound_events::BLOCK_STONE_PRESSURE_PLATE_CLICK_OFF,
+        );
+        BasePressurePlateBlock::emit_transition_effects(
+            &level,
+            None,
+            pos,
+            false,
+            &sound_events::BLOCK_STONE_PRESSURE_PLATE_CLICK_ON,
+            &sound_events::BLOCK_STONE_PRESSURE_PLATE_CLICK_OFF,
+        );
+
+        let sounds = level.block_sounds.borrow();
+        assert_eq!(sounds.len(), 2);
+        assert_eq!(
+            sounds[0].sound,
+            &sound_events::BLOCK_STONE_PRESSURE_PLATE_CLICK_ON
+        );
+        assert_eq!(sounds[0].exclude, None);
+        assert_eq!(
+            sounds[1].sound,
+            &sound_events::BLOCK_STONE_PRESSURE_PLATE_CLICK_OFF
+        );
+        assert_eq!(sounds[1].exclude, None);
+
+        let events = level.game_events.borrow();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event, &vanilla_game_events::BLOCK_ACTIVATE);
+        assert_eq!(events[0].source_entity_id, Some(42));
+        assert_eq!(events[1].event, &vanilla_game_events::BLOCK_DEACTIVATE);
+        assert_eq!(events[1].source_entity_id, None);
     }
 }

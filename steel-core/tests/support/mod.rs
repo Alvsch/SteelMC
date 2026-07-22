@@ -203,6 +203,7 @@ pub(crate) struct PlayedBlockSound {
 pub(crate) struct RecordedGameEvent {
     pub(crate) event: GameEventRef,
     pub(crate) pos: BlockPos,
+    pub(crate) source_entity_id: Option<i32>,
     pub(crate) affected_state: Option<BlockStateId>,
 }
 
@@ -368,6 +369,7 @@ impl LevelAccessor for TestLevel {
         self.game_events.borrow_mut().push(RecordedGameEvent {
             event,
             pos,
+            source_entity_id: context.source_entity().map(|entity| entity.id()),
             affected_state: context.affected_state(),
         });
     }

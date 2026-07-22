@@ -1718,7 +1718,7 @@ impl ChunkStorage {
                     i32::from(pt.y),
                     chunk_pos.0.y * 16 + i32::from(pt.z),
                 );
-                let priority = TickPriority::from_i8(pt.priority).unwrap_or(TickPriority::Normal);
+                let priority = TickPriority::by_value(i32::from(pt.priority));
                 Some(SavedTick {
                     tick_type: block,
                     pos,
@@ -1743,7 +1743,7 @@ impl ChunkStorage {
                     i32::from(pt.y),
                     chunk_pos.0.y * 16 + i32::from(pt.z),
                 );
-                let priority = TickPriority::from_i8(pt.priority).unwrap_or(TickPriority::Normal);
+                let priority = TickPriority::by_value(i32::from(pt.priority));
                 Some(SavedTick {
                     tick_type: fluid,
                     pos,
@@ -3217,6 +3217,59 @@ mod tests {
             panic!("Full status should load a full chunk");
         };
         assert_eq!(full.scheduled_tick_snapshot().block.len(), 2);
+    }
+
+    #[test]
+    fn persisted_tick_priorities_clamp_to_vanilla_extremes() {
+        init_test_registry();
+        let chunk_pos = ChunkPos::new(0, 0);
+        let block_ticks = ChunkStorage::persistent_to_block_saved_ticks(
+            &[
+                PersistentTick {
+                    x: 1,
+                    y: 64,
+                    z: 1,
+                    delay: 0,
+                    priority: -4,
+                    tick_type: vanilla_blocks::STONE.key.clone(),
+                },
+                PersistentTick {
+                    x: 2,
+                    y: 64,
+                    z: 2,
+                    delay: 0,
+                    priority: 4,
+                    tick_type: vanilla_blocks::STONE.key.clone(),
+                },
+            ],
+            chunk_pos,
+        );
+        assert_eq!(block_ticks[0].priority, TickPriority::ExtremelyHigh);
+        assert_eq!(block_ticks[1].priority, TickPriority::ExtremelyLow);
+
+        let fluid_ticks = ChunkStorage::persistent_to_fluid_saved_ticks(
+            &[
+                PersistentTick {
+                    x: 3,
+                    y: 64,
+                    z: 3,
+                    delay: 0,
+                    priority: i8::MIN,
+                    tick_type: vanilla_fluids::WATER.key.clone(),
+                },
+                PersistentTick {
+                    x: 4,
+                    y: 64,
+                    z: 4,
+                    delay: 0,
+                    priority: i8::MAX,
+                    tick_type: vanilla_fluids::WATER.key.clone(),
+                },
+            ],
+            chunk_pos,
+        );
+        assert_eq!(fluid_ticks[0].priority, TickPriority::ExtremelyHigh);
+        assert_eq!(fluid_ticks[1].priority, TickPriority::ExtremelyLow);
     }
 
     #[test]

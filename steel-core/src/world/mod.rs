@@ -2167,6 +2167,9 @@ impl World {
     /// Updates comparators that can read analog output from `pos`.
     ///
     /// Mirrors vanilla `Level.updateNeighbourForOutputSignal`.
+    /// Steel intentionally never synchronously loads the second neighbor chunk:
+    /// block-ticking chunks have a radius-one Full-chunk safety border, while
+    /// other call sites retain the game-tick no-blocking policy.
     pub(crate) fn update_neighbor_for_output_signal(
         self: &Arc<Self>,
         pos: BlockPos,

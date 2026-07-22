@@ -4,6 +4,7 @@ use std::f32::consts::{PI, TAU};
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
+use steel_math::trig;
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -57,7 +58,7 @@ impl DaylightDetectorBlock {
         let mut sun_angle = sun_angle_degrees * DEGREES_TO_RADIANS;
         let offset = if sun_angle < PI { 0.0 } else { TAU };
         sun_angle += (offset - sun_angle) * 0.2;
-        java_round(f32::from(sky_brightness) * sun_angle.cos()).clamp(0, 15) as u8
+        java_round(f32::from(sky_brightness) * trig::cos(f64::from(sun_angle))).clamp(0, 15) as u8
     }
 
     fn update_signal_strength(world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
@@ -158,7 +159,7 @@ mod tests {
     use std::sync::Arc;
 
     use steel_registry::test_support::init_test_registry;
-    use steel_registry::{vanilla_block_entity_types, vanilla_blocks};
+    use steel_registry::{vanilla_block_entity_types, vanilla_blocks, vanilla_world_clocks};
 
     use super::*;
     use crate::test_support::fresh_test_world;
@@ -217,6 +218,30 @@ mod tests {
         assert_eq!(
             DaylightDetectorBlock::calculate_signal_strength(4, 180.0, true),
             11
+        );
+    }
+
+    #[test]
+    fn vanilla_trig_table_controls_overworld_rounding_boundary() {
+        init_test_registry();
+        let world = fresh_test_world("daylight_detector_trig_boundary");
+        assert_eq!(
+            world
+                .level_data
+                .write()
+                .world_clocks_mut()
+                .set_total_ticks(&vanilla_world_clocks::OVERWORLD, 680),
+            Some(())
+        );
+        let sun_angle_degrees = world.sun_angle_degrees();
+
+        let mut adjusted_angle = sun_angle_degrees * DEGREES_TO_RADIANS;
+        let offset = if adjusted_angle < PI { 0.0 } else { TAU };
+        adjusted_angle += (offset - adjusted_angle) * 0.2;
+        assert_eq!(java_round(11.0 * adjusted_angle.cos()), 7);
+        assert_eq!(
+            DaylightDetectorBlock::calculate_signal_strength(11, sun_angle_degrees, false),
+            6
         );
     }
 }

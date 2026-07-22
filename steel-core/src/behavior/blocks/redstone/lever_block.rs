@@ -14,10 +14,9 @@ use super::face_attached_horizontal_directional_block::FaceAttachedHorizontalDir
 use crate::behavior::{
     BlockBehavior, BlockHitResult, BlockPlaceContext, InteractionResult, InventoryAccess,
 };
-use crate::entity::Entity;
 use crate::player::Player;
 use crate::world::game_event_context::GameEventContext;
-use crate::world::{LevelReader, ScheduledTickAccess, SignalQueryContext, World};
+use crate::world::{LevelAccessor, LevelReader, ScheduledTickAccess, SignalQueryContext, World};
 
 /// Vanilla `LeverBlock` source behavior.
 #[block_behavior]
@@ -41,32 +40,30 @@ impl LeverBlock {
         world.update_neighbors_at(pos.relative(support_direction), self.face_attached.block);
     }
 
-    fn pull(
-        &self,
-        state: BlockStateId,
-        world: &Arc<World>,
-        pos: BlockPos,
-        player: Option<&Player>,
-    ) {
+    fn pull(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
         let powered = !state.get_value(&BlockStateProperties::POWERED);
         let next_state = state.set_value(&BlockStateProperties::POWERED, powered);
         world.set_block(pos, next_state, UpdateFlags::UPDATE_ALL);
         self.update_neighbors(next_state, world, pos);
-        world.play_block_sound(
+        Self::emit_transition_effects(world, pos, powered);
+    }
+
+    fn emit_transition_effects(level: &dyn LevelAccessor, pos: BlockPos, powered: bool) {
+        level.play_block_sound(
             &sound_events::BLOCK_LEVER_CLICK,
             pos,
             0.3,
             if powered { 0.6 } else { 0.5 },
-            player.map(Entity::id),
+            None,
         );
-        world.game_event(
+        level.game_event(
             if powered {
                 &vanilla_game_events::BLOCK_ACTIVATE
             } else {
                 &vanilla_game_events::BLOCK_DEACTIVATE
             },
             pos,
-            &GameEventContext::new(player.map(|player| player as &dyn Entity), None),
+            &GameEventContext::default(),
         );
     }
 }
@@ -97,11 +94,11 @@ impl BlockBehavior for LeverBlock {
         state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
-        player: &Player,
+        _player: &Player,
         _hit_result: &BlockHitResult,
         _inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        self.pull(state, world, pos, Some(player));
+        self.pull(state, world, pos);
         InteractionResult::Success
     }
 
@@ -160,7 +157,7 @@ impl BlockBehavior for LeverBlock {
 mod tests {
     use steel_registry::blocks::properties::AttachFace;
     use steel_registry::test_support::init_test_registry;
-    use steel_registry::vanilla_blocks;
+    use steel_registry::{sound_events, vanilla_blocks, vanilla_game_events};
 
     use super::*;
     use crate::test_support::TestLevel;
@@ -218,5 +215,30 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn redstone_transition_side_effects_match_vanilla_for_lever() {
+        init_test_registry();
+        let level = TestLevel::default();
+        let pos = BlockPos::new(3, 64, -2);
+
+        LeverBlock::emit_transition_effects(&level, pos, true);
+        LeverBlock::emit_transition_effects(&level, pos, false);
+
+        let sounds = level.block_sounds.borrow();
+        assert_eq!(sounds.len(), 2);
+        assert_eq!(sounds[0].sound, &sound_events::BLOCK_LEVER_CLICK);
+        assert_eq!(sounds[0].pitch, 0.6);
+        assert_eq!(sounds[0].exclude, None);
+        assert_eq!(sounds[1].pitch, 0.5);
+        assert_eq!(sounds[1].exclude, None);
+
+        let events = level.game_events.borrow();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event, &vanilla_game_events::BLOCK_ACTIVATE);
+        assert_eq!(events[0].source_entity_id, None);
+        assert_eq!(events[1].event, &vanilla_game_events::BLOCK_DEACTIVATE);
+        assert_eq!(events[1].source_entity_id, None);
     }
 }

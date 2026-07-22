@@ -186,6 +186,12 @@ impl PistonMovingBlockEntity {
 }
 
 impl PistonMovingState {
+    fn can_move_collided_entity(entity: &dyn Entity, cause_bounce: bool) -> bool {
+        !entity.is_spectator()
+            && entity.piston_push_reaction() != PushReaction::Ignore
+            && (!cause_bounce || entity.as_player().is_none())
+    }
+
     const fn movement_direction(self) -> Direction {
         if self.extending {
             self.direction
@@ -437,10 +443,10 @@ impl PistonMovingState {
         let cause_bounce = self.moved_state.get_block() == &vanilla_blocks::SLIME_BLOCK;
 
         for entity in entities {
-            if entity.piston_push_reaction() == PushReaction::Ignore {
+            if !Self::can_move_collided_entity(entity.as_ref(), cause_bounce) {
                 continue;
             }
-            if cause_bounce && entity.as_player().is_none() {
+            if cause_bounce {
                 let mut velocity = entity.velocity();
                 let (x, y, z) = movement.offset();
                 match movement.axis() {
@@ -558,8 +564,10 @@ impl PistonMovingState {
         }
     }
 
-    const fn direction_from_legacy_id(id: i32) -> Direction {
-        match id {
+    const fn direction_from_legacy_id(id: i8) -> Direction {
+        let remainder = (id as i32) % 6;
+        let normalized = if remainder < 0 { -remainder } else { remainder };
+        match normalized {
             1 => Direction::Up,
             2 => Direction::North,
             3 => Direction::South,
@@ -569,7 +577,7 @@ impl PistonMovingState {
         }
     }
 
-    const fn direction_legacy_id(direction: Direction) -> i32 {
+    const fn direction_legacy_id(direction: Direction) -> i8 {
         match direction {
             Direction::Down => 0,
             Direction::Up => 1,
@@ -600,7 +608,7 @@ impl BlockEntity for PistonMovingBlockEntity {
             .and_then(block_state_nbt::load)
             .unwrap_or_else(|| vanilla_blocks::AIR.default_state());
         moving.direction =
-            PistonMovingState::direction_from_legacy_id(view.int("facing").unwrap_or(0));
+            PistonMovingState::direction_from_legacy_id(view.byte("facing").unwrap_or(0));
         moving.progress = view.float("progress").unwrap_or(0.0);
         moving.progress_o = moving.progress;
         moving.extending = view.byte("extending").is_some_and(|value| value != 0);
@@ -654,14 +662,91 @@ mod tests {
 
     use glam::DVec3;
     use simdnbt::borrow::read_compound as read_borrowed_compound;
+    use simdnbt::owned::NbtTag;
+    use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
     use steel_registry::{test_support::init_test_registry, vanilla_entities};
-    use steel_utils::ChunkPos;
+    use steel_utils::{ChunkPos, types::GameType};
+    use text_components::TextComponent;
+    use uuid::Uuid;
 
     use super::*;
     use crate::behavior::init_behaviors;
     use crate::block_entity::SharedBlockEntity;
+    use crate::config::RuntimeConfig;
     use crate::entity::{SharedEntity, entities::RawEntity};
+    use crate::player::connection::NetworkConnection;
+    use crate::player::{ClientInformation, GameProfile, Player, PlayerConnection};
+    use crate::server::Server;
     use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+
+    struct TestConnection;
+
+    impl NetworkConnection for TestConnection {
+        fn compression(&self) -> Option<CompressionInfo> {
+            None
+        }
+
+        fn send_encoded(&self, _packet: EncodedPacket) {}
+
+        fn send_encoded_bundle(&self, _packets: Vec<EncodedPacket>) {}
+
+        fn disconnect_with_reason(&self, _reason: TextComponent) {}
+
+        fn tick(&self) {}
+
+        fn latency(&self) -> i32 {
+            0
+        }
+
+        fn close(&self) {}
+
+        fn closed(&self) -> bool {
+            false
+        }
+    }
+
+    fn test_player(world: Arc<World>) -> Arc<Player> {
+        let connection = Arc::new(PlayerConnection::Other(Box::new(TestConnection)));
+        let config = Arc::new(RuntimeConfig {
+            max_players: 1,
+            view_distance: 2,
+            simulation_distance: 2,
+            max_chained_neighbor_updates: 1_000_000,
+            online_mode: false,
+            auth_server: None,
+            profile_server: None,
+            encryption: false,
+            allow_flight: false,
+            motd: String::new(),
+            use_favicon: false,
+            favicon: String::new(),
+            enforce_secure_chat: false,
+            chat_spam_threshold_seconds: 10,
+            command_spam_threshold_seconds: 10,
+            compression: None,
+            server_links: None,
+            packet_workers: Some(1),
+            chunk_generation_threads: Some(1),
+            chunk_encoding_threads: Some(1),
+        });
+        Arc::new_cyclic(|weak_player| {
+            Player::new(
+                GameProfile {
+                    id: Uuid::from_u128(1),
+                    name: "PistonTestPlayer".to_owned(),
+                    properties: Vec::new(),
+                    profile_actions: None,
+                },
+                connection,
+                world,
+                Weak::<Server>::new(),
+                config,
+                1,
+                weak_player,
+                ClientInformation::default(),
+            )
+        })
+    }
 
     #[test]
     fn moving_state_and_progress_round_trip_with_vanilla_keys() {
@@ -688,10 +773,14 @@ mod tests {
 
         let mut nbt = NbtCompound::new();
         source.save_additional(&mut nbt);
+        assert!(matches!(nbt.get("facing"), Some(NbtTag::Byte(4))));
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
         let borrowed = read_borrowed_compound(&mut Cursor::new(bytes.as_slice()))
             .expect("test NBT should reborrow");
+        let view = NbtCompoundView::from(&borrowed);
+        assert_eq!(view.byte("facing"), Some(4));
+        assert_eq!(view.int("facing"), None);
 
         let loaded = PistonMovingBlockEntity::new(Weak::new(), source.get_block_pos(), state);
         loaded.load_additional(&borrowed);
@@ -700,6 +789,37 @@ mod tests {
         assert!(loaded.is_extending());
         assert!(loaded.is_source_piston());
         assert!((loaded.progress(0.0) - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn collided_entity_filter_matches_vanilla_player_and_spectator_rules() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("piston_entity_filter");
+        let player = test_player(Arc::clone(&world));
+
+        assert!(PistonMovingState::can_move_collided_entity(
+            player.as_ref(),
+            false
+        ));
+        assert!(!PistonMovingState::can_move_collided_entity(
+            player.as_ref(),
+            true
+        ));
+
+        player.restore_game_modes(GameType::Spectator, None);
+        assert!(!PistonMovingState::can_move_collided_entity(
+            player.as_ref(),
+            false
+        ));
+
+        let raw = RawEntity::new(
+            8_000,
+            DVec3::ZERO,
+            Arc::downgrade(&world),
+            &vanilla_entities::MINECART,
+        );
+        assert!(PistonMovingState::can_move_collided_entity(&raw, true));
     }
 
     #[test]

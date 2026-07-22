@@ -24,6 +24,14 @@
 //! optimized `scc` chunk traversal as the final tie order instead of reproducing
 //! implementation-specific Java collection state. Ordinary live-world ticks
 //! still use a world-global sub-tick counter.
+//!
+//! ## Exact intra-chunk ties
+//!
+//! Vanilla's `LevelChunkTicks` comparator leaves ticks with identical trigger
+//! time, priority, and sub-tick order equal, so their final order depends on
+//! Java collection and priority-queue history. Steel intentionally drains those
+//! otherwise indistinguishable ticks in insertion order instead of reproducing
+//! that implementation-specific state.
 
 use std::{
     cmp::Ordering,
@@ -69,18 +77,19 @@ pub enum TickPriority {
 }
 
 impl TickPriority {
-    /// Converts from an `i8` value, returning `None` for out-of-range values.
+    /// Resolves Vanilla's serialized priority value, clamping invalid values to an extreme.
     #[must_use]
-    pub const fn from_i8(value: i8) -> Option<Self> {
+    pub const fn by_value(value: i32) -> Self {
         match value {
-            -3 => Some(Self::ExtremelyHigh),
-            -2 => Some(Self::VeryHigh),
-            -1 => Some(Self::High),
-            0 => Some(Self::Normal),
-            1 => Some(Self::Low),
-            2 => Some(Self::VeryLow),
-            3 => Some(Self::ExtremelyLow),
-            _ => None,
+            -3 => Self::ExtremelyHigh,
+            -2 => Self::VeryHigh,
+            -1 => Self::High,
+            0 => Self::Normal,
+            1 => Self::Low,
+            2 => Self::VeryLow,
+            3 => Self::ExtremelyLow,
+            value if value < Self::ExtremelyHigh as i32 => Self::ExtremelyHigh,
+            _ => Self::ExtremelyLow,
         }
     }
 }
