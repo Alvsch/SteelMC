@@ -113,10 +113,10 @@ impl AnvilKind {
         self.level_cost_value.store(cost, Ordering::Relaxed);
     }
 
-    /// Creates the resulting item from the combining and renaming of the two input items
+    /// Builds the anvil result from combining and renaming the two input items.
     ///
-    ///# Panics
-    /// if the input container doesnt have the shape 1x2
+    /// # Panics
+    /// If the input container is not exactly two slots.
     #[tracing::instrument(skip(self, behavior, player, guard), level = "info", fields(player = %player.gameprofile.name))]
     #[expect(clippy::too_many_lines, reason = "not my choice its so long .-.")]
     pub fn create_result(

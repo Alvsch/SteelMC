@@ -132,7 +132,7 @@ pub enum MenuKindType {
     Crafting(CraftingKind),
     /// An anvil (two inputs + result + level-cost data slot).
     Anvil(AnvilKind),
-    /// All vanilla menu kind
+    /// A menu with no per-kind behavior; all-default vanilla handling.
     Basic(BasicKind),
     /// Plugin-defined menu logic.
     Custom(Box<dyn MenuKind>),

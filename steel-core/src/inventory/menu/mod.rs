@@ -315,12 +315,10 @@ impl Menu {
     fn do_quick_move(&mut self, slot_index: usize, player: &Player) {
         let mut guard = self.behavior().lock_all_containers();
 
-        // Check if slot allows pickup
         if !self.behavior().slots()[slot_index].may_pickup(&guard, player) {
             return;
         }
 
-        // Get the initial item for comparison
         let initial_item = self.behavior().slots()[slot_index].get_item(&guard).clone();
         if initial_item.is_empty() {
             return;
@@ -345,14 +343,12 @@ impl Menu {
     fn do_swap(&mut self, slot_index: usize, with: SwapTarget, player: &Player) {
         let mut guard = self.behavior().lock_all_containers();
 
-        // Get the player inventory container ID from the player's inventory arc
         let player_inv_id = ContainerId::from_arc(&player.inventory);
 
         let behavior = self.behavior();
         let target_slot = &behavior.slots()[slot_index];
         let inventory_slot = with.inventory_slot();
 
-        // Get items from target slot (menu) and source (player inventory via guard)
         let target_item = target_slot.get_item(&guard).clone();
         let source_item = guard
             .get(player_inv_id)
@@ -380,7 +376,6 @@ impl Menu {
             if target_slot.may_place(&source_item) {
                 let max_size = target_slot.get_max_stack_size_for_item(&guard, &source_item);
                 if source_item.count > max_size {
-                    // Split the stack
                     target_slot.set_by_player(
                         &mut guard,
                         source_item.copy_with_count(max_size),
@@ -390,7 +385,6 @@ impl Menu {
                         inv.get_item_mut(inventory_slot).shrink(max_size);
                     }
                 } else {
-                    // Move entire stack
                     if let Some(inv) = guard.get_mut(player_inv_id) {
                         inv.set_item(inventory_slot, ItemStack::empty());
                     }

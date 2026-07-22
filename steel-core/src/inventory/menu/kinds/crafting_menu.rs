@@ -24,14 +24,8 @@ use steel_utils::locks::Shared;
 /// Builds the crafting table menu with a 3x3 crafting grid.
 ///
 /// Based on Java's `CraftingMenu`.
-///
-/// # Arguments
-/// * `inventory` - The player's inventory
-/// * `container_id` - The container ID for this menu (1-100)
-/// * `block_pos` - The position of the crafting table block
 #[must_use]
 pub fn crafting(inventory: Shared<PlayerInventory>, container_id: u8, block_pos: BlockPos) -> Menu {
-    // Create the crafting containers
     let crafting_container = CraftingContainer::new(3, 3).into_shared();
     let result_container = ResultContainer::new().into_shared();
 

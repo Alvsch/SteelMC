@@ -31,7 +31,6 @@ pub const INVENTORY_MENU_CONTAINER_ID: u8 = 0;
 /// - Slot 40: Offhand
 #[must_use]
 pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
-    // Create the crafting containers
     let crafting_container = CraftingContainer::new(2, 2).into_shared();
     let result_container = ResultContainer::new().into_shared();
 
@@ -119,7 +118,7 @@ impl InventoryKind {
         self.handler.update_result(guard);
     }
 
-    /// Helper method to move items between inventory and hotbar.
+    /// Moves items between the main inventory and hotbar.
     fn move_between_inventory_and_hotbar(
         &self,
         behavior: &MenuBehavior,
@@ -180,7 +179,6 @@ impl MenuKind for InventoryKind {
             return Some(ItemStack::empty());
         }
 
-        // Get the current item from the slot
         let stack = behavior.slots()[slot_index].get_item(guard).clone();
         if stack.is_empty() {
             return Some(ItemStack::empty());
@@ -286,7 +284,6 @@ impl MenuKind for InventoryKind {
 
         behavior.update_quick_move_source(guard, slot_index, &stack_mut, &clicked);
 
-        // Check if unchanged
         if stack_mut.count == clicked.count {
             return Some(ItemStack::empty());
         }

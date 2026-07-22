@@ -1,19 +1,8 @@
-//! A menu can be considered everything that's shown on the screen.
-//! It consists of slots, slots consist of a view into a single inventory and position.
-//! When you have a chest open for example a chest menu is shown, consisting of the chests slots and the players inventory slots.
+//! [`MenuBehavior`]: the slots, client-sync state, and click handling every
+//! menu shares, independent of its [`MenuKind`](super::kind::MenuKind).
 //!
-//! A menu is always the middle man between the server and the client.
-//! This means that when the player doesn't have any menu open it still has its own inventory menu open.
-//!
-//! A menu holds 2 important structures:
-//! - All slots for that menu
-//! - The clients perception of the itemstacks
-//!
-//! This makes it so every time we run a sync (once per tick) we can compare the actual itemstacks
-//! with the clients perception of the itemstacks.
-//! And if there are mismatches we can send the correct itemstacks to the client.
-//!
-//! The client also sends the itemstacks it thinks it has on interaction, so this makes it so we only update the client if they mismatch.
+//! Each menu mirrors the client's perception of its slots and carried item, so
+//! the once-per-tick sync only sends what actually differs.
 
 use std::{mem, sync::Arc};
 
@@ -156,8 +145,7 @@ impl MenuBehavior {
         self.instance
     }
 
-    /// Adds a data slot to the menu with an initial value.
-    /// Returns the index of the added data slot.
+    /// Adds a data slot with an initial value, returning its index.
     pub(crate) fn add_data_slot(&mut self, initial_value: i16) -> usize {
         let index = self.data_slots.len();
         self.data_slots.push(initial_value);
@@ -208,7 +196,6 @@ impl MenuBehavior {
     /// Moves items from `item_stack` to slots in the range [`start_slot`, `end_slot`),
     /// walking the range in `direction`. Returns true if any items were moved.
     ///
-    /// This is used by `quick_move_stack` implementations to distribute items.
     /// Based on Java's `AbstractContainerMenu::moveItemStackTo`.
     pub fn move_item_stack_to(
         &self,
@@ -303,13 +290,11 @@ impl MenuBehavior {
     }
 
     /// Suppresses remote updates during click handling.
-    /// Call this before processing a click.
     pub const fn suppress_remote_updates(&mut self) {
         self.suppress_remote_updates = true;
     }
 
     /// Resumes remote updates after click handling.
-    /// Call this after processing a click.
     pub const fn resume_remote_updates(&mut self) {
         self.suppress_remote_updates = false;
     }
@@ -393,7 +378,6 @@ impl MenuBehavior {
 
         Self::send_packet(connection, packet);
 
-        // Send all data slots
         for i in 0..self.data_slots.len() {
             self.remote_data_slots[i] = self.data_slots[i];
             let packet = CContainerSetData {
@@ -568,7 +552,6 @@ impl MenuBehavior {
             return;
         }
 
-        // Must have items to drag
         if self.carried.is_empty() {
             self.reset_quick_craft();
             return;
@@ -613,7 +596,6 @@ impl MenuBehavior {
             self.reset_quick_craft();
             return;
         };
-        // Finishing the drag - distribute items
         if !self.quickcraft_slots.is_empty() {
             if self.quickcraft_slots.len() == 1 {
                 // Only one slot - treat as a regular pickup click
@@ -704,7 +686,6 @@ impl MenuBehavior {
 
         let slot = &self.slots[slot_index];
 
-        // Get the current item in the slot
         let slot_item = slot.get_item(&guard).clone();
         let carried = mem::take(&mut self.carried);
 
