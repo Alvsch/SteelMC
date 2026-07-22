@@ -34,8 +34,8 @@ use crate::chunk::chunk_holder::{
 };
 pub(crate) use crate::chunk::chunk_scheduler::ChunkMapSchedulingTimings;
 use crate::chunk::chunk_scheduler::{
-    ChunkSchedulingBoundaryStep, ChunkSchedulingCoordinator, ChunkTicketOperation,
-    ChunkTicketRevision, PreparedChunkSchedulingEpoch,
+    ChunkMapPreparationTimings, ChunkSchedulingBoundaryStep, ChunkSchedulingCoordinator,
+    ChunkTicketOperation, ChunkTicketRevision, PreparedChunkSchedulingEpoch,
 };
 use crate::chunk::chunk_ticket_manager::{
     ChunkTicket, ChunkTicketLevel, ChunkTicketManager, ENDER_PEARL_TICKET_TIMEOUT_TICKS,
@@ -180,6 +180,14 @@ struct TickingReadinessCandidate {
     holder: Arc<ChunkHolder>,
     desired: TickingReadiness,
     target: TickingReadiness,
+}
+
+#[derive(Default)]
+struct ReadinessReconcileResult {
+    snapshot_changed: bool,
+    post_process_generation: Duration,
+    post_processed_count: usize,
+    candidate_count: usize,
 }
 
 #[derive(Debug, Default)]
@@ -1553,13 +1561,22 @@ impl ChunkMap {
         Ok(snapshot_changed)
     }
 
+    #[cfg(test)]
     fn reconcile_ticking_readiness(
         &self,
         changed_positions: &[ChunkPos],
     ) -> Result<bool, FullNeighborhoodError> {
+        self.reconcile_ticking_readiness_measured(changed_positions)
+            .map(|result| result.snapshot_changed)
+    }
+
+    fn reconcile_ticking_readiness_measured(
+        &self,
+        changed_positions: &[ChunkPos],
+    ) -> Result<ReadinessReconcileResult, FullNeighborhoodError> {
         let publications = self.full_publications.drain();
         if publications.is_empty() && changed_positions.is_empty() {
-            return Ok(false);
+            return Ok(ReadinessReconcileResult::default());
         }
         let mut contributor_updates = FxHashMap::default();
         let mut activation_holders = FxHashMap::default();
@@ -1600,7 +1617,7 @@ impl ChunkMap {
     /// This runs only after lifecycle/readiness changes, never as fixed per-tick
     /// bookkeeping. The published snapshot owns holders but never chunk guards,
     /// so callbacks cannot retain section or chunk locks.
-    pub(crate) fn rebuild_ticking_chunk_snapshot(&self) {
+    pub(crate) fn rebuild_ticking_chunk_snapshot(&self) -> usize {
         let mut block = Vec::new();
         let mut random_chunk_indices = Vec::new();
         let mut entity_indices = Vec::new();
@@ -1646,11 +1663,13 @@ impl ChunkMap {
             );
         }
 
+        let ticking_chunk_count = block.len();
         self.ticking_chunks.store(Arc::new(TickingChunkSnapshot {
             block: block.into_boxed_slice(),
             random_chunk_indices: random_chunk_indices.into_boxed_slice(),
             entity_indices: entity_indices.into_boxed_slice(),
         }));
+        ticking_chunk_count
     }
 
     fn ticking_snapshot_membership(
@@ -1786,13 +1805,20 @@ impl ChunkMap {
         snapshot_changed
     }
 
-    fn apply_final_readiness(&self, dirty: Vec<(ChunkPos, FullNeighborhoodCounts)>) -> bool {
+    fn apply_final_readiness(
+        &self,
+        dirty: Vec<(ChunkPos, FullNeighborhoodCounts)>,
+    ) -> ReadinessReconcileResult {
         if dirty.is_empty() {
-            return false;
+            return ReadinessReconcileResult::default();
         }
 
         let candidates = self.readiness_candidates(&dirty, None);
-        let mut snapshot_changed = self.apply_readiness_demotions(&candidates);
+        let mut result = ReadinessReconcileResult {
+            snapshot_changed: self.apply_readiness_demotions(&candidates),
+            candidate_count: candidates.len(),
+            ..ReadinessReconcileResult::default()
+        };
         self.update_pending_readiness(&candidates);
 
         let world = self.world_gen_context.world();
@@ -1802,11 +1828,15 @@ impl ChunkMap {
                 continue;
             }
 
-            if current == TickingReadiness::Unready
-                && let Err(error) = candidate.holder.post_process_generation()
-            {
-                Self::log_postprocessing_failure(candidate, error);
-                continue;
+            if current == TickingReadiness::Unready {
+                let start = Instant::now();
+                let post_process_result = candidate.holder.post_process_generation();
+                result.post_process_generation += start.elapsed();
+                if let Err(error) = post_process_result {
+                    Self::log_postprocessing_failure(candidate, error);
+                    continue;
+                }
+                result.post_processed_count += 1;
             }
 
             if current == TickingReadiness::Unready
@@ -1824,8 +1854,9 @@ impl ChunkMap {
                 continue;
             };
             let simulation_level = candidate.holder.simulation_level();
-            snapshot_changed |= Self::ticking_snapshot_membership(previous, simulation_level)
-                != Self::ticking_snapshot_membership(candidate.target, simulation_level);
+            result.snapshot_changed |=
+                Self::ticking_snapshot_membership(previous, simulation_level)
+                    != Self::ticking_snapshot_membership(candidate.target, simulation_level);
             world.update_entity_chunk_visibility(
                 candidate.pos,
                 candidate.holder.entity_visibility(),
@@ -1833,7 +1864,7 @@ impl ChunkMap {
         }
 
         self.update_pending_readiness(&candidates);
-        snapshot_changed
+        result
     }
 
     fn update_pending_readiness(&self, candidates: &[TickingReadinessCandidate]) {
@@ -1875,7 +1906,7 @@ impl ChunkMap {
         });
     }
 
-    fn rebuild_ticking_readiness(&self) -> Result<(), FullNeighborhoodError> {
+    fn rebuild_ticking_readiness(&self) -> Result<ReadinessReconcileResult, FullNeighborhoodError> {
         self.full_publications.drain();
         let mut active = Vec::new();
         self.chunks.iter_sync(|pos, holder| {
@@ -1902,24 +1933,30 @@ impl ChunkMap {
         let mut activation_holders = active.iter().map(|(_, holder)| holder).collect::<Vec<_>>();
         activation_holders.sort_unstable_by_key(|holder| PackedChunkPos::from(holder.get_pos()));
         self.activate_block_entities(activation_holders);
-        let _ = self.apply_final_readiness(dirty);
-        Ok(())
+        Ok(self.apply_final_readiness(dirty))
     }
 
-    fn recover_ticking_readiness_index(&self, error: FullNeighborhoodError) {
+    fn recover_ticking_readiness_index(
+        &self,
+        error: FullNeighborhoodError,
+    ) -> ReadinessReconcileResult {
         tracing::error!(
             ?error,
             "Full-neighborhood index invariant failed; rebuilding from active chunks"
         );
         self.clear_all_ticking_readiness();
         *self.full_neighborhood.lock() = FullNeighborhoodIndex::default();
-        if let Err(rebuild_error) = self.rebuild_ticking_readiness() {
-            tracing::error!(
-                ?rebuild_error,
-                "Failed to rebuild Full-neighborhood index; ticking readiness remains revoked"
-            );
-            self.clear_all_ticking_readiness();
-            *self.full_neighborhood.lock() = FullNeighborhoodIndex::default();
+        match self.rebuild_ticking_readiness() {
+            Ok(result) => result,
+            Err(rebuild_error) => {
+                tracing::error!(
+                    ?rebuild_error,
+                    "Failed to rebuild Full-neighborhood index; ticking readiness remains revoked"
+                );
+                self.clear_all_ticking_readiness();
+                *self.full_neighborhood.lock() = FullNeighborhoodIndex::default();
+                ReadinessReconcileResult::default()
+            }
         }
     }
 
@@ -2041,33 +2078,49 @@ impl ChunkMap {
         self: &Arc<Self>,
         epoch: PreparedChunkSchedulingEpoch,
     ) -> ChunkMapSchedulingTimings {
-        // Finalized old holders leave the block-entity world before a new holder at
-        // the same position can be committed and activated below.
-        self.finish_block_entity_unloads();
-
         let PreparedChunkSchedulingEpoch {
             mut ticket_manager,
             applied_revision,
             mut changes,
-            mut timings,
+            timings,
         } = epoch;
+        let mut timings = timings.into_scheduling_timings();
 
-        let changed_positions = changes.iter().map(|change| change.pos).collect::<Vec<_>>();
-        let mut rebuild_ticking_snapshot = self.simulation_changes_ticking_snapshot(&changes);
-        let rebuild_readiness = match self.prepare_ticking_readiness_demotions(&changes) {
-            Ok(changed) => {
-                rebuild_ticking_snapshot |= changed;
-                false
-            }
-            Err(error) => {
-                tracing::error!(
-                    ?error,
-                    "Full-neighborhood index invariant failed before lifecycle commit; rebuilding after the commit"
-                );
-                self.clear_all_ticking_readiness();
-                *self.full_neighborhood.lock() = FullNeighborhoodIndex::default();
-                true
-            }
+        {
+            let _span = tracing::trace_span!("block_entity_unloads").entered();
+            let start = Instant::now();
+            // Finalized old holders leave the block-entity world before a new holder at
+            // the same position can be committed and activated below.
+            self.finish_block_entity_unloads();
+            timings.block_entity_unloads = start.elapsed();
+        }
+
+        let (changed_positions, mut rebuild_ticking_snapshot, rebuild_readiness) = {
+            let _span = tracing::trace_span!("readiness_demotions").entered();
+            let start = Instant::now();
+            let changed_positions = changes.iter().map(|change| change.pos).collect::<Vec<_>>();
+            let mut rebuild_ticking_snapshot = self.simulation_changes_ticking_snapshot(&changes);
+            let rebuild_readiness = match self.prepare_ticking_readiness_demotions(&changes) {
+                Ok(changed) => {
+                    rebuild_ticking_snapshot |= changed;
+                    false
+                }
+                Err(error) => {
+                    tracing::error!(
+                        ?error,
+                        "Full-neighborhood index invariant failed before lifecycle commit; rebuilding after the commit"
+                    );
+                    self.clear_all_ticking_readiness();
+                    *self.full_neighborhood.lock() = FullNeighborhoodIndex::default();
+                    true
+                }
+            };
+            timings.readiness_demotions = start.elapsed();
+            (
+                changed_positions,
+                rebuild_ticking_snapshot,
+                rebuild_readiness,
+            )
         };
 
         let holders_to_schedule = {
@@ -2088,22 +2141,39 @@ impl ChunkMap {
             holders
         };
 
-        if rebuild_readiness {
-            if let Err(error) = self.rebuild_ticking_readiness() {
-                self.recover_ticking_readiness_index(error);
-            }
-            rebuild_ticking_snapshot = true;
-        } else {
-            match self.reconcile_ticking_readiness(&changed_positions) {
-                Ok(changed) => rebuild_ticking_snapshot |= changed,
-                Err(error) => {
-                    self.recover_ticking_readiness_index(error);
-                    rebuild_ticking_snapshot = true;
+        let readiness_result = {
+            let _span = tracing::trace_span!("readiness_reconcile").entered();
+            let start = Instant::now();
+            let result = if rebuild_readiness {
+                rebuild_ticking_snapshot = true;
+                match self.rebuild_ticking_readiness() {
+                    Ok(result) => result,
+                    Err(error) => self.recover_ticking_readiness_index(error),
                 }
-            }
-        }
+            } else {
+                match self.reconcile_ticking_readiness_measured(&changed_positions) {
+                    Ok(result) => {
+                        rebuild_ticking_snapshot |= result.snapshot_changed;
+                        result
+                    }
+                    Err(error) => {
+                        rebuild_ticking_snapshot = true;
+                        self.recover_ticking_readiness_index(error)
+                    }
+                }
+            };
+            timings.readiness_reconcile = start.elapsed();
+            result
+        };
+        timings.post_process_generation = readiness_result.post_process_generation;
+        timings.post_processed_count = readiness_result.post_processed_count;
+        timings.readiness_candidate_count = readiness_result.candidate_count;
+
         if rebuild_ticking_snapshot {
-            self.rebuild_ticking_chunk_snapshot();
+            let _span = tracing::trace_span!("ticking_snapshot_rebuild").entered();
+            let start = Instant::now();
+            timings.rebuilt_ticking_chunk_count = self.rebuild_ticking_chunk_snapshot();
+            timings.ticking_snapshot_rebuild = start.elapsed();
         }
 
         ticket_manager.recycle_changes(changes);
@@ -2140,7 +2210,7 @@ impl ChunkMap {
         applied_revision: ChunkTicketRevision,
         holders_to_schedule: Vec<(Arc<ChunkHolder>, ChunkTicketLevel)>,
     ) -> PreparedChunkSchedulingEpoch {
-        let mut timings = ChunkMapSchedulingTimings::default();
+        let mut timings = ChunkMapPreparationTimings::default();
 
         let applied_revision = {
             let _span = tracing::trace_span!("ticket_updates").entered();

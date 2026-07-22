@@ -4267,7 +4267,11 @@ impl Server {
             let timings = world.chunk_map.advance_scheduling();
 
             let total = timings.ticket_updates
+                + timings.block_entity_unloads
+                + timings.readiness_demotions
                 + timings.lifecycle_commit
+                + timings.readiness_reconcile
+                + timings.ticking_snapshot_rebuild
                 + timings.schedule_generation
                 + timings.run_generation
                 + timings.process_unloads;
@@ -4277,7 +4281,15 @@ impl Server {
                     world = i,
                     elapsed = ?total,
                     ticket_updates = ?timings.ticket_updates,
+                    block_entity_unloads = ?timings.block_entity_unloads,
+                    readiness_demotions = ?timings.readiness_demotions,
                     lifecycle_commit = ?timings.lifecycle_commit,
+                    readiness_reconcile = ?timings.readiness_reconcile,
+                    post_process_generation = ?timings.post_process_generation,
+                    post_processed_count = timings.post_processed_count,
+                    readiness_candidate_count = timings.readiness_candidate_count,
+                    ticking_snapshot_rebuild = ?timings.ticking_snapshot_rebuild,
+                    rebuilt_ticking_chunk_count = timings.rebuilt_ticking_chunk_count,
                     schedule_generation = ?timings.schedule_generation,
                     scheduled_count = timings.scheduled_count,
                     run_generation = ?timings.run_generation,
