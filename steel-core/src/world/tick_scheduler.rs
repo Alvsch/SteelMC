@@ -1630,9 +1630,10 @@ mod tests {
 
         let snapshot_len = receiver.recv_timeout(Duration::from_secs(2));
         drop(metadata);
-        if worker.join().is_err() {
-            panic!("scheduled-tick snapshot worker panicked");
-        }
+        assert!(
+            worker.join().is_ok(),
+            "scheduled-tick snapshot worker panicked"
+        );
         assert_eq!(
             snapshot_len,
             Ok(1),
