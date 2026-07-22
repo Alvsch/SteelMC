@@ -33,9 +33,9 @@
 //!
 //! - **Placements never overlap.** A cell can belong to at most one
 //!   container-backed placement ([`GridPlacer::place`],
-//!   [`GridPlacer::place_restricted`], [`GridPlacer::place_display`],
-//!   [`GridPlacer::place_result`]); a second claim panics with the offending
-//!   cell.
+//!   [`GridPlacer::place_restricted`], [`GridPlacer::place_guarded`],
+//!   [`GridPlacer::place_display`], [`GridPlacer::place_result`]); a second
+//!   claim panics with the offending cell.
 //! - **Paint is decoration.** [`GridPlacer::paint`] layers freely (the last
 //!   paint on a cell wins) and is always masked by placements, regardless of
 //!   call order. Painted cells become locked display slots of one
@@ -478,6 +478,17 @@ impl GridPlacer<'_> {
         }
     }
 
+    /// The resolved size of `rect` in this scope as `(columns, rows)`, with
+    /// unbounded ends run to the scope's edges.
+    ///
+    /// # Panics
+    /// If the rect does not fit this scope.
+    #[must_use]
+    pub fn size_of(&self, rect: Rect) -> (usize, usize) {
+        let abs = self.to_abs(rect);
+        (abs.w, abs.h)
+    }
+
     /// Adds plain slots for the container over `rect`, covering its slots
     /// `0..rect.area()` in row-major order.
     ///
@@ -506,10 +517,13 @@ impl GridPlacer<'_> {
         self.claim_functional(rect, PlacementKind::Normal { container, offset })
     }
 
-    /// Adds slots for the container over `rect` whose interactions are guarded
-    /// by `may_place` and `may_pickup` (the grid analogue of
-    /// [`MenuBuilder::restricted_section`]). The closures are shared across
-    /// all slots of the placement.
+    /// Adds slots for the container over `rect` that only accept items passing
+    /// `may_place` (the grid analogue of [`MenuBuilder::restricted_section`]).
+    /// The closure is shared across all slots of the placement and receives
+    /// the container-local slot index.
+    ///
+    /// Items can always be taken back out; use
+    /// [`place_guarded`](Self::place_guarded) to also guard pickup.
     ///
     /// # Panics
     /// See [`place`](Self::place).
@@ -518,11 +532,8 @@ impl GridPlacer<'_> {
         rect: Rect,
         container: impl Into<ContainerRef>,
         may_place: impl Fn(usize, &ItemStack) -> bool + Send + Sync + 'static,
-        may_pickup: Option<
-            impl Fn(usize, &ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync + 'static,
-        >,
     ) -> Region {
-        self.place_restricted_at_offset(rect, container, 0, may_place, may_pickup)
+        self.place_restricted_at_offset(rect, container, 0, may_place)
     }
 
     /// Like [`place_restricted`](Self::place_restricted), but covering the
@@ -536,13 +547,52 @@ impl GridPlacer<'_> {
         container: impl Into<ContainerRef>,
         offset: usize,
         may_place: impl Fn(usize, &ItemStack) -> bool + Send + Sync + 'static,
-        may_pickup: Option<
-            impl Fn(usize, &ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync + 'static,
-        >,
     ) -> Region {
-        let may_place: MayPlaceFn = Arc::new(may_place);
-        let may_pickup = may_pickup.map(|it| -> MayPickupFn { Arc::new(it) });
-        self.place_restricted_fns(rect, container, offset, may_place, may_pickup)
+        self.place_restricted_fns(rect, container, offset, Arc::new(may_place), None)
+    }
+
+    /// Like [`place_restricted`](Self::place_restricted), but also guards
+    /// taking items out: pickup is only allowed while `may_pickup` returns
+    /// true (the grid analogue of [`MenuBuilder::guarded_section`]).
+    ///
+    /// # Panics
+    /// See [`place`](Self::place).
+    pub fn place_guarded(
+        &mut self,
+        rect: Rect,
+        container: impl Into<ContainerRef>,
+        may_place: impl Fn(usize, &ItemStack) -> bool + Send + Sync + 'static,
+        may_pickup: impl Fn(usize, &ContainerLockGuard, &Player, &ItemStack) -> bool
+        + Send
+        + Sync
+        + 'static,
+    ) -> Region {
+        self.place_guarded_at_offset(rect, container, 0, may_place, may_pickup)
+    }
+
+    /// Like [`place_guarded`](Self::place_guarded), but covering the container
+    /// slots starting at `offset`.
+    ///
+    /// # Panics
+    /// See [`place`](Self::place).
+    pub fn place_guarded_at_offset(
+        &mut self,
+        rect: Rect,
+        container: impl Into<ContainerRef>,
+        offset: usize,
+        may_place: impl Fn(usize, &ItemStack) -> bool + Send + Sync + 'static,
+        may_pickup: impl Fn(usize, &ContainerLockGuard, &Player, &ItemStack) -> bool
+        + Send
+        + Sync
+        + 'static,
+    ) -> Region {
+        self.place_restricted_fns(
+            rect,
+            container,
+            offset,
+            Arc::new(may_place),
+            Some(Arc::new(may_pickup)),
+        )
     }
 
     /// Adds locked display slots for the container over `rect` (the grid
@@ -1094,11 +1144,11 @@ mod tests {
     fn restricted_placement_covers_like_place() {
         let mut b = MenuBuilder::new(None, 0);
         let region = b.grid(2, |g| {
-            let region = g.place_restricted(
+            let region = g.place_guarded(
                 Rect::cols(2..5).rows(..),
                 container(6),
                 |_slot, _stack| true,
-                Some(|_: usize, _: &ContainerLockGuard, _: &Player, _: &ItemStack| false),
+                |_, _, _, _| false,
             );
             g.paint_all(ItemStack::empty());
             region

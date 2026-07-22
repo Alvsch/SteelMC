@@ -797,7 +797,7 @@ impl Player {
             drop(open_menu_guard);
             let mut menu = self.inventory_menu.lock();
 
-            if i32::from(menu.behavior().container_id) != packet.container_id {
+            if i32::from(menu.behavior().container_id()) != packet.container_id {
                 return;
             }
 
@@ -844,7 +844,7 @@ impl Player {
             );
         }
 
-        let full_resync_needed = packet.state_id as u32 != menu.behavior().get_state_id();
+        let full_resync_needed = packet.state_id as u32 != menu.behavior().state_id();
 
         menu.behavior_mut().suppress_remote_updates();
 
@@ -859,7 +859,7 @@ impl Player {
             // our view of what it knows, or `broadcast_changes` will think the
             // client already has the freshly-crafted result and skip syncing it
             // — leaving the slot blank until the next click forces a resend.
-            if menu.behavior().slots.get(slot).is_some_and(Slot::is_fake) {
+            if menu.behavior().slots().get(slot).is_some_and(Slot::is_fake) {
                 menu.behavior_mut().mark_remote_slot_unknown(slot);
                 continue;
             }
@@ -870,7 +870,8 @@ impl Player {
         menu.behavior_mut().resume_remote_updates();
 
         if full_resync_needed {
-            menu.behavior_mut().broadcast_full_state(&self.connection);
+            menu.behavior_mut()
+                .send_all_data_to_remote(&self.connection);
         } else {
             menu.behavior_mut().broadcast_changes(&self.connection);
         }
@@ -933,7 +934,7 @@ impl Player {
 
             {
                 let mut guard = menu.behavior().lock_all_containers();
-                if let Some(slot) = menu.behavior().get_slot(slot_index) {
+                if let Some(slot) = menu.behavior().slots().get(slot_index) {
                     let previous = slot.get_item(&guard).clone();
                     slot.set_by_player(&mut guard, item_stack.clone(), &previous);
                 }
@@ -1113,13 +1114,13 @@ impl Player {
             if let Some(menu) = open_menu.as_mut() {
                 let behavior = menu.behavior_mut();
                 count += clear_or_count_matching_stack(
-                    &mut behavior.carried,
+                    behavior.carried_mut(),
                     predicate,
                     amount_to_remove - count,
                     counting_only,
                 );
-                if behavior.carried.is_empty() {
-                    behavior.set_carried(ItemStack::empty());
+                if behavior.carried().is_empty() {
+                    *behavior.carried_mut() = ItemStack::empty();
                 }
                 true
             } else {
@@ -1130,13 +1131,13 @@ impl Player {
             let mut inventory_menu = self.inventory_menu.lock();
             let behavior = inventory_menu.behavior_mut();
             count += clear_or_count_matching_stack(
-                &mut behavior.carried,
+                behavior.carried_mut(),
                 predicate,
                 amount_to_remove - count,
                 counting_only,
             );
-            if behavior.carried.is_empty() {
-                behavior.set_carried(ItemStack::empty());
+            if behavior.carried().is_empty() {
+                *behavior.carried_mut() = ItemStack::empty();
             }
         }
 

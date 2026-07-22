@@ -3141,11 +3141,8 @@ mod tests {
                 .lock()
                 .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 2));
         }
-        player
-            .inventory_menu
-            .lock()
-            .behavior_mut()
-            .set_carried(ItemStack::with_count(&vanilla_items::STONE, 4));
+        *player.inventory_menu.lock().behavior_mut().carried_mut() =
+            ItemStack::with_count(&vanilla_items::STONE, 4);
 
         let stone = |stack: &ItemStack| stack.is(&vanilla_items::STONE);
         assert_eq!(player.clear_or_count_matching_items(&stone, 5), 5);
@@ -3160,35 +3157,12 @@ mod tests {
                 .get_item(0)
                 .is_empty()
         );
-        assert_eq!(
-            player
-                .inventory_menu
-                .lock()
-                .behavior()
-                .get_carried()
-                .count(),
-            4
-        );
+        assert_eq!(player.inventory_menu.lock().behavior().carried().count(), 4);
 
         assert_eq!(player.clear_or_count_matching_items(&stone, 0), 4);
-        assert_eq!(
-            player
-                .inventory_menu
-                .lock()
-                .behavior()
-                .get_carried()
-                .count(),
-            4
-        );
+        assert_eq!(player.inventory_menu.lock().behavior().carried().count(), 4);
         assert_eq!(player.clear_or_count_matching_items(&stone, -1), 4);
-        assert!(
-            player
-                .inventory_menu
-                .lock()
-                .behavior()
-                .get_carried()
-                .is_empty()
-        );
+        assert!(player.inventory_menu.lock().behavior().carried().is_empty());
     }
 
     #[test]

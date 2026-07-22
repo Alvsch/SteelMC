@@ -1,3 +1,20 @@
+//! A menu can be considered everything that's shown on the screen.
+//! It consists of slots, slots consist of a view into a single inventory and position.
+//! When you have a chest open for example a chest menu is shown, consisting of the chests slots and the players inventory slots.
+//!
+//! A menu is always the middle man between the server and the client.
+//! This means that when the player doesn't have any menu open it still has its own inventory menu open.
+//!
+//! A menu holds 2 important structures:
+//! - All slots for that menu
+//! - The clients perception of the itemstacks
+//!
+//! This makes it so every time we run a sync (once per tick) we can compare the actual itemstacks
+//! with the clients perception of the itemstacks.
+//! And if there are mismatches we can send the correct itemstacks to the client.
+//!
+//! The client also sends the itemstacks it thinks it has on interaction, so this makes it so we only update the client if they mismatch.
+
 use std::{mem, sync::Arc};
 
 use steel_protocol::{
@@ -26,28 +43,26 @@ use crate::{
 /// Shared behavior and state for all menu types.
 pub struct MenuBehavior {
     /// The slots in this menu.
-    pub slots: Vec<SlotType>,
-    /// Cloned itemstacks from the actual slots (updated each sync).
-    pub last_slots: Vec<ItemStack>,
+    slots: Vec<SlotType>,
     /// The client's perception of the itemstacks.
-    pub remote_slots: Vec<RemoteSlot>,
+    remote_slots: Vec<RemoteSlot>,
     /// The item being carried by the cursor.
-    pub carried: ItemStack,
+    carried: ItemStack,
     /// The client's perception of the carried item.
-    pub remote_carried: RemoteSlot,
+    remote_carried: RemoteSlot,
     /// The container ID (0 for player inventory).
-    pub container_id: u8,
+    container_id: u8,
     /// Incremented every time the server and client mismatch.
-    pub state_id: u32,
+    state_id: u32,
     /// None for player inventory. Some for all other menus.
-    pub menu_type: Option<MenuTypeRef>,
+    menu_type: Option<MenuTypeRef>,
     /// When true, remote updates are suppressed (during click handling).
     suppress_remote_updates: bool,
     /// The kind of drag in progress, or `None` when idle (replaces vanilla's
     /// `quickcraftStatus`/`quickcraftType` ints).
-    pub quickcraft: Option<DragKind>,
+    quickcraft: Option<DragKind>,
     /// Slots involved in the current quickcraft operation.
-    pub quickcraft_slots: Vec<usize>,
+    quickcraft_slots: Vec<usize>,
     /// Data slots (for furnace progress, enchanting levels, etc.).
     data_slots: Vec<i16>,
     /// The client's perception of the data slot values.
@@ -73,7 +88,6 @@ impl MenuBehavior {
         Self {
             instance,
             slots,
-            last_slots: vec![ItemStack::empty(); slot_count],
             remote_slots: vec![RemoteSlot::Unknown; slot_count],
             carried: ItemStack::empty(),
             remote_carried: RemoteSlot::Unknown,
@@ -93,6 +107,48 @@ impl MenuBehavior {
     #[must_use]
     pub fn lock_all_containers(&self) -> ContainerLockGuard {
         ContainerLockGuard::lock_all(&self.container_refs)
+    }
+
+    /// The slots of this menu, fixed at build time.
+    #[must_use]
+    pub fn slots(&self) -> &[SlotType] {
+        &self.slots
+    }
+
+    /// The item carried by the cursor.
+    #[must_use]
+    pub const fn carried(&self) -> &ItemStack {
+        &self.carried
+    }
+
+    /// The item carried by the cursor.
+    #[must_use]
+    pub const fn carried_mut(&mut self) -> &mut ItemStack {
+        &mut self.carried
+    }
+
+    /// The container ID (0 for the player inventory).
+    #[must_use]
+    pub const fn container_id(&self) -> u8 {
+        self.container_id
+    }
+
+    /// The menu type, or `None` for the player's own inventory.
+    #[must_use]
+    pub const fn menu_type(&self) -> Option<MenuTypeRef> {
+        self.menu_type
+    }
+
+    /// The current state ID.
+    #[must_use]
+    pub const fn state_id(&self) -> u32 {
+        self.state_id
+    }
+
+    /// The kind of drag in progress, or `None` when idle.
+    #[must_use]
+    pub const fn quickcraft(&self) -> Option<DragKind> {
+        self.quickcraft
     }
 
     /// The identity stamp of the menu this behavior belongs to.
@@ -126,14 +182,6 @@ impl MenuBehavior {
     pub fn reset_quick_craft(&mut self) {
         self.quickcraft = None;
         self.quickcraft_slots.clear();
-    }
-
-    /// Returns true if a slot can be dragged to during quickcraft.
-    /// Menus can override this via the Menu trait.
-    #[expect(clippy::unused_self, reason = "this is an api function")]
-    #[must_use]
-    pub const fn can_drag_to(&self, _slot_index: usize) -> bool {
-        true
     }
 
     /// Moves items from `item_stack` to slots in the range [`start_slot`, `end_slot`),
@@ -233,12 +281,6 @@ impl MenuBehavior {
         anything_changed
     }
 
-    /// Returns the current state ID.
-    #[must_use]
-    pub const fn get_state_id(&self) -> u32 {
-        self.state_id
-    }
-
     /// Suppresses remote updates during click handling.
     /// Call this before processing a click.
     pub const fn suppress_remote_updates(&mut self) {
@@ -273,82 +315,25 @@ impl MenuBehavior {
             }
         }
 
-        // Transfer state for matching slots
         for (slot_index, slot) in self.slots.iter().enumerate() {
             if let Some(key) = slot.container_key()
                 && let Some(&other_slot_index) = other_slots.get(&key)
             {
-                // Transfer last_slots (the cached item state)
-                self.last_slots[slot_index] = other.last_slots[other_slot_index].clone();
-                // Transfer remote_slots (client's perception)
                 self.remote_slots[slot_index] = other.remote_slots[other_slot_index].clone();
             }
         }
     }
 
-    /// Returns the number of slots in this menu.
+    /// The number of slots in this menu.
     #[must_use]
     pub const fn slot_count(&self) -> usize {
         self.slots.len()
     }
 
-    /// Gets a reference to a slot by index.
-    #[must_use]
-    pub fn get_slot(&self, index: usize) -> Option<&SlotType> {
-        self.slots.get(index)
-    }
-
-    /// Gets the carried item (cursor).
-    #[must_use]
-    pub const fn get_carried(&self) -> &ItemStack {
-        &self.carried
-    }
-
-    /// Sets the carried item (cursor).
-    pub fn set_carried(&mut self, item: ItemStack) {
-        self.carried = item;
-    }
-
     /// Increments and returns the new state ID.
-    pub const fn increment_state_id(&mut self) -> u32 {
+    const fn increment_state_id(&mut self) -> u32 {
         self.state_id = self.state_id.wrapping_add(1) & 0x7FFF; // Keep it within 15 bits
         self.state_id
-    }
-
-    /// Updates `last_slots` from actual slot contents.
-    /// Call this once per tick before comparing with `remote_slots`.
-    pub fn update_last_slots(&mut self, guard: &ContainerLockGuard) {
-        for (i, slot) in self.slots.iter().enumerate() {
-            self.last_slots[i] = slot.get_item(guard).clone();
-        }
-    }
-
-    /// Checks if a slot has changed compared to remote perception.
-    /// Returns true if slot needs to be synced to client.
-    #[must_use]
-    pub fn slot_needs_sync(&self, index: usize) -> bool {
-        if index >= self.last_slots.len() || index >= self.remote_slots.len() {
-            return false;
-        }
-        !self.remote_slots[index].matches(&self.last_slots[index])
-    }
-
-    /// Marks a slot as synced (updates remote perception).
-    pub fn mark_slot_synced(&mut self, index: usize) {
-        if index < self.last_slots.len() && index < self.remote_slots.len() {
-            self.remote_slots[index].force(&self.last_slots[index]);
-        }
-    }
-
-    /// Checks if carried item needs sync.
-    #[must_use]
-    pub fn carried_needs_sync(&self) -> bool {
-        !self.remote_carried.matches(&self.carried)
-    }
-
-    /// Marks carried as synced.
-    pub fn mark_carried_synced(&mut self) {
-        self.remote_carried.force(&self.carried);
     }
 
     /// Encodes and sends a packet through the connection.
@@ -359,33 +344,32 @@ impl MenuBehavior {
         connection.send_encoded(encoded);
     }
 
-    /// Sends all slots and carried item to the client (full sync).
-    /// This is called when:
-    /// - A menu is first opened
-    /// - The client requests a full refresh
-    /// - After certain operations that may have desynced the client
+    /// Sends every slot, the carried item and all data slots to the client and
+    /// marks them synced. Used on menu open and whenever the client is known
+    /// to be stale (state id mismatch).
     pub fn send_all_data_to_remote(&mut self, connection: &Arc<PlayerConnection>) {
         let guard = self.lock_all_containers();
 
-        // First, update last_slots from actual slot contents
-        self.update_last_slots(&guard);
+        let items: Vec<ItemStack> = self
+            .slots
+            .iter()
+            .map(|slot| slot.get_item(&guard).clone())
+            .collect();
         let state_id = self.increment_state_id();
 
-        // Send full container content
+        for (remote, item) in self.remote_slots.iter_mut().zip(&items) {
+            remote.force(item);
+        }
+        self.remote_carried.force(&self.carried);
+
         let packet = CContainerSetContent {
             container_id: i32::from(self.container_id),
             state_id: state_id as i32,
-            items: self.last_slots.clone(),
+            items,
             carried_item: self.carried.clone(),
         };
 
         Self::send_packet(connection, packet);
-
-        // Mark all slots and carried as synced
-        for i in 0..self.last_slots.len() {
-            self.remote_slots[i].force(&self.last_slots[i]);
-        }
-        self.remote_carried.force(&self.carried);
 
         // Send all data slots
         for i in 0..self.data_slots.len() {
@@ -399,8 +383,8 @@ impl MenuBehavior {
         }
     }
 
-    /// Broadcasts changes to the client (incremental sync).
-    /// This is called every tick to sync only changed slots.
+    /// Syncs only the changed slots, carried item and data slots to the
+    /// client. Called once per tick.
     ///
     /// Based on Java's `AbstractContainerMenu::broadcastChanges`.
     /// Slot content packets increment `state_id`, matching vanilla's
@@ -408,22 +392,27 @@ impl MenuBehavior {
     pub fn broadcast_changes(&mut self, connection: &Arc<PlayerConnection>) {
         let guard = self.lock_all_containers();
 
-        // Update last_slots from actual slot contents
-        self.update_last_slots(&guard);
-
-        // Check each slot for changes
-        for i in 0..self.last_slots.len() {
-            if self.slot_needs_sync(i) {
-                self.synchronize_slot_to_remote(i, connection);
+        for index in 0..self.slots.len() {
+            let item = self.slots[index].get_item(&guard);
+            if self.remote_slots[index].matches(item) {
+                // A matched hash is cached as Known to avoid re-hashing next tick.
+                if matches!(self.remote_slots[index], RemoteSlot::Hashed(_)) {
+                    self.remote_slots[index] = RemoteSlot::Known(item.clone());
+                }
+            } else {
+                let item = item.clone();
+                self.synchronize_slot_to_remote(index, item, connection);
             }
         }
 
-        // Check carried item
-        if self.carried_needs_sync() {
+        if self.remote_carried.matches(&self.carried) {
+            if matches!(self.remote_carried, RemoteSlot::Hashed(_)) {
+                self.remote_carried = RemoteSlot::Known(self.carried.clone());
+            }
+        } else {
             self.synchronize_carried_to_remote(connection);
         }
 
-        // Check data slots for changes
         for i in 0..self.data_slots.len() {
             self.synchronize_data_slot_to_remote(i, connection);
         }
@@ -454,25 +443,30 @@ impl MenuBehavior {
         }
     }
 
-    /// Sends a single slot update to the client.
+    /// Sends a single slot update to the client and records the sent stack as
+    /// the client's perception.
     /// Based on Java's `AbstractContainerMenu::synchronizeSlotToRemote`.
-    fn synchronize_slot_to_remote(&mut self, slot: usize, connection: &Arc<PlayerConnection>) {
-        if self.suppress_remote_updates || slot >= self.last_slots.len() {
+    fn synchronize_slot_to_remote(
+        &mut self,
+        slot: usize,
+        item: ItemStack,
+        connection: &Arc<PlayerConnection>,
+    ) {
+        if self.suppress_remote_updates {
             return;
         }
 
-        let item = self.last_slots[slot].clone();
         let state_id = self.increment_state_id();
 
         let packet = CContainerSetSlot {
             container_id: i32::from(self.container_id),
             state_id: state_id as i32,
             slot: slot as i16,
-            item_stack: item,
+            item_stack: item.clone(),
         };
 
         Self::send_packet(connection, packet);
-        self.mark_slot_synced(slot);
+        self.remote_slots[slot] = RemoteSlot::Known(item);
     }
 
     /// Sends the carried item (cursor) to the client.
@@ -487,7 +481,7 @@ impl MenuBehavior {
         };
 
         Self::send_packet(connection, packet);
-        self.mark_carried_synced();
+        self.remote_carried.force(&self.carried);
     }
 
     /// Sets a remote slot to a known `ItemStack`.
@@ -506,8 +500,7 @@ impl MenuBehavior {
         }
     }
 
-    /// Handles a remote slot update from the client.
-    /// This is called when the client sends us their perception of a slot.
+    /// Handles the client reporting its own perception of a slot.
     /// Based on Java's `AbstractContainerMenu::setRemoteSlotUnsafe`.
     pub fn set_remote_slot(&mut self, slot: usize, hash: HashedStack) {
         if slot < self.remote_slots.len() {
@@ -527,22 +520,15 @@ impl MenuBehavior {
         self.remote_carried.receive(hash);
     }
 
-    /// Broadcasts full state to client.
-    /// This triggers slot listeners for all slots and then sends all data to remote.
-    /// Based on Java's `AbstractContainerMenu::broadcastFullState`.
-    ///
-    /// Note: This does NOT increment `state_id` - it just forces a full resync.
-    pub fn broadcast_full_state(&mut self, connection: &Arc<PlayerConnection>) {
-        self.send_all_data_to_remote(connection);
-    }
-
-    /// Handles one phase of a quickcraft (drag) operation.
+    /// Handles one phase of a quickcraft (drag) operation; `can_drag_to` is
+    /// the kind's per-slot veto.
     /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.QUICK_CRAFT`.
     pub(crate) fn do_quick_craft(
         &mut self,
         action: QuickCraft,
         has_infinite_materials: bool,
         player: &Player,
+        can_drag_to: &impl Fn(usize) -> bool,
     ) {
         // Validate the phase against the state machine position: a drag must
         // go Start -> AddSlot* -> End.
@@ -583,19 +569,19 @@ impl MenuBehavior {
                     && slot.may_place(&self.carried)
                     && (self.quickcraft == Some(DragKind::Clone)
                         || self.carried.count > self.quickcraft_slots.len() as i32)
-                    && self.can_drag_to(slot_index)
+                    && can_drag_to(slot_index)
                     && !self.quickcraft_slots.contains(&slot_index)
                 {
                     self.quickcraft_slots.push(slot_index);
                 }
             }
-            QuickCraft::End { .. } => self.finish_quick_craft(player),
+            QuickCraft::End { .. } => self.finish_quick_craft(player, can_drag_to),
         }
     }
 
     /// Distributes the carried items over the dragged slots and resets the
     /// drag state (the `End` phase of [`MenuBehavior::do_quick_craft`]).
-    fn finish_quick_craft(&mut self, player: &Player) {
+    fn finish_quick_craft(&mut self, player: &Player, can_drag_to: &impl Fn(usize) -> bool) {
         let Some(kind) = self.quickcraft else {
             self.reset_quick_craft();
             return;
@@ -636,7 +622,7 @@ impl MenuBehavior {
                     && slot.may_place(&self.carried)
                     && (kind == DragKind::Clone
                         || self.carried.count >= quickcraft_slots.len() as i32)
-                    && self.can_drag_to(slot_index)
+                    && can_drag_to(slot_index)
                 {
                     let current_count = if slot_item.is_empty() {
                         0
@@ -892,12 +878,12 @@ impl MenuBehavior {
     }
 }
 
-/// Represents the server's perception of what the client knows about a slot.
+/// What the server believes the client is showing in one slot.
 ///
-/// This can be either:
-/// - A full `ItemStack` (when we've sent the item to the client)
-/// - A `HashedStack` (when we've received a hash from the client)
-/// - Unknown (initial state, always needs sync)
+/// Starts `Unknown` (always resynced), becomes `Known` when we send the item
+/// and `Hashed` when the client reports its own perception. A `Hashed` slot
+/// that matches once is cached back to `Known` so later ticks compare
+/// structurally instead of re-hashing the components.
 #[derive(Debug, Clone, Default)]
 pub enum RemoteSlot {
     /// We don't know what the client has (initial state).
@@ -910,12 +896,6 @@ pub enum RemoteSlot {
 }
 
 impl RemoteSlot {
-    /// Creates an unknown remote slot.
-    #[must_use]
-    pub const fn unknown() -> Self {
-        Self::Unknown
-    }
-
     /// Forces the remote slot to a known `ItemStack` state.
     /// Called when we send an item to the client.
     pub fn force(&mut self, item: &ItemStack) {

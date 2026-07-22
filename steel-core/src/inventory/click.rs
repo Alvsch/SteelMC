@@ -78,14 +78,18 @@ pub enum Click {
 }
 
 impl Click {
-    /// Returns the slot index that was clicked
+    /// The slot this click targets, or `None` for clicks outside the window
+    /// and drag phases.
     #[must_use]
     pub const fn slot(&self) -> Option<usize> {
         match self {
-            Click::Pickup { slot, button: _ }
+            Click::Pickup { slot, .. }
             | Click::QuickMove { slot }
-            | Click::Clone { slot } => Some(*slot),
-            _ => None,
+            | Click::Swap { slot, .. }
+            | Click::Clone { slot }
+            | Click::Throw { slot, .. }
+            | Click::PickupAll { slot, .. } => Some(*slot),
+            Click::DropCarried { .. } | Click::QuickCraft(_) => None,
         }
     }
 }

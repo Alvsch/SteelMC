@@ -20,7 +20,7 @@ pub(crate) struct MenuLayout {
 }
 
 impl MenuLayout {
-    /// Returns every item in the [`drain`](MenuBuilder::drain) sections to the
+    /// Returns every item in the [`drain`](crate::inventory::MenuBuilder::drain) sections to the
     /// player, emptying those slots. Call from `removed` so input grids hand
     /// their contents back on close instead of deleting them.
     ///
@@ -40,7 +40,7 @@ impl MenuLayout {
         let mut guard = behavior.lock_all_containers();
         for range in &self.drain_sections {
             for slot_index in *range {
-                let item = mem::take(behavior.slots[slot_index].get_item_mut(&mut guard));
+                let item = mem::take(behavior.slots()[slot_index].get_item_mut(&mut guard));
                 if item.is_empty() {
                     continue;
                 }
@@ -73,14 +73,14 @@ impl MenuLayout {
             return ItemStack::empty();
         };
 
-        let clicked = behavior.slots[slot_index].get_item(guard).clone();
+        let clicked = behavior.slots()[slot_index].get_item(guard).clone();
         if clicked.is_empty() {
             return ItemStack::empty();
         }
 
         // Reject stale pickups — e.g. a result slot whose recipe no longer
         // matches the inputs. Normal slots always allow it.
-        if !behavior.slots[slot_index].may_pickup(guard, player) {
+        if !behavior.slots()[slot_index].may_pickup(guard, player) {
             return ItemStack::empty();
         }
 
@@ -98,7 +98,7 @@ impl MenuLayout {
             return ItemStack::empty();
         }
 
-        let slot = &behavior.slots[slot_index];
+        let slot = &behavior.slots()[slot_index];
         if remaining.is_empty() {
             slot.set_by_player(guard, ItemStack::empty(), &clicked);
         } else {

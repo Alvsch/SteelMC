@@ -1,20 +1,7 @@
-//! A menu can be considered everything that's shown on the screen.
-//! It consists of slots, slots consist of a view into a single inventory and position.
-//! When you have a chest open for example a chest menu is shown, consisting of the chests slots and the players inventory slots.
-//!
-//! A menu is always the middle man between the server and the client.
-//! This means that when the player doesn't have any menus open it actually has, it always has it's own inventory menu open.
-//!
-//! A menu holds 3 important structures:
-//! - All slots for that menu
-//! - All slots as cloned itemstacks
-//! - The clients perception of the itemstacks
-//!
-//! This makes it so every time we run a sync (once per tick) we update the cloned itemstacks.
-//! This in turn makes it so we can compare it with the clients perception of the itemstacks.
-//! And if there are mismatches we can send the correct itemstacks to the client.
-//!
-//! The client also sends the itemstacks it thinks it has on interaction, so this makes it so we only update the client if they mismatch.
+//! The per-menu part of a menu: the [`MenuKind`] hooks and their dispatch
+//! enum [`MenuKindType`]. Everything menus share (slots, click handling,
+//! client sync) lives in [`MenuBehavior`]; a kind only carries what makes its
+//! menu different.
 
 use steel_registry::item_stack::ItemStack;
 
@@ -98,6 +85,13 @@ pub trait MenuKind: Send + Sync {
         _player: &Player,
     ) -> ClickOutcome {
         ClickOutcome::Fallthrough
+    }
+
+    /// Returns true if a drag may distribute items into `slot_index`. Unlike
+    /// [`on_drag`](Self::on_drag), which can only cancel the whole drag, this
+    /// vetoes single slots.
+    fn can_drag_to(&self, _slot_index: usize) -> bool {
+        true
     }
 
     /// Returns true if this menu is still valid for the player (backing block
@@ -205,5 +199,19 @@ impl MenuKind for Box<dyn MenuKind> {
         player: &Player,
     ) -> ClickOutcome {
         (**self).on_slot_clicked(behavior, guard, click, player)
+    }
+
+    fn on_drag(
+        &mut self,
+        behavior: &mut MenuBehavior,
+        guard: &mut ContainerLockGuard,
+        action: QuickCraft,
+        player: &Player,
+    ) -> ClickOutcome {
+        (**self).on_drag(behavior, guard, action, player)
+    }
+
+    fn can_drag_to(&self, slot_index: usize) -> bool {
+        (**self).can_drag_to(slot_index)
     }
 }

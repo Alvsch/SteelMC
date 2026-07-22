@@ -89,14 +89,14 @@ impl Menu {
     /// The container ID for this menu (0 for the player inventory).
     #[must_use]
     pub const fn container_id(&self) -> u8 {
-        self.behavior.container_id
+        self.behavior.container_id()
     }
 
     /// The menu type for the open-screen packet, or `None` for the player's own
     /// inventory (which is never opened via `open_menu`).
     #[must_use]
     pub const fn menu_type(&self) -> Option<MenuTypeRef> {
-        self.behavior.menu_type
+        self.behavior.menu_type()
     }
 
     /// Returns true if this menu is still valid for the player.
@@ -121,7 +121,7 @@ impl Menu {
     pub fn removed(&mut self, player: &Player) {
         let return_to_inventory = player.returns_menu_items_to_inventory();
 
-        let carried = mem::take(&mut self.behavior.carried);
+        let carried = mem::take(self.behavior.carried_mut());
         if !carried.is_empty() {
             if return_to_inventory {
                 player.add_item_or_drop(carried);
@@ -137,9 +137,6 @@ impl Menu {
     }
 
     /// Applies an anvil rename to this menu; a no-op unless it is an anvil menu.
-    ///
-    /// Replaces the old `as_any_mut().downcast_mut::<AnvilMenu>()` path with a
-    /// plain match on the kind.
     pub fn set_anvil_item_name(&mut self, name: String, player: &Arc<Player>) {
         let Self { behavior, kind, .. } = self;
         if let MenuKindType::Anvil(anvil) = kind {
@@ -250,12 +247,14 @@ impl Menu {
             if outcome == ClickOutcome::Consume {
                 self.behavior_mut().reset_quick_craft();
             } else {
-                self.behavior_mut()
-                    .do_quick_craft(action, has_infinite_materials, player);
+                let Self { behavior, kind, .. } = self;
+                behavior.do_quick_craft(action, has_infinite_materials, player, &|slot| {
+                    kind.can_drag_to(slot)
+                });
             }
         } else {
             // Any non-quickcraft click resets quickcraft state if in progress
-            if self.behavior().quickcraft.is_some() {
+            if self.behavior().quickcraft().is_some() {
                 self.behavior_mut().reset_quick_craft();
             }
 
@@ -302,7 +301,7 @@ impl Menu {
         // a grid.
         let should_recompute = match click {
             Click::DropCarried { .. } => false,
-            Click::QuickCraft(_) => !self.behavior().slots.is_empty(),
+            Click::QuickCraft(_) => !self.behavior().slots().is_empty(),
             _ => true,
         };
         if should_recompute {
@@ -317,12 +316,12 @@ impl Menu {
         let mut guard = self.behavior().lock_all_containers();
 
         // Check if slot allows pickup
-        if !self.behavior().slots[slot_index].may_pickup(&guard, player) {
+        if !self.behavior().slots()[slot_index].may_pickup(&guard, player) {
             return;
         }
 
         // Get the initial item for comparison
-        let initial_item = self.behavior().slots[slot_index].get_item(&guard).clone();
+        let initial_item = self.behavior().slots()[slot_index].get_item(&guard).clone();
         if initial_item.is_empty() {
             return;
         }
@@ -331,7 +330,7 @@ impl Menu {
         let mut result = self.quick_move_stack(&mut guard, slot_index, player);
 
         while !result.is_empty() {
-            let current_item = self.behavior().slots[slot_index].get_item(&guard).clone();
+            let current_item = self.behavior().slots()[slot_index].get_item(&guard).clone();
             if !ItemStack::is_same_item(&current_item, &result) {
                 break;
             }
@@ -350,7 +349,7 @@ impl Menu {
         let player_inv_id = ContainerId::from_arc(&player.inventory);
 
         let behavior = self.behavior();
-        let target_slot = &behavior.slots[slot_index];
+        let target_slot = &behavior.slots()[slot_index];
         let inventory_slot = with.inventory_slot();
 
         // Get items from target slot (menu) and source (player inventory via guard)
@@ -438,19 +437,19 @@ impl Menu {
         let mut guard = self.behavior().lock_all_containers();
 
         let behavior = self.behavior();
-        let slot = &behavior.slots[slot_index];
+        let slot = &behavior.slots()[slot_index];
         let slot_has_item = !slot.get_item(&guard).is_empty();
         let slot_may_pickup = slot.may_pickup(&guard, player);
 
         // Can only pickup all if carried is not empty and (slot is empty or can't be picked up)
         // Java: if (!carried.isEmpty() && (!slotxx.hasItem() || !slotxx.mayPickup(player)))
-        if behavior.carried.is_empty() || (slot_has_item && slot_may_pickup) {
+        if behavior.carried().is_empty() || (slot_has_item && slot_may_pickup) {
             return;
         }
 
-        let max_stack = behavior.carried.max_stack_size();
-        let carried_item = behavior.carried.clone();
-        let slot_count = behavior.slots.len();
+        let max_stack = behavior.carried().max_stack_size();
+        let carried_item = behavior.carried().clone();
+        let slot_count = behavior.slots().len();
 
         // Determine iteration direction (Java uses button == 0 for forward,
         // button == 1 for reverse).
@@ -462,8 +461,8 @@ impl Menu {
         // Two passes: first collect non-full stacks, then full stacks
         for pass in 0..2 {
             let mut i = start;
-            while i >= 0 && i < slot_count as i32 && self.behavior().carried.count < max_stack {
-                let target_slot = &self.behavior().slots[i as usize];
+            while i >= 0 && i < slot_count as i32 && self.behavior().carried().count < max_stack {
+                let target_slot = &self.behavior().slots()[i as usize];
                 let target_item = target_slot.get_item(&guard).clone();
 
                 // Java checks: target.hasItem() && canItemQuickReplace(target, carried, true)
@@ -475,10 +474,10 @@ impl Menu {
                 {
                     // First pass: skip full stacks; Second pass: include full stacks
                     if pass != 0 || target_item.count != target_item.max_stack_size() {
-                        let can_take = max_stack - self.behavior().carried.count;
+                        let can_take = max_stack - self.behavior().carried().count;
                         let to_take = target_item.count.min(can_take);
                         let removed = target_slot.safe_take(&mut guard, to_take, can_take, player);
-                        self.behavior_mut().carried.grow(removed.count);
+                        self.behavior_mut().carried_mut().grow(removed.count);
                     }
                 }
 

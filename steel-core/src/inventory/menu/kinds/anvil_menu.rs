@@ -322,11 +322,8 @@ impl AnvilKind {
         result_container.set_item(0, result.clone());
     }
 
-    /// Sets the item name of the item
-    ///
-    /// # Panics
-    /// When failing to lock the result container
-    #[tracing::instrument(skip(self, behavior, player) level = "info")]
+    /// Sets the rename text and recomputes the result with it applied.
+    #[tracing::instrument(skip(self, behavior, player), level = "info")]
     pub fn set_item_name(
         &mut self,
         behavior: &mut MenuBehavior,
@@ -339,24 +336,9 @@ impl AnvilKind {
 
         {
             let mut item_name_guard = self.item_name.lock();
-            let is_empty = validated_name.is_empty();
-            let text_component = TextComponent::from(validated_name.clone());
             match &*item_name_guard {
                 Some(current) if *current == validated_name => return,
                 _ => *item_name_guard = Some(validated_name),
-            }
-
-            let mut guard = behavior.lock_all_containers();
-            let Some(result) = guard.get_mut(ContainerId::from_arc(&self.result_container)) else {
-                panic!("failed to lock input container")
-            };
-
-            let item = result.get_item_mut(0);
-
-            if is_empty {
-                item.remove(CUSTOM_NAME);
-            } else {
-                item.set(CUSTOM_NAME, text_component);
             }
         }
 

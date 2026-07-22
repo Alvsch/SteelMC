@@ -40,7 +40,7 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
     let mut builder = MenuBuilder::new(None, INVENTORY_MENU_CONTAINER_ID);
 
     // Slot 0: crafting result.
-    builder.result_slot(
+    let result = builder.result_slot(
         Arc::new(handler.clone()),
         ContainerRef::from(result_container.clone()),
     );
@@ -70,6 +70,7 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
     builder.build(InventoryKind {
         result_container,
         handler,
+        result,
         grid,
         armor,
         inv: player.all(),
@@ -85,6 +86,8 @@ pub struct InventoryKind {
     /// The crafting result container.
     result_container: Shared<ResultContainer>,
     handler: CraftingHandler,
+    /// The crafting result (slot 0).
+    result: Section,
     /// The 2x2 crafting grid (slots 1-4).
     grid: Section,
     /// The four armor slots (slots 5-8).
@@ -100,9 +103,6 @@ pub struct InventoryKind {
 }
 
 impl InventoryKind {
-    /// Slot index of the (virtual) crafting result.
-    const RESULT_SLOT: usize = 0;
-
     /// The `ContainerId` of the 2x2 crafting grid.
     pub(crate) fn crafting_id(&self) -> ContainerId {
         self.handler.crafting_id()
@@ -176,16 +176,17 @@ impl MenuKind for InventoryKind {
         slot_index: usize,
         player: &Player,
     ) -> Option<ItemStack> {
-        if slot_index >= behavior.slots.len() {
+        if slot_index >= behavior.slots().len() {
             return Some(ItemStack::empty());
         }
 
         // Get the current item from the slot
-        let stack = behavior.slots[slot_index].get_item(guard).clone();
+        let stack = behavior.slots()[slot_index].get_item(guard).clone();
         if stack.is_empty() {
             return Some(ItemStack::empty());
         }
-        if slot_index == Self::RESULT_SLOT && !behavior.slots[slot_index].may_pickup(guard, player)
+        if self.result.contains(slot_index)
+            && !behavior.slots()[slot_index].may_pickup(guard, player)
         {
             return Some(ItemStack::empty());
         }
@@ -195,7 +196,7 @@ impl MenuKind for InventoryKind {
 
         // Determine target range based on which slot was clicked
         // This matches the Java implementation in InventoryMenu::quickMoveStack
-        let moved = if slot_index == Self::RESULT_SLOT {
+        let moved = if self.result.contains(slot_index) {
             // Crafting result -> inventory, prefer to fill existing stacks first.
             behavior.move_item_stack_to(
                 guard,
@@ -231,7 +232,7 @@ impl MenuKind for InventoryKind {
                         };
 
                     // Only try to move if the target armor slot is empty
-                    if behavior.slots[armor_slot_index].has_item(guard) {
+                    if behavior.slots()[armor_slot_index].has_item(guard) {
                         // Armor slot occupied, move between inventory/hotbar
                         self.move_between_inventory_and_hotbar(
                             behavior,
@@ -250,7 +251,7 @@ impl MenuKind for InventoryKind {
                     }
                 } else if eq_slot == EquipmentSlot::OffHand {
                     // Try to move to offhand slot if empty
-                    if behavior.slots[self.offhand.start()].has_item(guard) {
+                    if behavior.slots()[self.offhand.start()].has_item(guard) {
                         self.move_between_inventory_and_hotbar(
                             behavior,
                             guard,
@@ -284,19 +285,19 @@ impl MenuKind for InventoryKind {
         }
 
         // Update the source slot with the remaining items
-        behavior.slots[slot_index].set_item(guard, stack_mut.clone());
+        behavior.slots()[slot_index].set_item(guard, stack_mut.clone());
 
         // Check if unchanged
         if stack_mut.count == clicked.count {
             return Some(ItemStack::empty());
         }
 
-        behavior.slots[slot_index].set_changed(guard);
+        behavior.slots()[slot_index].set_changed(guard);
 
         // Call on_take for the result slot to consume ingredients
         // This must happen after set_item so the slot reflects the new state
-        if slot_index == Self::RESULT_SLOT {
-            if let Some(remainder) = behavior.slots[slot_index].on_take(guard, &clicked, player) {
+        if self.result.contains(slot_index) {
+            if let Some(remainder) = behavior.slots()[slot_index].on_take(guard, &clicked, player) {
                 // Try to place crafting remainders (e.g., empty buckets) back in inventory
                 player.add_item_or_drop_with_guard(guard, remainder);
             }
@@ -314,7 +315,7 @@ impl MenuKind for InventoryKind {
     /// Returns true if the item can be taken from the slot during pickup all.
     /// Prevents taking from the crafting result slot.
     fn can_take_item_for_pick_all(&self, _carried: &ItemStack, slot_index: usize) -> bool {
-        slot_index != Self::RESULT_SLOT
+        !self.result.contains(slot_index)
     }
 
     /// Called when the inventory menu is closed. The grid is drained back to the

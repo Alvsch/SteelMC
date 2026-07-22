@@ -416,29 +416,25 @@ impl MenuBuilder {
         self.section_from(start)
     }
 
-    /// Adds a restricted section to the `Menu`. The closures `may_place` and `may_pickup`
-    /// are shared using an Arc across all slots in the section.
+    /// Adds a section whose slots only accept items that pass `may_place`.
+    /// The closure is shared using an Arc across all slots in the section and
+    /// receives the container-local slot index.
+    ///
+    /// Items can always be taken back out; use
+    /// [`guarded_section`](Self::guarded_section) to also guard pickup.
     ///
     /// # Example
     /// ```rust
-    /// use steel_registry::vanilla_items;
-    /// use steel_registry::item_stack::ItemStack;
-    /// use steel_registry::vanilla_menu_types;
+    /// use steel_registry::{vanilla_items, vanilla_menu_types};
     /// use steel_core::inventory::prelude::*;
-    /// use steel_core::inventory::container::SimpleContainer;
     /// use steel_core::inventory::menu::kinds::BasicKind;
-    /// use steel_core::player::Player;
-    /// use steel_utils::locks::SyncMutex;
-    /// use std::sync::Arc;
     ///
-    /// let container_id = 0;
+    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, 0);
     ///
-    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
-    ///
-    /// let items = vec![ItemStack::new(&vanilla_items::GRAY_STAINED_GLASS_PANE); 9];
-    ///
-    /// let container = SimpleContainer::from_items(items).into_shared();
-    /// let display_section = b.restricted_section(container.clone(), 9, |_slot, _item_stack| true, Some(|_: usize, _: &ContainerLockGuard, _: &Player, _: &ItemStack| false));
+    /// let container = SimpleContainer::new(9).into_shared();
+    /// let fuel = b.restricted_section(container, 9, |_slot, stack| {
+    ///     stack.is(&vanilla_items::COAL)
+    /// });
     ///
     /// b.build(MenuKindType::Basic(BasicKind {}));
     /// ```
@@ -447,16 +443,43 @@ impl MenuBuilder {
         source: impl SectionSource,
         count: usize,
         may_place: impl Fn(usize, &ItemStack) -> bool + Send + Sync + 'static,
-        may_pickup: Option<
-            impl Fn(usize, &ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync + 'static,
-        >,
+    ) -> Section {
+        self.guarded_section_fns(source, count, Arc::new(may_place), None)
+    }
+
+    /// Like [`restricted_section`](Self::restricted_section), but also guards
+    /// taking items out: pickup is only allowed while `may_pickup` returns
+    /// true. Both closures are shared across all slots in the section.
+    pub fn guarded_section(
+        &mut self,
+        source: impl SectionSource,
+        count: usize,
+        may_place: impl Fn(usize, &ItemStack) -> bool + Send + Sync + 'static,
+        may_pickup: impl Fn(usize, &ContainerLockGuard, &Player, &ItemStack) -> bool
+        + Send
+        + Sync
+        + 'static,
+    ) -> Section {
+        self.guarded_section_fns(
+            source,
+            count,
+            Arc::new(may_place),
+            Some(Arc::new(may_pickup)),
+        )
+    }
+
+    /// Shared lowering of restricted, guarded and display sections.
+    fn guarded_section_fns(
+        &mut self,
+        source: impl SectionSource,
+        count: usize,
+        may_place: MayPlaceFn,
+        may_pickup: Option<MayPickupFn>,
     ) -> Section {
         let (container, range) = source.take(count);
         #[cfg(debug_assertions)]
         self.claim(&container, range);
         let start = self.slots.len();
-        let may_place: MayPlaceFn = Arc::new(may_place);
-        let may_pickup = may_pickup.map(|it| -> MayPickupFn { Arc::new(it) });
         for index in range {
             self.slots.push(SlotType::Restricted(RestrictedSlot::new(
                 container.clone(),
@@ -474,7 +497,7 @@ impl MenuBuilder {
     /// making it ideal for click menus. Clicks on these slots are always rejected, and can then properly be handled
     /// in the `MenuKind::on_slot_clicked`.
     ///
-    /// This is equivalent to a restricted section with both closures always returning false.
+    /// This is equivalent to a guarded section with both closures always returning false.
     ///
     /// # Example
     /// ```rust
@@ -494,28 +517,12 @@ impl MenuBuilder {
     /// b.build(MenuKindType::Basic(BasicKind {}));
     /// ```
     pub fn display_section(&mut self, source: impl SectionSource, count: usize) -> Section {
-        let (container, range) = source.take(count);
-        #[cfg(debug_assertions)]
-        self.claim(&container, range);
-
-        let may_place: MayPlaceFn = Arc::new(|_, _| false);
-        let may_pickup: Option<MayPickupFn> = Some(Arc::new(
-            |_: usize, _: &ContainerLockGuard, _: &Player, _: &ItemStack| false,
-        ));
-
-        let start = self.slots.len();
-        for index in range {
-            self.slots.push(SlotType::Restricted(RestrictedSlot::new(
-                container.clone(),
-                index,
-                may_place.clone(),
-                may_pickup.clone(),
-                64,
-            )));
-        }
-
-        self.register_container(container);
-        self.section_from(start)
+        self.guarded_section_fns(
+            source,
+            count,
+            Arc::new(|_, _| false),
+            Some(Arc::new(|_, _, _, _| false)),
+        )
     }
 
     /// Adds the player's 36 inventory slots (main inventory then hotbar).

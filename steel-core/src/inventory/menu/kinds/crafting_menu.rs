@@ -62,6 +62,7 @@ pub fn crafting(inventory: Shared<PlayerInventory>, container_id: u8, block_pos:
 
     builder.build(CraftingKind {
         result_container,
+        result,
         block_pos,
         handler,
     })
@@ -72,6 +73,8 @@ pub fn crafting(inventory: Shared<PlayerInventory>, container_id: u8, block_pos:
 pub struct CraftingKind {
     /// The crafting result container.
     result_container: Shared<ResultContainer>,
+    /// The crafting result (slot 0).
+    result: Section,
     /// The position of the crafting table block.
     block_pos: BlockPos,
     handler: CraftingHandler,
@@ -79,9 +82,9 @@ pub struct CraftingKind {
 
 impl MenuKind for CraftingKind {
     /// Returns true if the item can be taken from the slot during pickup all.
-    /// Prevents taking from the crafting result slot (index 0).
+    /// Prevents taking from the crafting result slot.
     fn can_take_item_for_pick_all(&self, _carried: &ItemStack, slot_index: usize) -> bool {
-        slot_index != 0
+        !self.result.contains(slot_index)
     }
 
     /// Returns true if the player is still within range of the crafting table.
