@@ -2002,6 +2002,10 @@ impl ChunkMap {
         }
 
         if !runs_normally {
+            let _span = tracing::trace_span!("broadcast_changes").entered();
+            let start = Instant::now();
+            self.broadcast_changed_chunks();
+            timings.broadcast_changes = start.elapsed();
             return timings;
         }
 
@@ -3964,6 +3968,52 @@ mod tests {
 
         assert!(!world.chunk_map.light_update_touches_chunk(center));
         assert!(world.chunk_map.chunks_to_broadcast.lock().is_empty());
+        world.remove_player_for_world_change(&player);
+    }
+
+    #[test]
+    fn frozen_tick_broadcasts_block_changes_before_acknowledging_them() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("frozen_block_change_publication");
+        let chunk_pos = ChunkPos::new(0, 0);
+        let holder = insert_ready_full_chunk(&world, chunk_pos);
+        let pos = BlockPos::new(1, 64, 1);
+        assert!(world.set_block(
+            pos,
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        ));
+        world.chunk_map.broadcast_changed_chunks();
+
+        let (player, packets) = recording_player(&world);
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+        let _ = player.mark_joined_world();
+        player.set_client_loaded(true);
+        player
+            .chunk_sender
+            .lock()
+            .mark_chunk_sent_for_test(chunk_pos);
+        packets.lock().clear();
+
+        assert!(world.set_block(
+            pos,
+            vanilla_blocks::AIR.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        ));
+        assert!(holder.has_changes_to_broadcast());
+        player.ack_block_changes_up_to(1);
+
+        world.tick_game(1, false);
+
+        assert!(!holder.has_changes_to_broadcast());
+        let relevant_packet_ids = packets
+            .lock()
+            .iter()
+            .map(packet_id)
+            .filter(|id| matches!(*id, C_BLOCK_UPDATE | C_BLOCK_CHANGED_ACK))
+            .collect::<Vec<_>>();
+        assert_eq!(relevant_packet_ids, [C_BLOCK_UPDATE, C_BLOCK_CHANGED_ACK]);
         world.remove_player_for_world_change(&player);
     }
 

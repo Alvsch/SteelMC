@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use steel_utils::locks::SyncRwLock;
 use steel_utils::{BlockPos, ChunkPos, PackedSectionBlockPos, SectionPos, locks::SyncMutex};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{Notify, oneshot};
 #[cfg(feature = "slow_chunk_gen")]
 use tokio::time::sleep;
 
@@ -165,11 +165,12 @@ impl ChangedLightSections {
 ///
 /// `published_status` is released only after the corresponding data and Full
 /// tick containers are installed. Synchronous readers acquire it before
-/// reading `data`; the watch channel is notification-only for async waiters.
+/// reading `data`; `status_changed` wakes async waiters so they can re-check
+/// the atomic state.
 pub struct ChunkHolder {
     data: ChunkGuard,
     published_status: AtomicU8,
-    status_changed: watch::Sender<()>,
+    status_changed: Notify,
     generation_task: SyncMutex<Option<Arc<ChunkGenerationTask>>>,
     generation_task_target: AtomicU8,
     pos: ChunkPos,
@@ -278,7 +279,6 @@ impl ChunkHolder {
         height: i32,
         full_publications: Weak<FullPublicationQueue>,
     ) -> Self {
-        let (status_changed, _initial_subscriber) = watch::channel(());
         let highest_allowed_status =
             generation_status(Some(load_level)).map_or(STATUS_NONE, |s| s.get_index() as u8);
 
@@ -290,7 +290,7 @@ impl ChunkHolder {
         Self {
             data: ChunkGuard::new(ChunkAccess::Unloaded),
             published_status: AtomicU8::new(UNPUBLISHED_STATUS),
-            status_changed,
+            status_changed: Notify::new(),
             generation_task: SyncMutex::new(None),
             generation_task_target: AtomicU8::new(STATUS_NONE),
             pos,
@@ -610,78 +610,57 @@ impl ChunkHolder {
     }
 
     /// Waits until the chunk has reached the given status.
-    pub fn await_chunk(
+    pub async fn await_chunk(
         &self,
         status: ChunkStatus,
-    ) -> impl Future<Output = Option<RwLockReadGuard<'_, ChunkAccess>>> {
-        // Subscribe before the first atomic check so publication cannot land in
-        // the gap between observing the status and waiting for a notification.
-        let mut subscriber = self.status_changed.subscribe();
-        async move {
-            loop {
-                if self.published_status.load(Ordering::Acquire) >= encoded_published_status(status)
-                {
-                    return Some(self.data.read());
-                }
+    ) -> Option<RwLockReadGuard<'_, ChunkAccess>> {
+        loop {
+            // Register before checking the state so a concurrent publication
+            // cannot land between the check and the wait.
+            let notified = self.status_changed.notified();
 
-                if self.is_status_disallowed(status) {
-                    return None;
-                }
-
-                if subscriber.changed().await.is_err() {
-                    log::error!("Failed to wait for chunk access");
-                    return None;
-                }
+            if self.published_status.load(Ordering::Acquire) >= encoded_published_status(status) {
+                return Some(self.data.read());
             }
+
+            if self.is_status_disallowed(status) {
+                return None;
+            }
+
+            notified.await;
         }
     }
 
     /// Waits until the chunk has reached the given status without reading chunk data.
-    pub fn await_chunk_status(
-        &self,
-        status: ChunkStatus,
-    ) -> impl Future<Output = Option<ChunkStatus>> + '_ {
-        let mut subscriber = self.status_changed.subscribe();
-        async move {
-            loop {
-                let published = self.persisted_status();
-                if published.is_some_and(|current| status <= current) {
-                    return published;
-                }
-
-                if self.is_status_disallowed(status) {
-                    return None;
-                }
-
-                if subscriber.changed().await.is_err() {
-                    log::error!("Failed to wait for chunk status");
-                    return None;
-                }
+    pub async fn await_chunk_status(&self, status: ChunkStatus) -> Option<ChunkStatus> {
+        loop {
+            let notified = self.status_changed.notified();
+            let published = self.persisted_status();
+            if published.is_some_and(|current| status <= current) {
+                return published;
             }
+
+            if self.is_status_disallowed(status) {
+                return None;
+            }
+
+            notified.await;
         }
     }
 
-    fn await_claimed_chunk_status(
-        &self,
-        status: ChunkStatus,
-    ) -> impl Future<Output = Option<ChunkStatus>> + '_ {
-        let mut subscriber = self.status_changed.subscribe();
-        async move {
-            loop {
-                let published = self.persisted_status();
-                if published.is_some_and(|current| status <= current) {
-                    return published;
-                }
-
-                if self.is_status_disallowed(status) || !self.status_work_covers(status) {
-                    return None;
-                }
-
-                if subscriber.changed().await.is_err() {
-                    log::error!("Failed to wait for claimed chunk status");
-                    return None;
-                }
+    async fn await_claimed_chunk_status(&self, status: ChunkStatus) -> Option<ChunkStatus> {
+        loop {
+            let notified = self.status_changed.notified();
+            let published = self.persisted_status();
+            if published.is_some_and(|current| status <= current) {
+                return published;
             }
+
+            if self.is_status_disallowed(status) || !self.status_work_covers(status) {
+                return None;
+            }
+
+            notified.await;
         }
     }
 
@@ -1265,14 +1244,14 @@ impl ChunkHolder {
         self.mark_status_work_published(status);
         self.published_status
             .store(encoded_published_status(status), Ordering::Release);
-        self.status_changed.send_modify(|()| {});
+        self.status_changed.notify_waiters();
     }
 
     fn publish_generated_status(&self, status: ChunkStatus) {
         let encoded = encoded_published_status(status);
         let previous = self.published_status.fetch_max(encoded, Ordering::Release);
         if previous < encoded {
-            self.status_changed.send_modify(|()| {});
+            self.status_changed.notify_waiters();
         }
     }
 
@@ -1316,10 +1295,10 @@ impl ChunkHolder {
     }
 
     /// Wakes all `await_chunk` watchers without changing the chunk result.
-    /// This allows futures stuck in `subscriber.changed().await` to re-check
-    /// `is_status_disallowed` and bail out during chunk unload.
+    /// This allows waiting futures to re-check `is_status_disallowed` and bail
+    /// out during chunk unload.
     pub fn wake_all_watchers(&self) {
-        self.status_changed.send_modify(|()| {});
+        self.status_changed.notify_waiters();
     }
 
     /// Cancels the current generation task.
@@ -1498,12 +1477,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_status_waiter_wakes_after_publication() {
+    async fn pending_status_waiters_wake_after_publication() {
         init_chunk_test_registry();
         let holder = test_holder();
-        let waiter = holder.await_chunk_status(ChunkStatus::Empty);
-        tokio::pin!(waiter);
-        assert!(matches!(futures::poll!(&mut waiter), Poll::Pending));
+        let first_waiter = holder.await_chunk_status(ChunkStatus::Empty);
+        let second_waiter = holder.await_chunk_status(ChunkStatus::Empty);
+        tokio::pin!(first_waiter, second_waiter);
+        assert!(matches!(futures::poll!(&mut first_waiter), Poll::Pending));
+        assert!(matches!(futures::poll!(&mut second_waiter), Poll::Pending));
 
         let publishing_holder = Arc::clone(&holder);
         let publish_task = tokio::spawn(async move {
@@ -1513,14 +1494,15 @@ mod tests {
             );
         });
 
-        let observed_status = tokio::select! {
+        let (first_status, second_status) = tokio::select! {
             biased;
             () = test_sleep(TestDuration::from_secs(1)) => {
-                panic!("pending status waiter was not woken by publication");
+                panic!("pending status waiters were not woken by publication");
             }
-            status = &mut waiter => status,
+            statuses = async { tokio::join!(&mut first_waiter, &mut second_waiter) } => statuses,
         };
-        assert_eq!(observed_status, Some(ChunkStatus::Empty));
+        assert_eq!(first_status, Some(ChunkStatus::Empty));
+        assert_eq!(second_status, Some(ChunkStatus::Empty));
         assert!(publish_task.await.is_ok());
     }
 
