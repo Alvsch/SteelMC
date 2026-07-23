@@ -11,26 +11,28 @@ use glam::DVec3;
 use simdnbt::owned::{NbtList, NbtTag};
 use steel_protocol::packets::game::{
     CContainerClose, COpenScreen, SContainerButtonClick, SContainerClick, SContainerClose,
-    SContainerSlotStateChanged, SSetCarriedItem, SSetCreativeModeSlot,
+    SContainerSlotStateChanged, SRenameItem, SSetCarriedItem, SSetCreativeModeSlot,
 };
 use steel_registry::enchantment_effect::EnchantmentEffectComponent;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::{REGISTRY, RegistryExt, items::ItemRef};
+use steel_utils::locks::Shared;
 use steel_utils::types::{GameType, InteractionHand};
 use steel_utils::{DowncastType, DowncastTypeKey};
+use text_components::TextComponent;
 
 use crate::{
     entity::{Entity, entities::ItemEntity},
     inventory::{
-        MenuProvider,
-        container::{Container, clear_or_count_matching_stack},
+        click::Click,
+        container::{Container, CraftingContainer, clear_or_count_matching_stack},
         equipment::{EntityEquipment, EquipmentSlot},
-        inventory_menu::InventoryMenu,
         lock::{ContainerId, ContainerLockGuard},
-        menu::Menu,
-        slot::Slot,
+        menu::{Menu, MenuKindType, kinds::INVENTORY_MENU_CONTAINER_ID},
+        slots::Slot,
     },
     player::Player,
+    world::World,
 };
 
 /// Result of swapping a held item with an equipment slot.
@@ -791,16 +793,16 @@ impl Player {
                 return;
             }
 
-            self.process_container_click(menu.as_mut(), packet);
+            self.process_container_click(menu, packet);
         } else {
             drop(open_menu_guard);
             let mut menu = self.inventory_menu.lock();
 
-            if i32::from(menu.behavior().container_id) != packet.container_id {
+            if i32::from(menu.behavior().container_id()) != packet.container_id {
                 return;
             }
 
-            self.process_container_click(&mut *menu, packet);
+            self.process_container_click(&mut menu, packet);
         }
     }
 
@@ -808,7 +810,7 @@ impl Player {
     ///
     /// This is the common implementation shared between inventory menu and
     /// external menus (crafting table, chest, etc.).
-    fn process_container_click(&self, menu: &mut dyn Menu, packet: SContainerClick) {
+    fn process_container_click(&self, menu: &mut Menu, packet: SContainerClick) {
         if self.game_mode() == GameType::Spectator {
             menu.behavior_mut()
                 .send_all_data_to_remote(&self.connection);
@@ -823,38 +825,54 @@ impl Player {
             return;
         }
 
-        if !menu.behavior().is_valid_slot_index(packet.slot_num) {
-            log::debug!(
-                "Player {} clicked invalid slot index: {}, available: {}",
-                self.gameprofile.name,
-                packet.slot_num,
-                menu.behavior().slot_count()
-            );
-            return;
-        }
-
-        let full_resync_needed = packet.state_id as u32 != menu.behavior().get_state_id();
-
-        menu.behavior_mut().suppress_remote_updates();
-
-        let has_infinite_materials = self.game_mode() == GameType::Creative;
-        menu.clicked(
+        // Parse and validate the raw click fields once. A malformed click
+        // (out-of-range slot, bad button, invalid drag encoding — including
+        // the -1 "no slot" clicks Java accepts) is not applied, but the state
+        // sync below still runs so the client's prediction gets corrected.
+        let click = Click::parse(
             packet.slot_num,
             packet.button_num,
             packet.click_type,
-            has_infinite_materials,
-            self,
+            menu.behavior().slot_count(),
         );
+        if click.is_none() {
+            log::debug!(
+                "Player {} sent malformed container click (slot {}, button {}, {:?})",
+                self.gameprofile.name,
+                packet.slot_num,
+                packet.button_num,
+                packet.click_type
+            );
+        }
+
+        let full_resync_needed = packet.state_id as u32 != menu.behavior().state_id();
+
+        menu.behavior_mut().suppress_remote_updates();
+
+        if let Some(click) = click {
+            menu.clicked(click, self);
+        }
 
         for (slot, hash) in packet.changed_slots {
-            menu.behavior_mut().set_remote_slot(slot as usize, hash);
+            let slot = slot as usize;
+            // Result/fake slots are server-authoritative (their contents are
+            // recomputed from a recipe). Don't let the client's prediction set
+            // our view of what it knows, or `broadcast_changes` will think the
+            // client already has the freshly-crafted result and skip syncing it
+            // — leaving the slot blank until the next click forces a resend.
+            if menu.behavior().slots().get(slot).is_some_and(Slot::is_fake) {
+                menu.behavior_mut().mark_remote_slot_unknown(slot);
+                continue;
+            }
+            menu.behavior_mut().set_remote_slot(slot, hash);
         }
 
         menu.behavior_mut().set_remote_carried(packet.carried_item);
         menu.behavior_mut().resume_remote_updates();
 
         if full_resync_needed {
-            menu.behavior_mut().broadcast_full_state(&self.connection);
+            menu.behavior_mut()
+                .send_all_data_to_remote(&self.connection);
         } else {
             menu.behavior_mut().broadcast_changes(&self.connection);
         }
@@ -880,9 +898,21 @@ impl Player {
         }
         drop(open_menu);
 
-        if packet.container_id == i32::from(InventoryMenu::CONTAINER_ID) {
+        if packet.container_id == i32::from(INVENTORY_MENU_CONTAINER_ID) {
             let mut menu = self.inventory_menu.lock();
             menu.removed(self);
+        }
+    }
+
+    /// Handles an anvil rename packet.
+    pub fn handle_rename_item(self: &Arc<Self>, packet: SRenameItem) {
+        let mut open_menu = self.open_menu.lock();
+        let Some(menu) = open_menu.as_mut() else {
+            log::debug!("rename item without an open menu");
+            return;
+        };
+        if matches!(menu.kind(), MenuKindType::Anvil(_)) && menu.still_valid(self) {
+            menu.set_anvil_item_name(packet.name, self);
         }
     }
 
@@ -917,7 +947,7 @@ impl Player {
 
             {
                 let mut guard = menu.behavior().lock_all_containers();
-                if let Some(slot) = menu.behavior().get_slot(slot_index) {
+                if let Some(slot) = menu.behavior().slots().get(slot_index) {
                     let previous = slot.get_item(&guard).clone();
                     slot.set_by_player(&mut guard, item_stack.clone(), &previous);
                 }
@@ -975,23 +1005,49 @@ impl Player {
     /// Based on Java's `ServerPlayer::openMenu`.
     ///
     /// # Arguments
-    /// * `provider` - The menu provider containing the title and factory
-    pub fn open_menu(&self, provider: &impl MenuProvider) {
+    /// * `title` - The display title shown in the open-screen packet.
+    /// * `create` - Factory invoked with the allocated container id and the
+    ///   player's world; returns the menu to open.
+    ///
+    /// # Panics
+    /// Panics if the created menu has no menu type (i.e. the player's own
+    /// inventory menu, which must never be opened via `open_menu`).
+    pub fn open_menu(
+        &self,
+        title: impl Into<TextComponent>,
+        create: impl FnOnce(u8, &Arc<World>) -> Menu,
+    ) {
         self.do_close_container();
 
         let container_id = self.next_container_counter();
-        let mut menu = provider.create(container_id);
+        let mut menu = create(container_id, &self.get_world());
 
         self.send_packet(COpenScreen {
             container_id: i32::from(menu.container_id()),
-            menu_type: menu.menu_type(),
-            title: provider.title(),
+            menu_type: menu
+                .menu_type()
+                .expect("a menu opened via open_menu must declare a menu type"),
+            title: title.into(),
         });
+
+        // Fire on_open before the full sync so anything the menu populates here
+        // is included in the first render sent below.
+        menu.on_open(self);
 
         menu.behavior_mut()
             .send_all_data_to_remote(&self.connection);
 
         *self.open_menu.lock() = Some(menu);
+    }
+
+    /// A shared handle to the 2x2 crafting grid of the always-open inventory
+    /// menu.
+    pub fn crafting_container(&self) -> Shared<CraftingContainer> {
+        let menu = self.inventory_menu.lock();
+        let MenuKindType::Inventory(kind) = menu.kind() else {
+            unreachable!("a player's inventory_menu is always the Inventory kind");
+        };
+        kind.crafting_container()
     }
 
     /// Closes the currently open container and returns to the inventory menu.
@@ -1031,6 +1087,17 @@ impl Player {
         self.open_menu.lock().is_some()
     }
 
+    /// Runs the open menu's per-tick hook, if an external menu is open.
+    ///
+    /// Scoped to the opened menu; the base inventory menu is not ticked. Called
+    /// once per player tick, before syncing inventory changes to the client.
+    pub fn tick_open_menu(&self) {
+        let mut open_menu = self.open_menu.lock();
+        if let Some(ref mut menu) = *open_menu {
+            menu.on_tick(self);
+        }
+    }
+
     /// Broadcasts inventory changes to the client (incremental sync).
     /// This is called every tick to sync only changed slots.
     pub fn broadcast_inventory_changes(&self) {
@@ -1059,26 +1126,24 @@ impl Player {
             counting_only,
         );
 
-        {
-            let inventory_menu = self.inventory_menu.lock();
-            count += inventory_menu
-                .crafting_container()
-                .lock()
-                .clear_or_count_matching_items(predicate, amount_to_remove - count, counting_only);
-        }
+        count += self.inventory_menu.lock().clear_or_count_crafting_items(
+            predicate,
+            amount_to_remove - count,
+            counting_only,
+        );
 
         let has_open_menu = {
             let mut open_menu = self.open_menu.lock();
             if let Some(menu) = open_menu.as_mut() {
                 let behavior = menu.behavior_mut();
                 count += clear_or_count_matching_stack(
-                    &mut behavior.carried,
+                    behavior.carried_mut(),
                     predicate,
                     amount_to_remove - count,
                     counting_only,
                 );
-                if behavior.carried.is_empty() {
-                    behavior.set_carried(ItemStack::empty());
+                if behavior.carried().is_empty() {
+                    *behavior.carried_mut() = ItemStack::empty();
                 }
                 true
             } else {
@@ -1089,13 +1154,13 @@ impl Player {
             let mut inventory_menu = self.inventory_menu.lock();
             let behavior = inventory_menu.behavior_mut();
             count += clear_or_count_matching_stack(
-                &mut behavior.carried,
+                behavior.carried_mut(),
                 predicate,
                 amount_to_remove - count,
                 counting_only,
             );
-            if behavior.carried.is_empty() {
-                behavior.set_carried(ItemStack::empty());
+            if behavior.carried().is_empty() {
+                *behavior.carried_mut() = ItemStack::empty();
             }
         }
 
@@ -1204,6 +1269,14 @@ impl Player {
         // TODO: Check if player is alive (health > 0)
     }
 
+    /// Returns whether items from a closing menu (crafting grid, anvil inputs,
+    /// cursor) should be placed back into the inventory instead of dropped into
+    /// the world.
+    #[must_use]
+    pub fn returns_menu_items_to_inventory(&self) -> bool {
+        self.is_alive()
+    }
+
     /// Tries to add an item to the player's inventory, dropping it if it doesn't fit.
     ///
     /// Based on Java's `Inventory.placeItemBackInInventory`.
@@ -1287,6 +1360,16 @@ static EMPTY_ITEM: LazyLock<ItemStack> = LazyLock::new(ItemStack::empty);
 pub struct InvalidHotbarSlot;
 
 impl Container for PlayerInventory {
+    /// WARNING: This only returns the items in the main inventory, not those in the equipment slots
+    fn items(&self) -> &[ItemStack] {
+        &self.items
+    }
+
+    /// WARNING: This only returns the items in the main inventory, not those in the equipment slots
+    fn items_mut(&mut self) -> &mut [ItemStack] {
+        &mut self.items
+    }
+
     fn get_container_size(&self) -> usize {
         // 36 main slots + 7 equipment slots (feet, legs, chest, head, offhand, body, saddle)
         Self::INVENTORY_SIZE + 7
@@ -1479,6 +1562,14 @@ impl Container for PlayerInventory {
             self.set_changed();
         }
         count
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = &ItemStack> + '_> {
+        Box::new(self.items.iter().chain(self.equipment.iter()))
+    }
+
+    fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &mut ItemStack> + '_> {
+        Box::new(self.items.iter_mut().chain(self.equipment.iter_mut()))
     }
 }
 

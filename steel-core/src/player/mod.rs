@@ -84,7 +84,7 @@ use steel_registry::{
     level_events, sound_events, vanilla_attributes, vanilla_damage_type_tags, vanilla_entities,
     vanilla_game_events,
 };
-use steel_utils::entity_events::EntityStatus;
+use steel_utils::{entity_events::EntityStatus, locks::Shared};
 use uuid::Uuid;
 
 use arc_swap::ArcSwap;
@@ -98,8 +98,6 @@ use text_components::{
 };
 use text_components::{content::Resolvable, custom::CustomData};
 
-use crate::chunk::chunk_request::{ChunkRequestHandle, ChunkRequestState};
-use crate::config::RuntimeConfig;
 use crate::enchantment_helper;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
@@ -109,7 +107,7 @@ use crate::entity::{
     start_riding_entities,
 };
 use crate::fluid::get_fluid_state;
-use crate::inventory::{SyncPlayerInv, equipment::EquipmentSlot};
+use crate::inventory::equipment::EquipmentSlot;
 use crate::level_data::RespawnData;
 use crate::permission::{
     PermissionContext, PermissionExpr, PermissionMetadataSet, PermissionMetadataValue,
@@ -124,6 +122,11 @@ use crate::server::{
     jobs::{JobPoll, ServerJob, ServerJobContext},
 };
 use crate::world::player_spawn_finder::{PlayerSpawnSearch, PlayerSpawnSearchPoll};
+use crate::{
+    chunk::chunk_request::{ChunkRequestHandle, ChunkRequestState},
+    inventory::menu::Menu,
+};
+use crate::{config::RuntimeConfig, inventory::menu::kinds::inventory_menu};
 use steel_registry::vanilla_damage_types;
 
 use steel_protocol::packets::{
@@ -137,7 +140,7 @@ use steel_utils::{
     BlockPos, BlockStateId, ChunkPos, DowncastType, DowncastTypeKey, Identifier, UuidExt as _,
 };
 
-use crate::inventory::{MenuInstance, container::Container, inventory_menu::InventoryMenu};
+use crate::inventory::container::Container;
 
 /// Re-export `PreviousMessage` as `PreviousMessageEntry` for use in `signature_cache`
 pub type PreviousMessageEntry = PreviousMessage;
@@ -253,17 +256,17 @@ pub struct Player {
     game_modes: SyncMutex<PlayerGameModeState>,
 
     /// The player's inventory container (shared with `inventory_menu`).
-    pub inventory: SyncPlayerInv,
+    pub inventory: Shared<PlayerInventory>,
 
     /// Last main-hand stack used for vanilla attack-strength reset checks.
     last_item_in_main_hand: SyncMutex<ItemStack>,
 
     /// The player's inventory menu (always open, even when `container_id` is 0).
-    inventory_menu: SyncMutex<InventoryMenu>,
+    inventory_menu: SyncMutex<Menu>,
 
     /// The currently open menu (None if player inventory is open).
     /// This is separate from `inventory_menu` which is always present.
-    open_menu: SyncMutex<Option<Box<dyn MenuInstance>>>,
+    open_menu: SyncMutex<Option<Menu>>,
 
     /// Counter for generating container IDs (1-100, wraps around).
     container_counter: SyncMutex<ContainerCounter>,
@@ -586,7 +589,7 @@ impl Player {
             game_modes: SyncMutex::new(PlayerGameModeState::new(GameType::Survival)),
             inventory: inventory.clone(),
             last_item_in_main_hand: SyncMutex::new(ItemStack::empty()),
-            inventory_menu: SyncMutex::new(InventoryMenu::new(inventory)),
+            inventory_menu: SyncMutex::new(inventory_menu(inventory)),
             open_menu: SyncMutex::new(None),
             container_counter: SyncMutex::new(ContainerCounter::new()),
             teleport_state: SyncMutex::new(TeleportState::new()),
@@ -684,6 +687,7 @@ impl Player {
 
         self.tick_living_state();
 
+        self.tick_open_menu();
         self.broadcast_inventory_changes();
         self.update_pose();
 
@@ -945,6 +949,8 @@ impl Player {
                 overlay: false,
             });
         }
+
+        self.do_close_container();
 
         if !world.get_game_rule(&KEEP_INVENTORY) {
             let items: Vec<ItemStack> = {
@@ -2845,7 +2851,7 @@ mod tests {
     use crate::behavior::init_behaviors;
     use crate::config::RuntimeConfig;
     use crate::entity::{Entity, EntitySyncedData, LivingEntity, damage::DamageSource};
-    use crate::inventory::{container::Container as _, equipment::EquipmentSlot, menu::Menu as _};
+    use crate::inventory::{container::Container as _, equipment::EquipmentSlot};
     use crate::permission::{PermissionEntry, PermissionKey, PermissionMetadataSet, PermissionSet};
     use crate::player::connection::NetworkConnection;
     use crate::server::Server;
@@ -3162,14 +3168,12 @@ mod tests {
             let inventory_menu = player.inventory_menu.lock();
             inventory_menu
                 .crafting_container()
+                .expect("inventory menu should have a crafting grid")
                 .lock()
                 .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 2));
         }
-        player
-            .inventory_menu
-            .lock()
-            .behavior_mut()
-            .set_carried(ItemStack::with_count(&vanilla_items::STONE, 4));
+        *player.inventory_menu.lock().behavior_mut().carried_mut() =
+            ItemStack::with_count(&vanilla_items::STONE, 4);
 
         let stone = |stack: &ItemStack| stack.is(&vanilla_items::STONE);
         assert_eq!(player.clear_or_count_matching_items(&stone, 5), 5);
@@ -3179,39 +3183,17 @@ mod tests {
                 .inventory_menu
                 .lock()
                 .crafting_container()
+                .expect("inventory menu should have a crafting grid")
                 .lock()
                 .get_item(0)
                 .is_empty()
         );
-        assert_eq!(
-            player
-                .inventory_menu
-                .lock()
-                .behavior()
-                .get_carried()
-                .count(),
-            4
-        );
+        assert_eq!(player.inventory_menu.lock().behavior().carried().count(), 4);
 
         assert_eq!(player.clear_or_count_matching_items(&stone, 0), 4);
-        assert_eq!(
-            player
-                .inventory_menu
-                .lock()
-                .behavior()
-                .get_carried()
-                .count(),
-            4
-        );
+        assert_eq!(player.inventory_menu.lock().behavior().carried().count(), 4);
         assert_eq!(player.clear_or_count_matching_items(&stone, -1), 4);
-        assert!(
-            player
-                .inventory_menu
-                .lock()
-                .behavior()
-                .get_carried()
-                .is_empty()
-        );
+        assert!(player.inventory_menu.lock().behavior().carried().is_empty());
     }
 
     #[test]

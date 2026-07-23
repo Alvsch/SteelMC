@@ -17,8 +17,8 @@ use steel_protocol::packets::game::{
     SContainerClick, SContainerClose, SContainerSlotStateChanged, SInteract, SMovePlayer,
     SMovePlayerPos, SMovePlayerPosRot, SMovePlayerRot, SMovePlayerStatusOnly, SMoveVehicle,
     SPickItemFromBlock, SPlayerAbilities, SPlayerAction, SPlayerCommand, SPlayerInput, SPlayerLoad,
-    SSetCarriedItem, SSetCreativeModeSlot, SSignUpdate, SSpectatorAction, SSwing, SUseItem,
-    SUseItemOn,
+    SRenameItem, SSetCarriedItem, SSetCreativeModeSlot, SSignUpdate, SSpectatorAction, SSwing,
+    SUseItem, SUseItemOn,
 };
 
 use steel_protocol::utils::{ConnectionProtocol, PacketError, RawPacket};
@@ -92,6 +92,7 @@ enum ScheduledPlayPacketKind {
     PlayerInput(SPlayerInput),
     PlayerCommand(SPlayerCommand),
     PlayerAbilities(SPlayerAbilities),
+    RenameItem(SRenameItem),
     UseItemOn(SUseItemOn),
     UseItem(SUseItem),
     SetCarriedItem(SSetCarriedItem),
@@ -173,6 +174,7 @@ impl ScheduledPlayPacket {
             | ScheduledPlayPacketKind::MovePlayer(_)
             | ScheduledPlayPacketKind::MoveVehicle(_)
             | ScheduledPlayPacketKind::ContainerClick(_)
+            | ScheduledPlayPacketKind::RenameItem(_)
             | ScheduledPlayPacketKind::UseItemOn(_)
             | ScheduledPlayPacketKind::UseItem(_)
             | ScheduledPlayPacketKind::SignUpdate(_)
@@ -277,6 +279,7 @@ impl ScheduledPlayPacket {
             ScheduledPlayPacketKind::PlayerAbilities(packet) => {
                 player.handle_player_abilities(packet);
             }
+            ScheduledPlayPacketKind::RenameItem(packet) => player.handle_rename_item(packet),
             ScheduledPlayPacketKind::UseItemOn(packet) => player.handle_use_item_on(packet),
             ScheduledPlayPacketKind::UseItem(packet) => player.handle_use_item(packet),
             ScheduledPlayPacketKind::SetCarriedItem(packet) => {
@@ -675,6 +678,9 @@ impl JavaConnection {
             )),
             play::S_PLAYER_ABILITIES => scheduled(ScheduledPlayPacketKind::PlayerAbilities(
                 SPlayerAbilities::read_packet(data)?,
+            )),
+            play::S_RENAME_ITEM => scheduled(ScheduledPlayPacketKind::RenameItem(
+                SRenameItem::read_packet(data)?,
             )),
             play::S_USE_ITEM_ON => scheduled(ScheduledPlayPacketKind::UseItemOn(
                 SUseItemOn::read_packet(data)?,

@@ -10,6 +10,7 @@ use steel_utils::{
     random::{Random, xoroshiro::Xoroshiro},
     serial::{ReadFrom, WriteTo},
 };
+use text_components::TextComponent;
 
 use crate::{
     REGISTRY, RegistryEntry, RegistryExt,
@@ -19,11 +20,11 @@ use crate::{
         DataComponentPatch, DataComponentType,
         vanilla_components::{
             ATTACK_RANGE, ATTRIBUTE_MODIFIERS, AttackRange, BUNDLE_CONTENTS, CHARGED_PROJECTILES,
-            CONTAINER, CUSTOM_DATA, DAMAGE, DAMAGE_RESISTANT, DAMAGE_TYPE, ENCHANTABLE,
-            ENCHANTMENTS, EQUIPPABLE, Equippable, ItemAttributeModifiers, ItemEnchantments,
-            MAX_DAMAGE, MAX_STACK_SIZE, MINIMUM_ATTACK_CHARGE, OMINOUS_BOTTLE_AMPLIFIER,
-            OminousBottleAmplifier, PIERCING_WEAPON, PiercingWeapon, REPAIRABLE, TOOL, Tool,
-            UNBREAKABLE, WEAPON, Weapon,
+            CONTAINER, CUSTOM_DATA, CUSTOM_NAME, DAMAGE, DAMAGE_RESISTANT, DAMAGE_TYPE,
+            ENCHANTABLE, ENCHANTMENTS, EQUIPPABLE, Equippable, ITEM_NAME, ItemAttributeModifiers,
+            ItemEnchantments, MAX_DAMAGE, MAX_STACK_SIZE, MINIMUM_ATTACK_CHARGE,
+            OMINOUS_BOTTLE_AMPLIFIER, OminousBottleAmplifier, PIERCING_WEAPON, PiercingWeapon,
+            REPAIRABLE, STORED_ENCHANTMENTS, TOOL, Tool, UNBREAKABLE, WEAPON, Weapon,
         },
     },
     enchantment_effect::EnchantmentEffectComponent,
@@ -550,7 +551,19 @@ impl ItemStack {
 
     #[must_use]
     pub fn get_enchantments(&self) -> Option<&ItemEnchantments> {
-        self.get(ENCHANTMENTS)
+        self.get(self.enchantment_component())
+    }
+
+    /// Vanilla `EnchantmentHelper.getComponentType`: enchanted books keep their
+    /// enchantments in `STORED_ENCHANTMENTS`; every other item uses
+    /// `ENCHANTMENTS`.
+    #[must_use]
+    fn enchantment_component(&self) -> DataComponentType<ItemEnchantments> {
+        if self.is(&vanilla_items::ENCHANTED_BOOK) {
+            STORED_ENCHANTMENTS
+        } else {
+            ENCHANTMENTS
+        }
     }
 
     /// Mirrors Vanilla's component-based `ItemStack.isEnchantable` check.
@@ -760,7 +773,7 @@ impl ItemStack {
 
     pub fn set_enchantments(&mut self, enchantments: &[(Identifier, u32)], add: bool) {
         let mut current = self
-            .get(ENCHANTMENTS)
+            .get(self.enchantment_component())
             .cloned()
             .unwrap_or_else(ItemEnchantments::empty);
 
@@ -773,17 +786,17 @@ impl ItemStack {
             }
         }
 
-        self.set(ENCHANTMENTS, current);
+        self.set(self.enchantment_component(), current);
     }
 
     /// Vanilla `ItemStack.enchant` → `Mutable.upgrade`: keeps the higher of existing vs new level.
     pub fn upgrade_enchantment(&mut self, enchantment: Identifier, level: u32) {
         let mut current = self
-            .get(ENCHANTMENTS)
+            .get(self.enchantment_component())
             .cloned()
             .unwrap_or_else(ItemEnchantments::empty);
         current.upgrade(enchantment, level);
-        self.set(ENCHANTMENTS, current);
+        self.set(self.enchantment_component(), current);
     }
 
     /// Changes the item type entirely.
@@ -987,7 +1000,24 @@ impl ItemStack {
 
         true
     }
+
+    /// Returns the custom name stored in the `CUSTOM_NAME` component, if any.
+    #[must_use]
+    pub fn custom_name(&self) -> Option<&TextComponent> {
+        self.get(CUSTOM_NAME)
+    }
+
+    /// Vanilla `ItemStack.getHoverName`: the custom name if set, otherwise the
+    /// item's default name.
+    #[must_use]
+    pub fn hover_name(&self) -> &TextComponent {
+        self.custom_name()
+            .or_else(|| self.get(ITEM_NAME))
+            .unwrap_or(&EMPTY_NAME)
+    }
 }
+
+static EMPTY_NAME: TextComponent = TextComponent::new();
 
 fn validate_contained_item_sizes<'a>(
     items: impl IntoIterator<Item = &'a ItemStackTemplate>,

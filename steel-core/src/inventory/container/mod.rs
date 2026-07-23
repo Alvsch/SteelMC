@@ -3,6 +3,14 @@
 //! Containers are the base abstraction for anything that can hold items,
 //! including player inventories, chests, barrels, furnaces, etc.
 
+mod crafting;
+mod result;
+mod simple;
+
+pub use crafting::CraftingContainer;
+pub use result::ResultContainer;
+pub use simple::SimpleContainer;
+
 use std::mem;
 use std::ptr;
 
@@ -16,7 +24,7 @@ pub const DEFAULT_DISTANCE_BUFFER: f32 = 4.0;
 /// Something that contains items.
 /// I also use container interchangeably with inventory as they mean approximately the same thing.
 /// But inventory could also refer to the player's inventory.
-/// Example: `PlayerInventory`, Chest, Temporary Crafting Table
+/// Example: [`crate::player::player_inventory::PlayerInventory`], [`crate::inventory::container::SimpleContainer`]
 ///
 /// Concrete implementations must implement [`steel_utils::DowncastType`] with
 /// a unique, stable key so erased container references can recover their type.
@@ -32,8 +40,15 @@ pub const DEFAULT_DISTANCE_BUFFER: f32 = 4.0;
 /// only after every container lock has been released.
 #[enum_dispatch]
 pub trait Container: ErasedType + Send + Sync {
+    /// Returns the items in this container
+    fn items(&self) -> &[ItemStack];
+    /// Returns mutable references to the items in this container.
+    fn items_mut(&mut self) -> &mut [ItemStack];
+
     /// Returns the number of slots in this container.
-    fn get_container_size(&self) -> usize;
+    fn get_container_size(&self) -> usize {
+        self.items().len()
+    }
 
     /// Returns true if all slots in this container are empty.
     fn is_empty(&self) -> bool {
@@ -46,7 +61,9 @@ pub trait Container: ErasedType + Send + Sync {
     }
 
     /// Returns a reference to the item in the specified slot.
-    fn get_item(&self, slot: usize) -> &ItemStack;
+    fn get_item(&self, slot: usize) -> &ItemStack {
+        &self.items()[slot]
+    }
 
     /// Returns true if this container has a non-empty stack with the same item and components.
     ///
@@ -59,10 +76,14 @@ pub trait Container: ErasedType + Send + Sync {
     }
 
     /// Returns a mutable reference to the item in the specified slot.
-    fn get_item_mut(&mut self, slot: usize) -> &mut ItemStack;
+    fn get_item_mut(&mut self, slot: usize) -> &mut ItemStack {
+        &mut self.items_mut()[slot]
+    }
 
     /// Sets the item in the specified slot.
-    fn set_item(&mut self, slot: usize, stack: ItemStack);
+    fn set_item(&mut self, slot: usize, stack: ItemStack) {
+        self.items_mut()[slot] = stack;
+    }
 
     /// Removes up to `count` items from the specified slot and returns them.
     fn remove_item(&mut self, slot: usize, count: i32) -> ItemStack {
@@ -107,8 +128,7 @@ pub trait Container: ErasedType + Send + Sync {
     /// Clears all items from this container.
     fn clear_content(&mut self) -> i32 {
         let mut count = 0;
-        for i in 0..self.get_container_size() {
-            let item = self.get_item_mut(i);
+        for item in self.items_mut() {
             count += item.count();
             *item = ItemStack::empty();
         }
@@ -121,8 +141,7 @@ pub trait Container: ErasedType + Send + Sync {
     /// Clears all items from this container.
     fn clear_content_matching(&mut self, predicate: &mut dyn FnMut(&mut ItemStack) -> bool) -> i32 {
         let mut count = 0;
-        for i in 0..self.get_container_size() {
-            let item = self.get_item_mut(i);
+        for item in self.items_mut() {
             if predicate(item) {
                 count += item.count();
                 *item = ItemStack::empty();
@@ -174,7 +193,7 @@ pub trait Container: ErasedType + Send + Sync {
     where
         Self: Sized,
     {
-        with_indices(self, indices)
+        with_indices(self, indices) // FIXME: gotta look at this
     }
 
     /// Tries to add an item to the container.
@@ -239,6 +258,16 @@ pub trait Container: ErasedType + Send + Sync {
         }
         stack.is_empty()
     }
+
+    /// Returns a boxed iterator to the items in this container
+    fn iter(&self) -> Box<dyn Iterator<Item = &ItemStack> + '_> {
+        Box::new(self.items().iter())
+    }
+
+    /// Returns a boxed iterator to mutable references of the items in this container
+    fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &mut ItemStack> + '_> {
+        Box::new(self.items_mut().iter_mut())
+    }
 }
 
 /// Removes or counts matching items in one stack using vanilla `/clear` semantics.
@@ -280,7 +309,7 @@ fn matching_item_count(
 /// # Panics
 ///
 /// Panics if any index is out of bounds or if any two indices are equal.
-pub fn with_indices<const N: usize>(
+fn with_indices<const N: usize>(
     container: &mut (impl Container + ?Sized),
     indices: [usize; N],
 ) -> [&mut ItemStack; N] {
@@ -373,22 +402,20 @@ mod tests {
     }
 
     impl Container for TestContainer {
+        fn items(&self) -> &[ItemStack] {
+            &self.items
+        }
+
+        fn items_mut(&mut self) -> &mut [ItemStack] {
+            &mut self.items
+        }
+
+        #[doc = " Returns the number of slots in this container."]
         fn get_container_size(&self) -> usize {
             self.items.len()
         }
 
-        fn get_item(&self, slot: usize) -> &ItemStack {
-            &self.items[slot]
-        }
-
-        fn get_item_mut(&mut self, slot: usize) -> &mut ItemStack {
-            &mut self.items[slot]
-        }
-
-        fn set_item(&mut self, slot: usize, stack: ItemStack) {
-            self.items[slot] = stack;
-        }
-
+        #[doc = " Marks this container as changed (dirty) for saving/syncing."]
         fn set_changed(&mut self) {}
     }
 

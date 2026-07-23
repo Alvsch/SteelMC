@@ -396,6 +396,14 @@ async fn shutdown_worlds(server: &Arc<Server>) {
     }
 
     for world in server.worlds.values() {
+        world.players.iter_players(|_, player| {
+            player.close_connection();
+            player.do_close_container();
+            true
+        });
+    }
+
+    for world in server.worlds.values() {
         world.chunk_map.stop_generation_refill_loop();
         world.chunk_map.task_tracker.close();
         world.chunk_map.task_tracker.wait().await;
