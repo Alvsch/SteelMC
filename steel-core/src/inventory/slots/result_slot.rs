@@ -19,12 +19,12 @@ pub struct ResultSlot {
 impl ResultSlot {
     /// Creates a new `ResultSlot`
     pub fn new(
-        handler: Arc<dyn ResultHandler + Send + Sync>,
-        result_container: ContainerRef,
+        handler: impl ResultHandler + 'static,
+        result_container: impl Into<ContainerRef>,
     ) -> Self {
         Self {
-            handler,
-            result_container,
+            handler: Arc::new(handler),
+            result_container: result_container.into(),
         }
     }
 }

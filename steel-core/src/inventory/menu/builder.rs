@@ -25,6 +25,7 @@
 //! ```
 
 use std::array::IntoIter;
+use std::fmt;
 use std::iter;
 use std::range::Range;
 use std::slice;
@@ -71,7 +72,6 @@ impl MenuInstanceId {
 /// [`Menu`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Section {
-    #[cfg(debug_assertions)]
     menu: MenuInstanceId,
     range: Range<usize>,
 }
@@ -79,7 +79,6 @@ pub struct Section {
 impl Section {
     pub(crate) fn new(menu: MenuInstanceId, range: impl Into<Range<usize>>) -> Self {
         Self {
-            #[cfg(debug_assertions)]
             menu,
             range: range.into(),
         }
@@ -200,7 +199,6 @@ impl PlayerInventorySections {
 /// instead of a bare index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DataSlot {
-    #[cfg(debug_assertions)]
     menu: MenuInstanceId,
     index: usize,
 }
@@ -209,12 +207,11 @@ impl DataSlot {
     /// Reads the current value of this data slot.
     ///
     /// # Panics
-    /// In debug builds, panics if `behavior` belongs to a different menu than
-    /// the [`MenuBuilder`] that minted this handle.
+    /// Panics if `behavior` belongs to a different menu than the
+    /// [`MenuBuilder`] that minted this handle.
     #[must_use]
     pub fn get(self, behavior: &MenuBehavior) -> i16 {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(
+        assert_eq!(
             self.menu,
             behavior.instance(),
             "DataSlot used with a MenuBehavior it does not belong to"
@@ -227,11 +224,10 @@ impl DataSlot {
     /// Writes a new value to this data slot.
     ///
     /// # Panics
-    /// In debug builds, panics if `behavior` belongs to a different menu than
-    /// the [`MenuBuilder`] that minted this handle.
+    /// Panics if `behavior` belongs to a different menu than the
+    /// [`MenuBuilder`] that minted this handle.
     pub fn set(self, behavior: &mut MenuBehavior, value: i16) {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(
+        assert_eq!(
             self.menu,
             behavior.instance(),
             "DataSlot used with a MenuBehavior it does not belong to"
@@ -258,8 +254,16 @@ pub struct ContainerSlots {
     next: usize,
     /// The container's size when [`MenuBuilder::split`] was called, used to
     /// catch sections that take more slots than the container has.
-    #[cfg(debug_assertions)]
     size: usize,
+}
+
+impl fmt::Debug for ContainerSlots {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ContainerSlots")
+            .field("next", &self.next)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A supplier for ranges of slots in a [`ContainerRef`]. Allowing either making
@@ -277,11 +281,10 @@ impl<T: Into<ContainerRef>> SectionSource for T {
 
 impl SectionSource for &mut ContainerSlots {
     /// # Panics
-    /// In debug builds if taking `count` slots overflows the actual size of the container.
+    /// Panics if taking `count` slots overflows the actual size of the container.
     fn take(self, count: usize) -> (ContainerRef, Range<usize>) {
         let start = self.next;
-        #[cfg(debug_assertions)]
-        debug_assert!(
+        assert!(
             start + count <= self.size,
             "section takes container slots {}..{}, but the container only has {} slots",
             start,
@@ -326,8 +329,18 @@ pub struct MenuBuilder {
     drain_sections: Vec<Range<usize>>,
     /// Container-local slot ranges already covered by a section, used to catch
     /// two sections mapping onto the same container slots.
-    #[cfg(debug_assertions)]
     claimed: Vec<(ContainerId, Range<usize>)>,
+}
+
+impl fmt::Debug for MenuBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MenuBuilder")
+            .field("instance", &self.instance)
+            .field("container_id", &self.container_id)
+            .field("slots", &self.slots.len())
+            .field("routes", &self.routes.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl MenuBuilder {
@@ -346,7 +359,6 @@ impl MenuBuilder {
             data_slots: Vec::new(),
             routes: Vec::new(),
             drain_sections: Vec::new(),
-            #[cfg(debug_assertions)]
             claimed: Vec::new(),
         }
     }
@@ -373,12 +385,11 @@ impl MenuBuilder {
     /// ```
     ///
     /// # Panics
-    /// In debug builds, panics if the sections carved from the returned handle
-    /// take more slots than the container has.
+    /// Panics if the sections carved from the returned handle take more slots
+    /// than the container has.
     #[must_use]
     pub fn split(&mut self, container: impl Into<ContainerRef>) -> ContainerSlots {
         let container = container.into();
-        #[cfg(debug_assertions)]
         let size = ContainerLockGuard::lock_all(slice::from_ref(&container))
             .get(container.container_id())
             .expect("container was just locked")
@@ -387,7 +398,6 @@ impl MenuBuilder {
         ContainerSlots {
             container,
             next: 0,
-            #[cfg(debug_assertions)]
             size,
         }
     }
@@ -401,11 +411,10 @@ impl MenuBuilder {
     /// Returns a [`Section`] handle over the slots that were added.
     ///
     /// # Panics
-    /// In debug builds, panics if the covered container slots overlap another
-    /// section of this menu.
+    /// Panics if the covered container slots overlap another section of this
+    /// menu.
     pub fn section(&mut self, source: impl SectionSource, count: usize) -> Section {
         let (container, range) = source.take(count);
-        #[cfg(debug_assertions)]
         self.claim(&container, range);
         let start = self.slots.len();
         for index in range {
@@ -477,7 +486,6 @@ impl MenuBuilder {
         may_pickup: Option<MayPickupFn>,
     ) -> Section {
         let (container, range) = source.take(count);
-        #[cfg(debug_assertions)]
         self.claim(&container, range);
         let start = self.slots.len();
         for index in range {
@@ -509,7 +517,7 @@ impl MenuBuilder {
     ///
     /// let container_id = 0;
     ///
-    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);;
+    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
     /// let items = vec![ItemStack::new(&vanilla_items::GRAY_STAINED_GLASS_PANE); 9];
     /// let container = SimpleContainer::from_items(items).into_shared();
     /// let display_section = b.display_section(container, 9);
@@ -545,7 +553,7 @@ impl MenuBuilder {
     /// See [`crate::inventory::container::ResultContainer`] and [`crate::inventory::slots::ResultHandler`].
     pub fn result_slot(
         &mut self,
-        handler: Arc<dyn ResultHandler + Send + Sync>,
+        handler: impl ResultHandler + 'static,
         container: impl Into<ContainerRef>,
     ) -> Section {
         let container = container.into();
@@ -562,7 +570,7 @@ impl MenuBuilder {
     pub fn custom_section(
         &mut self,
         slots: impl IntoIterator<Item = SlotType>,
-        containers: impl IntoIterator<Item = ContainerRef>,
+        containers: impl IntoIterator<Item = impl Into<ContainerRef>>,
     ) -> Section {
         let start = self.slots.len();
         self.slots.extend(slots);
@@ -577,7 +585,6 @@ impl MenuBuilder {
         let index = self.data_slots.len();
         self.data_slots.push(initial);
         DataSlot {
-            #[cfg(debug_assertions)]
             menu: self.instance,
             index,
         }
@@ -594,7 +601,7 @@ impl MenuBuilder {
     /// `container` -> `player_inventory` is [`FillDirection::Backward`]
     ///
     /// # Panics
-    /// In debug builds, if any section was created by a different [`MenuBuilder`].
+    /// Panics if any section was created by a different [`MenuBuilder`].
     pub fn route(
         &mut self,
         from: impl IntoSections,
@@ -616,7 +623,7 @@ impl MenuBuilder {
     /// Marks `sections` to be emptied back into the player or dropped on the floor on close.
     ///
     /// # Panics
-    /// In debug builds, if any section was created by a different [`MenuBuilder`].
+    /// Panics if any section was created by a different [`MenuBuilder`].
     ///
     /// # Example
     /// ```rust
@@ -687,16 +694,14 @@ impl MenuBuilder {
         self.slots.push(slot);
     }
 
-    /// Records (in debug builds) that a section covers the container-local
-    /// `range` of `container`
+    /// Records that a section covers the container-local `range` of `container`
     ///
     /// # Panics
-    /// In debug builds, if the range was already covered by another `Range`
-    #[cfg(debug_assertions)]
+    /// Panics if the range was already covered by another `Range`
     pub(crate) fn claim(&mut self, container: &ContainerRef, range: Range<usize>) {
         let id = container.container_id();
         for (other_id, other) in &self.claimed {
-            debug_assert!(
+            assert!(
                 *other_id != id || range.start >= other.end || other.start >= range.end,
                 "two sections cover overlapping slots ({other:?} and {range:?}) of the same \
                  container; carve shared containers with MenuBuilder::split"
@@ -714,10 +719,9 @@ impl MenuBuilder {
         }
     }
 
-    /// Verifies (in debug builds) that `section` was created by this builder.
+    /// Verifies that `section` was created by this builder.
     fn owned(&self, section: Section) -> Range<usize> {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(
+        assert_eq!(
             section.menu, self.instance,
             "Section was minted by a different MenuBuilder"
         );

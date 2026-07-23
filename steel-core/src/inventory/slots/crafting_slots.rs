@@ -47,7 +47,6 @@ impl CraftingHandler {
     }
 
     /// A shared handle to the crafting container.
-    #[cfg(test)]
     #[must_use]
     pub fn crafting_container(&self) -> Shared<CraftingContainer> {
         self.crafting_container.clone()

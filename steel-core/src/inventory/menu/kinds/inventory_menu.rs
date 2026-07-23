@@ -8,14 +8,12 @@
 //! - Slots 36-44: Hotbar (9 slots)
 //! - Slot 45: Offhand
 
-use std::sync::Arc;
-
 use steel_registry::item_stack::ItemStack;
 use steel_utils::locks::{IntoShared, Shared};
 
 use crate::inventory::container::{CraftingContainer, ResultContainer};
 use crate::inventory::prelude::*;
-use crate::inventory::slots::{ArmorSlot, CraftingHandler, NormalSlot, Slot as _};
+use crate::inventory::slots::{CraftingHandler, NormalSlot, Slot as _, armor_slots};
 use crate::player::Player;
 use crate::player::player_inventory::PlayerInventory;
 
@@ -39,27 +37,17 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
     let mut builder = MenuBuilder::new(None, INVENTORY_MENU_CONTAINER_ID);
 
     // Slot 0: crafting result.
-    let result = builder.result_slot(
-        Arc::new(handler.clone()),
-        ContainerRef::from(result_container.clone()),
-    );
+    let result = builder.result_slot(handler.clone(), result_container.clone());
     // Slots 1-4: 2x2 crafting grid.
-    let grid = builder.section(ContainerRef::from(crafting_container), 4);
+    let grid = builder.section(crafting_container, 4);
     // Slots 5-8: armor (head, chest, legs, feet → inventory slots 39, 38, 37, 36).
-    let armor_slots = [
-        (39, EquipmentSlot::Head),
-        (38, EquipmentSlot::Chest),
-        (37, EquipmentSlot::Legs),
-        (36, EquipmentSlot::Feet),
-    ]
-    .map(|(offset, eq)| SlotType::Armor(ArmorSlot::new(inventory.clone(), offset, eq)));
-    let armor = builder.custom_section(armor_slots, [ContainerRef::from(inventory.clone())]);
+    let armor = builder.custom_section(armor_slots(&inventory), [inventory.clone()]);
     // Slots 9-44: main inventory + hotbar.
     let player = builder.player_inventory(&inventory);
     // Slot 45: offhand (inventory slot 40).
     let offhand = builder.custom_section(
         [SlotType::Normal(NormalSlot::new(inventory.clone(), 40))],
-        [ContainerRef::from(inventory)],
+        [inventory],
     );
 
     // No routes — quick_move is a custom override (armor/offhand auto-equip).
@@ -108,7 +96,6 @@ impl InventoryKind {
     }
 
     /// A shared handle to the 2x2 crafting grid container.
-    #[cfg(test)]
     pub(crate) fn crafting_container(&self) -> Shared<CraftingContainer> {
         self.handler.crafting_container()
     }

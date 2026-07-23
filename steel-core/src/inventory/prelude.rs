@@ -6,8 +6,7 @@ pub use crate::inventory::{
     lock::{ContainerId, ContainerLockGuard, ContainerRef},
     menu::{
         ContainerSlots, DataSlot, FillDirection, GridPlacer, Menu, MenuBehavior, MenuBuilder,
-        MenuKind, MenuKindType, PlayerInventorySections, Rect, Region, RemoteSlot, Section,
-        SectionSource,
+        MenuKind, MenuKindType, PlayerInventorySections, Rect, Region, Section, SectionSource,
     },
     slots::{ResultHandler, SlotType},
 };

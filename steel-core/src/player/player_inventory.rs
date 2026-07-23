@@ -16,6 +16,7 @@ use steel_protocol::packets::game::{
 use steel_registry::enchantment_effect::EnchantmentEffectComponent;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::{REGISTRY, RegistryExt, items::ItemRef};
+use steel_utils::locks::Shared;
 use steel_utils::types::{GameType, InteractionHand};
 use steel_utils::{DowncastType, DowncastTypeKey};
 use text_components::TextComponent;
@@ -24,7 +25,7 @@ use crate::{
     entity::{Entity, entities::ItemEntity},
     inventory::{
         click::Click,
-        container::{Container, clear_or_count_matching_stack},
+        container::{Container, CraftingContainer, clear_or_count_matching_stack},
         equipment::{EntityEquipment, EquipmentSlot},
         lock::{ContainerId, ContainerLockGuard},
         menu::{Menu, MenuKindType, kinds::INVENTORY_MENU_CONTAINER_ID},
@@ -1037,6 +1038,16 @@ impl Player {
             .send_all_data_to_remote(&self.connection);
 
         *self.open_menu.lock() = Some(menu);
+    }
+
+    /// A shared handle to the 2x2 crafting grid of the always-open inventory
+    /// menu.
+    pub fn crafting_container(&self) -> Shared<CraftingContainer> {
+        let menu = self.inventory_menu.lock();
+        let MenuKindType::Inventory(kind) = menu.kind() else {
+            unreachable!("a player's inventory_menu is always the Inventory kind");
+        };
+        kind.crafting_container()
     }
 
     /// Closes the currently open container and returns to the inventory menu.

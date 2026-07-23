@@ -4,6 +4,7 @@
 //! Each menu mirrors the client's perception of its slots and carried item, so
 //! the once-per-tick sync only sends what actually differs.
 
+use std::fmt;
 use std::{mem, sync::Arc};
 
 use steel_protocol::{
@@ -60,6 +61,18 @@ pub struct MenuBehavior {
     /// Identity stamp tying [`Section`](crate::inventory::Section) /
     /// [`DataSlot`](crate::inventory::DataSlot) handles to this menu.
     instance: MenuInstanceId,
+}
+
+impl fmt::Debug for MenuBehavior {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MenuBehavior")
+            .field("container_id", &self.container_id)
+            .field("state_id", &self.state_id)
+            .field("slot_count", &self.slots.len())
+            .field("carried", &self.carried)
+            .field("instance", &self.instance)
+            .finish_non_exhaustive()
+    }
 }
 
 impl MenuBehavior {
@@ -155,12 +168,12 @@ impl MenuBehavior {
 
     /// Gets the value of a data slot.
     #[must_use]
-    pub fn get_data(&self, index: usize) -> Option<i16> {
+    pub(crate) fn get_data(&self, index: usize) -> Option<i16> {
         self.data_slots.get(index).copied()
     }
 
     /// Sets the value of a data slot.
-    pub fn set_data(&mut self, index: usize, value: i16) {
+    pub(crate) fn set_data(&mut self, index: usize, value: i16) {
         if let Some(slot) = self.data_slots.get_mut(index) {
             *slot = value;
         }
@@ -205,6 +218,10 @@ impl MenuBehavior {
         end_slot: usize,
         direction: FillDirection,
     ) -> bool {
+        if start_slot >= end_slot {
+            return false;
+        }
+
         let backwards = direction == FillDirection::Backward;
         let mut anything_changed = false;
 
@@ -290,12 +307,12 @@ impl MenuBehavior {
     }
 
     /// Suppresses remote updates during click handling.
-    pub const fn suppress_remote_updates(&mut self) {
+    pub(crate) const fn suppress_remote_updates(&mut self) {
         self.suppress_remote_updates = true;
     }
 
     /// Resumes remote updates after click handling.
-    pub const fn resume_remote_updates(&mut self) {
+    pub(crate) const fn resume_remote_updates(&mut self) {
         self.suppress_remote_updates = false;
     }
 

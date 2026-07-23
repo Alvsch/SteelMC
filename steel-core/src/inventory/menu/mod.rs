@@ -19,6 +19,7 @@ pub(crate) use layout::MenuLayout;
 #[cfg(test)]
 use steel_utils::locks::Shared;
 
+use std::fmt;
 use std::mem;
 
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef};
@@ -30,7 +31,6 @@ use crate::{
     inventory::lock::{ContainerId, ContainerLockGuard},
     player::Player,
 };
-use std::sync::Arc;
 
 use crate::inventory::click::{Click, ClickOutcome, SwapTarget, can_item_quick_replace};
 
@@ -46,6 +46,15 @@ pub struct Menu {
     behavior: MenuBehavior,
     layout: MenuLayout,
     kind: MenuKindType,
+}
+
+impl fmt::Debug for Menu {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Menu")
+            .field("behavior", &self.behavior)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Menu {
@@ -137,10 +146,10 @@ impl Menu {
     }
 
     /// Applies an anvil rename to this menu; a no-op unless it is an anvil menu.
-    pub fn set_anvil_item_name(&mut self, name: String, player: &Arc<Player>) {
+    pub fn set_anvil_item_name(&mut self, name: impl Into<String>, player: &Player) {
         let Self { behavior, kind, .. } = self;
         if let MenuKindType::Anvil(anvil) = kind {
-            anvil.set_item_name(behavior, name, player);
+            anvil.set_item_name(behavior, name.into(), player);
         }
     }
 

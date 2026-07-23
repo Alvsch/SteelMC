@@ -48,15 +48,15 @@ pub fn anvil(
 
     let input = builder.section(input_container.clone(), 2);
     let result = builder.result_slot(
-        Arc::new(AnvilResultHandler::new(
+        AnvilResultHandler::new(
             input_container.clone(),
             result_container.clone(),
             repair_item_count.clone(),
             level_cost.clone(),
             pos,
             world.clone(),
-        )),
-        ContainerRef::from(result_container.clone()),
+        ),
+        result_container.clone(),
     );
 
     let player = builder.player_inventory(&inventory);
@@ -119,7 +119,7 @@ impl AnvilKind {
     /// If the input container is not exactly two slots.
     #[tracing::instrument(skip(self, behavior, player, guard), level = "info", fields(player = %player.gameprofile.name))]
     #[expect(clippy::too_many_lines, reason = "not my choice its so long .-.")]
-    pub fn create_result(
+    pub(crate) fn create_result(
         &mut self,
         behavior: &mut MenuBehavior,
         guard: &mut ContainerLockGuard,
@@ -324,12 +324,7 @@ impl AnvilKind {
 
     /// Sets the rename text and recomputes the result with it applied.
     #[tracing::instrument(skip(self, behavior, player), level = "info")]
-    pub fn set_item_name(
-        &mut self,
-        behavior: &mut MenuBehavior,
-        name: String,
-        player: &Arc<Player>,
-    ) {
+    pub fn set_item_name(&mut self, behavior: &mut MenuBehavior, name: String, player: &Player) {
         let Some(validated_name) = Self::validate_item_name(name) else {
             return;
         };

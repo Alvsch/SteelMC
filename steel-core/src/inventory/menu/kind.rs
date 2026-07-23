@@ -3,6 +3,8 @@
 //! client sync) lives in [`MenuBehavior`]; a kind only carries what makes its
 //! menu different.
 
+use std::fmt;
+
 use steel_registry::item_stack::ItemStack;
 
 use crate::inventory::menu::behavior::MenuBehavior;
@@ -136,6 +138,20 @@ pub enum MenuKindType {
     Basic(BasicKind),
     /// Plugin-defined menu logic.
     Custom(Box<dyn MenuKind>),
+}
+
+impl fmt::Debug for MenuKindType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Inventory(_) => "Inventory",
+            Self::Chest(_) => "Chest",
+            Self::Crafting(_) => "Crafting",
+            Self::Anvil(_) => "Anvil",
+            Self::Basic(_) => "Basic",
+            Self::Custom(_) => "Custom",
+        };
+        f.debug_struct(name).finish_non_exhaustive()
+    }
 }
 
 // Mirror of `impl Slot for Arc<dyn Slot>` in slot.rs, needed for the `Custom`

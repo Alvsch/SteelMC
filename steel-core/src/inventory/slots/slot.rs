@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use enum_dispatch::enum_dispatch;
+use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
 use steel_utils::locks::Shared;
 
@@ -396,4 +397,17 @@ pub fn add_standard_inventory_slots(
 ) {
     add_inventory_slots(slots, inventory);
     add_hotbar_slots(slots, inventory);
+}
+
+/// The four armor slots of a player inventory, in display order
+/// (head, chest, legs, feet → inventory indices 39, 38, 37, 36).
+#[must_use]
+pub fn armor_slots(inventory: &Shared<PlayerInventory>) -> [SlotType; 4] {
+    [
+        (39, EquipmentSlot::Head),
+        (38, EquipmentSlot::Chest),
+        (37, EquipmentSlot::Legs),
+        (36, EquipmentSlot::Feet),
+    ]
+    .map(|(index, slot)| SlotType::Armor(ArmorSlot::new(inventory.clone(), index, slot)))
 }

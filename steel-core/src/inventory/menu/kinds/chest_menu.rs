@@ -26,9 +26,10 @@ pub const SLOTS_PER_ROW: usize = 9;
 pub fn chest(
     inventory: Shared<PlayerInventory>,
     container_id: u8,
-    container: ContainerRef,
+    container: impl Into<ContainerRef>,
     rows: usize,
 ) -> Menu {
+    let container = container.into();
     assert!(
         (1..=6).contains(&rows),
         "Chest rows must be between 1 and 6"
