@@ -42,21 +42,12 @@ fn invsee(container_id: u8, source: &Arc<Player>, target: &Arc<Player>) -> Menu 
     let target_ref = ContainerRef::from(target.inventory.clone());
     let target_inventory = b.player_inventory(&target.inventory);
 
-    let (armor, offhand) = b.grid(1, |g| {
-        let armor = g.place_slots(
-            Rect::cols(0..4).rows(..),
-            armor_slots(&target.inventory),
-            [target_ref.clone()],
-        );
-        let offhand = g.place_slots(
-            Rect::cell(4, 0),
-            [SlotType::Normal(NormalSlot::new(target_ref.clone(), 40))],
-            [target_ref],
-        );
-        g.place(Rect::cols(5..).rows(..), target.crafting_container())
-            .region();
-        (armor.single(), offhand.single())
-    });
+    let armor = b.custom_section(armor_slots(&target.inventory), [target_ref.clone()]);
+    let offhand = b.custom_section(
+        [SlotType::Normal(NormalSlot::new(target_ref.clone(), 40))],
+        [target_ref],
+    );
+    let crafting = b.section(target.crafting_container(), 4);
 
     let viewer = b.player_inventory(&source.inventory);
     b.route(
@@ -64,10 +55,14 @@ fn invsee(container_id: u8, source: &Arc<Player>, target: &Arc<Player>) -> Menu 
         [viewer.all()],
         FillDirection::Backward,
     );
-    b.route([armor, offhand], [viewer.all()], FillDirection::Backward);
+    b.route(
+        [armor, offhand, crafting],
+        [viewer.all()],
+        FillDirection::Backward,
+    );
     b.route(
         viewer.all(),
-        [target_inventory.all()],
+        [target_inventory.all(), armor, offhand, crafting],
         FillDirection::Forward,
     );
 
