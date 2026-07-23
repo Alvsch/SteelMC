@@ -347,13 +347,11 @@ impl Menu {
 
         if source_item.is_empty() {
             // Move target -> inventory.
-            if target_slot.may_pickup(&guard, player)
-                && let Some(taken) =
-                    target_slot.try_remove(&mut guard, target_item.count, i32::MAX, player)
-            {
+            if target_slot.may_pickup(&guard, player) {
                 if let Some(inv) = guard.get_mut(player_inv_id) {
-                    inv.set_item(inventory_slot, taken);
+                    inv.set_item(inventory_slot, target_item.clone());
                 }
+                target_slot.set_by_player(&mut guard, ItemStack::empty(), &target_item);
                 if let Some(remainder) = target_slot.on_take(&mut guard, &target_item, player) {
                     player.add_item_or_drop_with_guard(&mut guard, remainder);
                 }
@@ -363,14 +361,11 @@ impl Menu {
             if target_slot.may_place(&source_item) {
                 let max_size = target_slot.get_max_stack_size_for_item(&guard, &source_item);
                 if source_item.count > max_size {
-                    target_slot.set_by_player(
-                        &mut guard,
-                        source_item.copy_with_count(max_size),
-                        &ItemStack::empty(),
-                    );
-                    if let Some(inv) = guard.get_mut(player_inv_id) {
-                        inv.get_item_mut(inventory_slot).shrink(max_size);
-                    }
+                    let Some(inv) = guard.get_mut(player_inv_id) else {
+                        return;
+                    };
+                    let to_place = inv.get_item_mut(inventory_slot).split(max_size);
+                    target_slot.set_by_player(&mut guard, to_place, &ItemStack::empty());
                 } else {
                     if let Some(inv) = guard.get_mut(player_inv_id) {
                         inv.set_item(inventory_slot, ItemStack::empty());
@@ -384,16 +379,13 @@ impl Menu {
                 let max_size = target_slot.get_max_stack_size_for_item(&guard, &source_item);
                 if source_item.count > max_size {
                     // Source too big: place a partial stack, return target to inventory.
-                    target_slot.set_by_player(
-                        &mut guard,
-                        source_item.copy_with_count(max_size),
-                        &target_item,
-                    );
+                    let Some(inv) = guard.get_mut(player_inv_id) else {
+                        return;
+                    };
+                    let to_place = inv.get_item_mut(inventory_slot).split(max_size);
+                    target_slot.set_by_player(&mut guard, to_place, &target_item);
                     if let Some(remainder) = target_slot.on_take(&mut guard, &target_item, player) {
                         player.add_item_or_drop_with_guard(&mut guard, remainder);
-                    }
-                    if let Some(inv) = guard.get_mut(player_inv_id) {
-                        inv.get_item_mut(inventory_slot).shrink(max_size);
                     }
                     player.add_item_or_drop_with_guard(&mut guard, target_item);
                 } else {
