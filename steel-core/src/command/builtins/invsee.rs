@@ -53,10 +53,8 @@ fn invsee(container_id: u8, source: &Arc<Player>, target: &Arc<Player>) -> Menu 
             [SlotType::Normal(NormalSlot::new(target_ref.clone(), 40))],
             [target_ref],
         );
-        g.place_display(
-            Rect::cols(5..).rows(..),
-            ContainerRef::from(target.crafting_container()),
-        );
+        g.place(Rect::cols(5..).rows(..), target.crafting_container())
+            .region();
         (armor.single(), offhand.single())
     });
 
