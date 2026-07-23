@@ -589,7 +589,7 @@ impl PropertyEnum for DoorHingeSide {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 #[derive_const(PartialEq)]
 pub enum NoteBlockInstrument {
     Harp,
@@ -619,6 +619,35 @@ pub enum NoteBlockInstrument {
     WitherSkeleton,
     Piglin,
     CustomHead,
+}
+
+impl NoteBlockInstrument {
+    /// Vanilla `NoteBlockInstrument.isTunable`.
+    #[must_use]
+    pub const fn is_tunable(&self) -> bool {
+        !matches!(
+            self,
+            Self::Zombie
+                | Self::Skeleton
+                | Self::Creeper
+                | Self::Dragon
+                | Self::WitherSkeleton
+                | Self::Piglin
+                | Self::CustomHead
+        )
+    }
+
+    /// Vanilla `NoteBlockInstrument.hasCustomSound`.
+    #[must_use]
+    pub const fn has_custom_sound(&self) -> bool {
+        matches!(self, Self::CustomHead)
+    }
+
+    /// Vanilla `NoteBlockInstrument.worksAboveNoteBlock`.
+    #[must_use]
+    pub const fn works_above_note_block(&self) -> bool {
+        !self.is_tunable()
+    }
 }
 
 impl PropertyEnum for NoteBlockInstrument {
