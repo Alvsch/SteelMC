@@ -137,12 +137,11 @@ impl Menu {
         kind.removed(behavior, player);
     }
 
-    /// Applies an anvil rename. A no-op on non-anvil menus.
-    pub fn set_anvil_item_name(&mut self, name: impl Into<String>, player: &Player) {
+    /// Applies a client rename to the menu's kind. A no-op for kinds without a
+    /// rename input.
+    pub fn set_item_name(&mut self, name: impl Into<String>, player: &Player) {
         let Self { behavior, kind, .. } = self;
-        if let MenuKindType::Anvil(anvil) = kind {
-            anvil.set_item_name(behavior, name.into(), player);
-        }
+        kind.on_rename(behavior, name.into(), player);
     }
 
     /// Clears or counts crafting-grid items in the base inventory menu,

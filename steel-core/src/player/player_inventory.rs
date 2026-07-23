@@ -911,8 +911,8 @@ impl Player {
             log::debug!("rename item without an open menu");
             return;
         };
-        if matches!(menu.kind(), MenuKindType::Anvil(_)) && menu.still_valid(self) {
-            menu.set_anvil_item_name(packet.name, self);
+        if menu.still_valid(self) {
+            menu.set_item_name(packet.name, self);
         }
     }
 

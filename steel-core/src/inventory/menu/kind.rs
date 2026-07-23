@@ -28,6 +28,10 @@ pub trait MenuKind: Send + Sync {
     /// Extra cleanup on close beyond [`Menu::removed`].
     fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {}
 
+    /// Applies a rename from the client (anvil-style text input) and recomputes
+    /// any result. No-op for kinds without a rename input.
+    fn on_rename(&mut self, _behavior: &mut MenuBehavior, _name: String, _player: &Player) {}
+
     /// Runs after initial contents are built but before they're sent, so
     /// anything populated here appears in the first render.
     fn on_open(
@@ -152,6 +156,10 @@ impl MenuKind for Box<dyn MenuKind> {
 
     fn removed(&mut self, behavior: &mut MenuBehavior, player: &Player) {
         (**self).removed(behavior, player);
+    }
+
+    fn on_rename(&mut self, behavior: &mut MenuBehavior, name: String, player: &Player) {
+        (**self).on_rename(behavior, name, player);
     }
 
     fn still_valid(&self, behavior: &MenuBehavior, player: &Player) -> bool {

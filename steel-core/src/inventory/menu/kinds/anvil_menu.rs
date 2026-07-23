@@ -318,28 +318,6 @@ impl AnvilKind {
         result_container.set_item(0, result.clone());
     }
 
-    /// Sets the rename text and recomputes the result with it applied.
-    #[tracing::instrument(skip(self, behavior, player), level = "info")]
-    pub fn set_item_name(&mut self, behavior: &mut MenuBehavior, name: String, player: &Player) {
-        let Some(validated_name) = Self::validate_item_name(name) else {
-            return;
-        };
-
-        {
-            let mut item_name_guard = self.item_name.lock();
-            match &*item_name_guard {
-                Some(current) if *current == validated_name => return,
-                _ => *item_name_guard = Some(validated_name),
-            }
-        }
-
-        {
-            let mut guard = behavior.lock_all_containers();
-            self.create_result(behavior, &mut guard, player);
-        }
-        behavior.broadcast_changes(&player.connection);
-    }
-
     fn validate_item_name(name: String) -> Option<String> {
         let filtered = name
             .chars()
@@ -374,5 +352,27 @@ impl MenuKind for AnvilKind {
     /// Clears the virtual result on close. Inputs are drained by [`Menu::removed`].
     fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
         self.result_container.lock().set_item(0, ItemStack::empty());
+    }
+
+    /// Sets the rename text and recomputes the result with it applied.
+    #[tracing::instrument(skip(self, behavior, player), level = "info")]
+    fn on_rename(&mut self, behavior: &mut MenuBehavior, name: String, player: &Player) {
+        let Some(validated_name) = Self::validate_item_name(name) else {
+            return;
+        };
+
+        {
+            let mut item_name_guard = self.item_name.lock();
+            match &*item_name_guard {
+                Some(current) if *current == validated_name => return,
+                _ => *item_name_guard = Some(validated_name),
+            }
+        }
+
+        {
+            let mut guard = behavior.lock_all_containers();
+            self.create_result(behavior, &mut guard, player);
+        }
+        behavior.broadcast_changes(&player.connection);
     }
 }
