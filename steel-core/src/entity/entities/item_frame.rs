@@ -14,7 +14,9 @@ use steel_registry::vanilla_entity_data::ItemFrameEntityData;
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, Direction, DowncastType, DowncastTypeKey, WorldAabb, axis::Axis};
 
-use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntityBaseState, EntitySyncedData};
+use crate::entity::{
+    Entity, EntityBase, EntityBaseLoad, EntityBaseState, EntitySyncedData, ItemFrame,
+};
 use crate::world::World;
 
 /// Item frame state needed by end-city structure markers.
@@ -118,21 +120,6 @@ impl ItemFrameEntity {
         }
     }
 
-    /// Returns the direction from the backing block toward the frame.
-    pub(crate) fn direction(&self) -> Direction {
-        *self.entity_data.lock().hanging_entity.direction.get()
-    }
-
-    /// Returns vanilla `ItemFrame.getAnalogOutput`.
-    pub(crate) fn analog_output(&self) -> i32 {
-        let entity_data = self.entity_data.lock();
-        if entity_data.item.get().is_empty() {
-            0
-        } else {
-            *entity_data.rotation.get() % 8 + 1
-        }
-    }
-
     fn set_direction(&self, direction: Direction) {
         self.entity_data
             .lock()
@@ -213,6 +200,21 @@ impl ItemFrameEntity {
             center.y + y_size / 2.0,
             center.z + z_size / 2.0,
         )
+    }
+}
+
+impl ItemFrame for ItemFrameEntity {
+    fn direction(&self) -> Direction {
+        *self.entity_data.lock().hanging_entity.direction.get()
+    }
+
+    fn analog_output(&self) -> i32 {
+        let entity_data = self.entity_data.lock();
+        if entity_data.item.get().is_empty() {
+            0
+        } else {
+            *entity_data.rotation.get() % 8 + 1
+        }
     }
 }
 

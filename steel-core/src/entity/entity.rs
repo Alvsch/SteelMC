@@ -1467,6 +1467,13 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         try_as_dyn::<Self, dyn LivingEntity>(self)
     }
 
+    /// Returns this entity as an item frame when it has item-frame behavior.
+    ///
+    /// Mirrors vanilla's `instanceof ItemFrame` branches.
+    fn as_item_frame(&self) -> Option<&dyn ItemFrame> {
+        try_as_dyn::<Self, dyn ItemFrame>(self)
+    }
+
     /// Returns this entity as a player when it is the concrete server player.
     fn as_player(&self) -> Option<&Player> {
         self.downcast_ref::<Player>()

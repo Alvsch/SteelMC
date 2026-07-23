@@ -410,7 +410,7 @@ impl PropertyEnum for WallSide {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 #[derive_const(PartialEq)]
 pub enum RedstoneSide {
     Up,

@@ -746,6 +746,7 @@ mod fluid_contact;
 mod generated_entities;
 mod inside_block_effects;
 mod item_based_steering;
+mod item_frame;
 mod living_base;
 mod living_entity;
 mod manager;
@@ -786,6 +787,7 @@ pub use inside_block_effects::{
     InsideBlockEffectCallback, InsideBlockEffectCollector, InsideBlockEffectType,
 };
 pub(crate) use item_based_steering::{ItemBasedSteering, ItemSteerable};
+pub use item_frame::ItemFrame;
 pub use living_base::{
     ActiveMobEffect, DEATH_DURATION, DEFAULT_SWING_DURATION, LivingEntityBase, LivingRotationState,
     LivingSwingState, LivingTravelInput, MobEffectInstance, MobEffectSyncChange,
