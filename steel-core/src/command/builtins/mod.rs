@@ -10,6 +10,7 @@ mod fly;
 pub(crate) mod gamemode;
 mod gamerule;
 mod give;
+mod invsee;
 mod kill;
 mod list;
 mod locate;
@@ -81,6 +82,7 @@ pub(crate) fn create_registered_dispatcher(
     builder.register(tick::registration())?;
     builder.register(time::registration())?;
     builder.register(weather::registration())?;
+    builder.register(invsee::registration())?;
     builder.extend(extension_commands.into_inner())?;
     builder.build_with_permissions()
 }
@@ -146,7 +148,8 @@ mod tests {
                 "tellraw",
                 "tick",
                 "time",
-                "weather"
+                "weather",
+                "invsee"
             ]
         );
 
