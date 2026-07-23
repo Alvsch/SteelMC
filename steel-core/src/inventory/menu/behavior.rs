@@ -1,8 +1,4 @@
-//! [`MenuBehavior`]: the slots, client-sync state, and click handling every
-//! menu shares, independent of its [`MenuKind`](super::kind::MenuKind).
-//!
-//! Each menu mirrors the client's perception of its slots and carried item, so
-//! the once-per-tick sync only sends what actually differs.
+//! Slots, client-sync state, and click handling shared by every menu.
 
 use std::fmt;
 use std::{mem, sync::Arc};
@@ -42,23 +38,22 @@ pub struct MenuBehavior {
     remote_carried: RemoteSlot,
     /// The container ID (0 for player inventory).
     container_id: u8,
-    /// Incremented every time the server and client mismatch.
+    /// Incremented on every server/client mismatch.
     state_id: u32,
-    /// None for player inventory. Some for all other menus.
+    /// None for the player inventory.
     menu_type: Option<MenuTypeRef>,
-    /// When true, remote updates are suppressed (during click handling).
+    /// Suppresses remote updates during click handling.
     suppress_remote_updates: bool,
-    /// The kind of drag in progress, or `None` when idle (replaces vanilla's
-    /// `quickcraftStatus`/`quickcraftType` ints).
+    /// The kind of drag in progress, or `None` when idle.
     quickcraft: Option<DragKind>,
     /// Slots involved in the current quickcraft operation.
     quickcraft_slots: Vec<usize>,
-    /// Data slots (for furnace progress, enchanting levels, etc.).
+    /// Data slots for furnace progress, enchanting levels and the like.
     data_slots: Vec<i16>,
     /// The client's perception of the data slot values.
     remote_data_slots: Vec<i16>,
     container_refs: Vec<ContainerRef>,
-    /// Identity stamp tying [`Section`](crate::inventory::Section) /
+    /// Identity stamp tying [`Section`](crate::inventory::Section) and
     /// [`DataSlot`](crate::inventory::DataSlot) handles to this menu.
     instance: MenuInstanceId,
 }
@@ -76,8 +71,7 @@ impl fmt::Debug for MenuBehavior {
 }
 
 impl MenuBehavior {
-    /// Creates a new menu behavior with the given slots. Crate-internal:
-    /// menus are assembled by [`MenuBuilder::build`](crate::inventory::MenuBuilder::build).
+    /// Creates a menu behavior with the given slots.
     #[must_use]
     pub(crate) fn new(
         instance: MenuInstanceId,
@@ -180,14 +174,13 @@ impl MenuBehavior {
     }
 
     /// Resets the quickcraft state.
-    pub fn reset_quick_craft(&mut self) {
+    pub(crate) fn reset_quick_craft(&mut self) {
         self.quickcraft = None;
         self.quickcraft_slots.clear();
     }
 
-    /// Writes a quick-move remainder back to its source slot with Vanilla's
-    /// `setByPlayer`/`setChanged` callback split. Fake slots are recomputed,
-    /// so only their change notification fires.
+    /// Writes a quick-move remainder back to its source slot. Fake slots are
+    /// recomputed, so only their change notification fires.
     pub(crate) fn update_quick_move_source(
         &self,
         guard: &mut ContainerLockGuard,
@@ -206,10 +199,8 @@ impl MenuBehavior {
         }
     }
 
-    /// Moves items from `item_stack` to slots in the range [`start_slot`, `end_slot`),
-    /// walking the range in `direction`. Returns true if any items were moved.
-    ///
-    /// Based on Java's `AbstractContainerMenu::moveItemStackTo`.
+    /// Moves items from `item_stack` into slots `[start_slot, end_slot)`, walking
+    /// the range in `direction`. Returns true if anything moved.
     pub fn move_item_stack_to(
         &self,
         guard: &mut ContainerLockGuard,
@@ -225,7 +216,7 @@ impl MenuBehavior {
         let backwards = direction == FillDirection::Backward;
         let mut anything_changed = false;
 
-        // First pass: try to stack with existing items
+        // First pass: stack onto existing items.
         if item_stack.is_stackable() {
             let mut dest_slot = if backwards { end_slot - 1 } else { start_slot };
 
@@ -271,7 +262,7 @@ impl MenuBehavior {
             }
         }
 
-        // Second pass: place in empty slots
+        // Second pass: place into empty slots.
         if !item_stack.is_empty() {
             let mut dest_slot = if backwards { end_slot - 1 } else { start_slot };
 
@@ -316,21 +307,11 @@ impl MenuBehavior {
         self.suppress_remote_updates = false;
     }
 
-    /// Transfers remote slot state from another menu to this one.
-    ///
-    /// When a container menu is closed, the inventory menu needs to know what
-    /// the client thinks it has in the shared slots (player inventory). Without
-    /// this transfer, the inventory menu would think the client has stale data
-    /// and would try to resync slots that are actually correct.
-    ///
-    /// This matches slots by their (`container_id`, `container_slot`) pair, so only
-    /// slots that reference the same underlying container position will transfer.
-    ///
-    /// Based on Java's `AbstractContainerMenu::transferState`.
-    pub fn transfer_state(&mut self, other: &MenuBehavior) {
+    /// Copies another menu's remote slot state, matched by (`container_id`,
+    /// `container_slot`), so closing a menu doesn't resync shared inventory slots.
+    pub(crate) fn transfer_state(&mut self, other: &MenuBehavior) {
         use rustc_hash::FxHashMap;
 
-        // Build a map of (container_id, container_slot) -> slot_index for the other menu
         let mut other_slots: FxHashMap<(ContainerId, usize), usize> = FxHashMap::default();
         for (slot_index, slot) in other.slots.iter().enumerate() {
             if let Some(key) = slot.container_key() {
@@ -355,7 +336,7 @@ impl MenuBehavior {
 
     /// Increments and returns the new state ID.
     const fn increment_state_id(&mut self) -> u32 {
-        self.state_id = self.state_id.wrapping_add(1) & 0x7FFF; // Keep it within 15 bits
+        self.state_id = self.state_id.wrapping_add(1) & 0x7FFF; // 15-bit wrap
         self.state_id
     }
 
@@ -368,9 +349,8 @@ impl MenuBehavior {
     }
 
     /// Sends every slot, the carried item and all data slots to the client and
-    /// marks them synced. Used on menu open and whenever the client is known
-    /// to be stale (state id mismatch).
-    pub fn send_all_data_to_remote(&mut self, connection: &Arc<PlayerConnection>) {
+    /// marks them synced.
+    pub(crate) fn send_all_data_to_remote(&mut self, connection: &Arc<PlayerConnection>) {
         let guard = self.lock_all_containers();
 
         let items: Vec<ItemStack> = self
@@ -406,12 +386,8 @@ impl MenuBehavior {
         }
     }
 
-    /// Syncs only the changed slots, carried item and data slots to the
-    /// client. Called once per tick.
-    ///
-    /// Based on Java's `AbstractContainerMenu::broadcastChanges`.
-    /// Slot content packets increment `state_id`, matching vanilla's
-    /// `ContainerSynchronizer::sendSlotChange`.
+    /// Syncs only the changed slots, carried item and data slots to the client,
+    /// once per tick.
     pub fn broadcast_changes(&mut self, connection: &Arc<PlayerConnection>) {
         let guard = self.lock_all_containers();
 
@@ -419,7 +395,7 @@ impl MenuBehavior {
         for index in 0..self.slots.len() {
             let item = self.slots[index].get_item(&guard);
             if self.remote_slots[index].matches(item) {
-                // A matched hash is cached as Known to avoid re-hashing next tick.
+                // Cache a matched hash as Known to avoid re-hashing next tick.
                 if matches!(self.remote_slots[index], RemoteSlot::Hashed(_)) {
                     self.remote_slots[index] = RemoteSlot::Known(item.clone());
                 }
@@ -446,8 +422,7 @@ impl MenuBehavior {
         }
     }
 
-    /// Sends a data slot update to the client if it has changed.
-    /// Based on Java's `AbstractContainerMenu::synchronizeDataSlotToRemote`.
+    /// Sends a data slot update to the client if it changed.
     fn synchronize_data_slot_to_remote(
         &mut self,
         index: usize,
@@ -471,9 +446,8 @@ impl MenuBehavior {
         }
     }
 
-    /// Sends a single slot update to the client and records the sent stack as
-    /// the client's perception.
-    /// Based on Java's `AbstractContainerMenu::synchronizeSlotToRemote`.
+    /// Sends a single slot update and records the sent stack as the client's
+    /// perception.
     fn synchronize_slot_to_remote(
         &mut self,
         slot: usize,
@@ -498,7 +472,6 @@ impl MenuBehavior {
     }
 
     /// Sends the carried item (cursor) to the client.
-    /// Based on Java's `AbstractContainerMenu::synchronizeCarriedToRemote`.
     fn synchronize_carried_to_remote(&mut self, connection: &Arc<PlayerConnection>) {
         if self.suppress_remote_updates {
             return;
@@ -512,25 +485,23 @@ impl MenuBehavior {
         self.remote_carried.force(&self.carried);
     }
 
-    /// Sets a remote slot to a known `ItemStack`.
-    /// Called when we know exactly what the client has (e.g., creative mode set).
-    /// Based on Java's `AbstractContainerMenu::setRemoteSlot`.
-    pub fn set_remote_slot_known(&mut self, slot: usize, item: &ItemStack) {
+    /// Sets a remote slot to a known `ItemStack` when we know exactly what the
+    /// client has.
+    pub(crate) fn set_remote_slot_known(&mut self, slot: usize, item: &ItemStack) {
         if slot < self.remote_slots.len() {
             self.remote_slots[slot].force(item);
         }
     }
 
     /// Forgets what the client has in `slot`, forcing a resync on the next broadcast.
-    pub fn mark_remote_slot_unknown(&mut self, slot: usize) {
+    pub(crate) fn mark_remote_slot_unknown(&mut self, slot: usize) {
         if slot < self.remote_slots.len() {
             self.remote_slots[slot] = RemoteSlot::Unknown;
         }
     }
 
-    /// Handles the client reporting its own perception of a slot.
-    /// Based on Java's `AbstractContainerMenu::setRemoteSlotUnsafe`.
-    pub fn set_remote_slot(&mut self, slot: usize, hash: HashedStack) {
+    /// Records the client's reported perception of a slot.
+    pub(crate) fn set_remote_slot(&mut self, slot: usize, hash: HashedStack) {
         if slot < self.remote_slots.len() {
             self.remote_slots[slot].receive(hash);
         } else {
@@ -542,15 +513,13 @@ impl MenuBehavior {
         }
     }
 
-    /// Handles a remote carried update from the client.
-    /// Based on Java's `AbstractContainerMenu::setRemoteCarried`.
-    pub fn set_remote_carried(&mut self, hash: HashedStack) {
+    /// Records the client's reported carried item.
+    pub(crate) fn set_remote_carried(&mut self, hash: HashedStack) {
         self.remote_carried.receive(hash);
     }
 
-    /// Handles one phase of a quickcraft (drag) operation; `can_drag_to` is
+    /// Handles one phase of a quickcraft (drag) operation. `can_drag_to` is
     /// the kind's per-slot veto.
-    /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.QUICK_CRAFT`.
     pub(crate) fn do_quick_craft(
         &mut self,
         action: QuickCraft,
@@ -558,8 +527,7 @@ impl MenuBehavior {
         player: &Player,
         can_drag_to: &impl Fn(usize) -> bool,
     ) {
-        // Validate the phase against the state machine position: a drag must
-        // go Start -> AddSlot* -> End.
+        // A drag must go Start -> AddSlot* -> End.
         let valid_transition = match action {
             QuickCraft::Start { .. } => self.quickcraft.is_none(),
             QuickCraft::AddSlot { .. } | QuickCraft::End { .. } => self.quickcraft.is_some(),
@@ -576,7 +544,7 @@ impl MenuBehavior {
 
         match action {
             QuickCraft::Start { kind } => {
-                // A clone (middle-click) drag requires creative mode.
+                // A clone (middle-click) drag requires creative.
                 if kind == DragKind::Clone && !has_infinite_materials {
                     self.reset_quick_craft();
                     return;
@@ -615,11 +583,9 @@ impl MenuBehavior {
         };
         if !self.quickcraft_slots.is_empty() {
             if self.quickcraft_slots.len() == 1 {
-                // Only one slot - treat as a regular pickup click
+                // A single slot behaves as a regular pickup click.
                 let slot = self.quickcraft_slots[0];
                 self.reset_quick_craft();
-                // A left drag places like a left click; right and clone
-                // drags act as secondary (matching Java's ClickAction).
                 let button = if kind == DragKind::Left {
                     MouseButton::Left
                 } else {
@@ -676,28 +642,24 @@ impl MenuBehavior {
         self.reset_quick_craft();
     }
 
-    /// Drops the carried stack when the player clicks outside the window.
-    /// Based on the `slotId == -999` branch of Java's
-    /// `AbstractContainerMenu::doClick` for `ClickType.PICKUP`.
+    /// Drops the carried stack when the player clicks outside the window. Left
+    /// drops all, right drops one.
     pub(crate) fn drop_carried(&mut self, button: MouseButton, player: &Player) {
         if self.carried.is_empty() {
             return;
         }
         match button {
             MouseButton::Left => {
-                // Left click outside - drop all carried items
                 let to_drop = mem::take(&mut self.carried);
                 let _ = player.drop_item(to_drop, false, true);
             }
             MouseButton::Right => {
-                // Right click outside - drop one carried item
                 let _ = player.drop_item(self.carried.split(1), false, true);
             }
         }
     }
 
-    /// Handles pickup click (left/right click to pick up or place items).
-    /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.PICKUP`.
+    /// Handles a pickup click (left/right click to pick up or place items).
     pub(crate) fn do_pickup(&mut self, slot_index: usize, button: MouseButton, player: &Player) {
         let mut guard = self.lock_all_containers();
 
@@ -707,7 +669,7 @@ impl MenuBehavior {
         let carried = mem::take(&mut self.carried);
 
         if slot_item.is_empty() {
-            // Slot is empty - place carried items (if allowed)
+            // Empty slot: place carried items if allowed.
             if !carried.is_empty() && slot.may_place(&carried) {
                 let requested = if button == MouseButton::Left {
                     carried.count
@@ -716,30 +678,24 @@ impl MenuBehavior {
                 };
                 self.carried = slot.safe_insert(&mut guard, carried, requested);
             } else {
-                // Can't place - keep carrying
                 self.carried = carried;
             }
         } else if carried.is_empty() {
-            // Carried is empty - pick up from slot (if allowed)
-            // Use try_remove which enforces allow_modification rules
-            // (result slots must be picked up in full, not partially)
+            // Empty cursor: pick up from the slot. Result slots reject partial takes.
             let amount = if button == MouseButton::Left {
                 slot_item.count
             } else {
                 (slot_item.count + 1) / 2
             };
 
-            // max_amount is i32::MAX for primary action (take all requested)
-            // For result slots, try_remove will reject partial takes
             if let Some(taken) = slot.try_remove(&mut guard, amount, i32::MAX, player) {
                 if let Some(remainder) = slot.on_take(&mut guard, &taken, player) {
-                    // There's a remainder from crafting - add to player inventory or drop
                     player.add_item_or_drop_with_guard(&mut guard, remainder);
                 }
                 self.carried = taken;
             }
         } else if ItemStack::is_same_item_same_components(&slot_item, &carried) {
-            // Same item type - try to stack (if slot allows this item type)
+            // Same item type: stack if the slot accepts it.
             if slot.may_pickup(&guard, player) && slot.may_place(&carried) {
                 let requested = if button == MouseButton::Left {
                     carried.count
@@ -748,10 +704,8 @@ impl MenuBehavior {
                 };
                 self.carried = slot.safe_insert(&mut guard, carried, requested);
             } else {
-                // Can't place this item type in this slot
-                // In Java, if items are same type but may_place fails, try to take from slot
+                // may_place failed: try to take from the slot instead.
                 if slot.may_pickup(&guard, player) {
-                    // Try to add slot items to carried stack
                     let space = carried.max_stack_size() - carried.count;
                     if space > 0 {
                         if let Some(taken) =
@@ -774,7 +728,7 @@ impl MenuBehavior {
                 }
             }
         } else {
-            // Different items - swap (if both operations are allowed)
+            // Different items: swap if both operations are allowed.
             if slot.may_pickup(&guard, player) && slot.may_place(&carried) {
                 if carried.count <= slot.get_max_stack_size_for_item(&guard, &carried) {
                     slot.set_by_player(&mut guard, carried, &slot_item);
@@ -805,11 +759,8 @@ impl MenuBehavior {
         }
     }
 
-    /// Handles throw (drop key). Q drops a single item; Ctrl+Q
-    /// (`whole_stack`) drops the whole stack, repeating while the slot
-    /// refills with the same item.
-    ///
-    /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.THROW`.
+    /// Handles throw (drop key). Q drops one item, Ctrl+Q (`whole_stack`) drops
+    /// the whole stack, repeating while the slot refills with the same item.
     pub(crate) fn do_throw(&mut self, slot_index: usize, whole_stack: bool, player: &Player) {
         if !self.carried.is_empty() {
             return;
@@ -818,12 +769,10 @@ impl MenuBehavior {
         let mut guard = self.lock_all_containers();
         let slot = &self.slots[slot_index];
 
-        // Check if pickup is allowed (Java's safeTake checks this internally)
         if !slot.may_pickup(&guard, player) {
             return;
         }
 
-        // Java checks player.canDropItems() before each drop
         if !player.can_drop_items() {
             return;
         }
@@ -839,14 +788,12 @@ impl MenuBehavior {
             let _ = guard.run_unlocked(|| player.drop_item(dropped.clone(), false, true));
         }
 
-        // Ctrl+Q: Keep dropping while the slot has the same item type
+        // Ctrl+Q: keep dropping while the slot refills with the same item.
         if whole_stack {
             loop {
-                // Check may_pickup again for each iteration (Java does this via safeTake)
                 if !slot.may_pickup(&guard, player) {
                     break;
                 }
-                // Java checks player.canDropItems() before each drop
                 if !player.can_drop_items() {
                     break;
                 }
@@ -865,31 +812,24 @@ impl MenuBehavior {
 }
 
 /// What the server believes the client is showing in one slot.
-///
-/// Starts `Unknown` (always resynced), becomes `Known` when we send the item
-/// and `Hashed` when the client reports its own perception. A `Hashed` slot
-/// that matches once is cached back to `Known` so later ticks compare
-/// structurally instead of re-hashing the components.
 #[derive(Debug, Clone, Default)]
-pub enum RemoteSlot {
-    /// We don't know what the client has (initial state).
+pub(crate) enum RemoteSlot {
+    /// We don't know what the client has.
     #[default]
     Unknown,
     /// We know the exact `ItemStack` the client should have.
     Known(ItemStack),
-    /// We received a hash from the client and verified it matches.
+    /// The client reported a hash of its own perception.
     Hashed(HashedStack),
 }
 
 impl RemoteSlot {
-    /// Forces the remote slot to a known `ItemStack` state.
-    /// Called when we send an item to the client.
+    /// Forces the remote slot to a known `ItemStack`.
     pub fn force(&mut self, item: &ItemStack) {
         *self = Self::Known(item.clone());
     }
 
-    /// Receives a hashed stack from the client.
-    /// Called when the client sends us their perception.
+    /// Records a hashed stack reported by the client.
     pub fn receive(&mut self, hash: HashedStack) {
         *self = Self::Hashed(hash);
     }
@@ -927,7 +867,6 @@ fn hashed_stack_matches(hash: &HashedStack, item: &ItemStack) -> bool {
                 return false;
             }
 
-            // Check item type and count match
             let local_id = item.item.id() as i32;
             if local_id != *item_id {
                 log::info!(
@@ -945,7 +884,6 @@ fn hashed_stack_matches(hash: &HashedStack, item: &ItemStack) -> bool {
                 return false;
             }
 
-            // Validate component hashes
             validate_component_hashes(components, item.patch())
         }
     }
@@ -956,7 +894,7 @@ fn validate_component_hashes(hashed: &HashedPatchMap, patch: &DataComponentPatch
     use rustc_hash::FxHashSet;
     use steel_registry::data_components::ComponentPatchEntry;
 
-    // Check removed components match
+    // Removed components must match.
     let local_removed: FxHashSet<i32> = patch
         .iter_removed()
         .filter_map(|k| REGISTRY.data_components.id_from_key(k).map(|id| id as i32))
@@ -970,24 +908,21 @@ fn validate_component_hashes(hashed: &HashedPatchMap, patch: &DataComponentPatch
         return false;
     }
 
-    // Check added component hashes
-    // For each component in our patch, verify the client sent the correct hash
+    // Each set component in our patch must carry the correct client hash.
     for (key, entry) in patch.iter() {
         if let ComponentPatchEntry::Set(value) = entry {
             let Some(id) = REGISTRY.data_components.id_from_key(key) else {
-                continue; // Unknown component, skip
+                continue;
             };
             let id = id as i32;
 
             let Some(&expected_hash) = hashed.added_components.get(&id) else {
-                // Client didn't send hash for this component
                 log::info!(
                     "HashedStack mismatch: client missing hash for component {key} (id={id})"
                 );
                 return false;
             };
 
-            // Compute the hash of the component value using proper HashOps format
             let Some(component_type) = REGISTRY.data_components.by_id(id as usize) else {
                 log::info!("HashedStack mismatch: component {key} has no registry entry");
                 return false;
@@ -1006,17 +941,17 @@ fn validate_component_hashes(hashed: &HashedPatchMap, patch: &DataComponentPatch
         }
     }
 
-    // Check that the client didn't send extra components we don't have
+    // The client must not send components we don't have.
     for &id in hashed.added_components.keys() {
         let Some(key) = REGISTRY.data_components.get_key_by_id(id as usize) else {
             log::info!("HashedStack mismatch: client sent unknown component id={id}");
-            return false; // Unknown component ID from client
+            return false;
         };
         if !matches!(patch.get_entry(key), Some(ComponentPatchEntry::Set(_))) {
             log::info!(
                 "HashedStack mismatch: client claims component {key} exists but server doesn't have it"
             );
-            return false; // Client claims component exists but we don't have it
+            return false;
         }
     }
 

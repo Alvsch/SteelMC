@@ -1,4 +1,4 @@
-//! Anvil Menus
+//! Anvil menu.
 use std::sync::{
     Arc,
     atomic::{AtomicI32, Ordering},
@@ -84,39 +84,35 @@ pub fn anvil(
     })
 }
 
-/// The per-menu part of an anvil: the two input slots, the result, the level
-/// cost (shared with the result handler), and the current rename text.
+/// Per-menu anvil state: inputs, result, level cost, and rename text.
 pub struct AnvilKind {
-    /// The input container (two slots).
+    /// Input container (two slots).
     input_container: Shared<SimpleContainer>,
-    /// The result container (single virtual slot).
+    /// Result container (single virtual slot).
     result_container: Shared<ResultContainer>,
-    /// The position of the anvil block.
     #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
     repair_item_count: Arc<AtomicI32>,
-    /// Client-facing level cost data slot (the number shown in the anvil UI).
+    /// Client-facing level cost data slot.
     level_cost: DataSlot,
-    /// Level cost shared with [`AnvilResultHandler`], read when validating the
-    /// result pickup and deducting experience. Kept in sync with `level_cost`.
+    /// Level cost shared with [`AnvilResultHandler`], kept in sync with `level_cost`.
     level_cost_value: Arc<AtomicI32>,
     item_name: SyncMutex<Option<String>>,
 }
 
 impl AnvilKind {
-    /// Sets the level cost, keeping the client-facing data slot and the value
-    /// shared with the result handler in sync. The displayed value is clamped to
-    /// `i16`, while the handler reads the full cost for validation/XP deduction.
+    /// Sets the level cost. Displayed value is clamped to `i16`, the handler
+    /// reads the full cost.
     fn set_cost(&mut self, behavior: &mut MenuBehavior, cost: i32) {
         self.level_cost
             .set(behavior, cost.clamp(0, i32::from(i16::MAX)) as i16);
         self.level_cost_value.store(cost, Ordering::Relaxed);
     }
 
-    /// Builds the anvil result from combining and renaming the two input items.
+    /// Builds the anvil result from combining and renaming the two inputs.
     ///
     /// # Panics
-    /// If the input container is not exactly two slots.
+    /// Panics if the input container is not exactly two slots.
     #[tracing::instrument(skip(self, behavior, player, guard), level = "info", fields(player = %player.gameprofile.name))]
     #[expect(clippy::too_many_lines, reason = "not my choice its so long .-.")]
     pub(crate) fn create_result(
@@ -186,7 +182,7 @@ impl AnvilKind {
                 }
 
                 if result.is_damageable_item() && !has_stored_enchantments {
-                    // Combining two of the same item
+                    // Combining two of the same item.
                     let first_durability = first.get_max_damage() - first.get_damage_value();
                     let second_durability = second.get_max_damage() - second.get_damage_value();
                     let durability_bonus = second_durability + result.get_max_damage() * 12 / 100;
@@ -199,7 +195,7 @@ impl AnvilKind {
                     }
                 }
 
-                // Enchantment merging
+                // Enchantment merging.
                 let sacrifice_enchantments: ItemEnchantments =
                     second.get_enchantments().cloned().unwrap_or_default();
                 let mut any_compatible = false;
@@ -265,7 +261,7 @@ impl AnvilKind {
             }
         }
 
-        //// --- Renaming ---
+        // Renaming
         let item_name = self.item_name.lock();
         if let Some(name) = item_name.as_deref().filter(|name| !name.trim().is_empty()) {
             if name != first.hover_name().to_string() {
@@ -280,7 +276,7 @@ impl AnvilKind {
         }
         drop(item_name);
 
-        // Final cost calculation
+        // Final cost.
         let total_cost = if additional_cost == 0 {
             0
         } else {
@@ -301,7 +297,7 @@ impl AnvilKind {
             result = ItemStack::empty();
         }
 
-        // Write repair cost to result
+        // Write repair cost to result.
         if !result.is_empty() {
             let second_repair_cost = *second.get(REPAIR_COST).unwrap_or(&0);
             let mut final_repair_cost = *result.get(REPAIR_COST).unwrap_or(&0);
@@ -322,34 +318,12 @@ impl AnvilKind {
         result_container.set_item(0, result.clone());
     }
 
-    /// Sets the rename text and recomputes the result with it applied.
-    #[tracing::instrument(skip(self, behavior, player), level = "info")]
-    pub fn set_item_name(&mut self, behavior: &mut MenuBehavior, name: String, player: &Player) {
-        let Some(validated_name) = Self::validate_item_name(name) else {
-            return;
-        };
-
-        {
-            let mut item_name_guard = self.item_name.lock();
-            match &*item_name_guard {
-                Some(current) if *current == validated_name => return,
-                _ => *item_name_guard = Some(validated_name),
-            }
-        }
-
-        {
-            let mut guard = behavior.lock_all_containers();
-            self.create_result(behavior, &mut guard, player);
-        }
-        behavior.broadcast_changes(&player.connection);
-    }
-
     fn validate_item_name(name: String) -> Option<String> {
         let filtered = name
             .chars()
             .filter(|char| char != &'§' && char >= &' ' && char != &'\x7F')
             .collect::<String>();
-        (filtered.len() <= 50).then_some(filtered)
+        (filtered.chars().count() <= 50).then_some(filtered)
     }
 
     fn can_store_enchantments(item_stack: &ItemStack) -> bool {
@@ -375,9 +349,30 @@ impl MenuKind for AnvilKind {
         self.create_result(behavior, guard, player);
     }
 
-    /// Called when the anvil menu is closed. The inputs are drained back to the
-    /// player by [`Menu::removed`]; here we just clear the virtual result.
+    /// Clears the virtual result on close. Inputs are drained by [`Menu::removed`].
     fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
         self.result_container.lock().set_item(0, ItemStack::empty());
+    }
+
+    /// Sets the rename text and recomputes the result with it applied.
+    #[tracing::instrument(skip(self, behavior, player), level = "info")]
+    fn on_rename(&mut self, behavior: &mut MenuBehavior, name: String, player: &Player) {
+        let Some(validated_name) = Self::validate_item_name(name) else {
+            return;
+        };
+
+        {
+            let mut item_name_guard = self.item_name.lock();
+            match &*item_name_guard {
+                Some(current) if *current == validated_name => return,
+                _ => *item_name_guard = Some(validated_name),
+            }
+        }
+
+        {
+            let mut guard = behavior.lock_all_containers();
+            self.create_result(behavior, &mut guard, player);
+        }
+        behavior.broadcast_changes(&player.connection);
     }
 }

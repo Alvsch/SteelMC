@@ -304,8 +304,7 @@ impl BlockBehavior for RedStoneWireBlock {
             return state;
         };
         let side_connection = self.get_connecting_side(world, pos, direction);
-        if Self::is_connected(side_connection.clone())
-            == Self::is_connected(state.get_value(property))
+        if Self::is_connected(side_connection) == Self::is_connected(state.get_value(property))
             && !Self::is_cross(state)
         {
             state.set_value(property, side_connection)

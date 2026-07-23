@@ -20,7 +20,7 @@ use crate::{
     world::World,
 };
 
-/// Handler for the result slot inside of an anvil, it handles the logic of subtracting the xp and breaking the anvil
+/// Result slot handler for an anvil.
 #[derive(Clone)]
 pub struct AnvilResultHandler {
     input_container: Shared<SimpleContainer>,
@@ -32,7 +32,7 @@ pub struct AnvilResultHandler {
 }
 
 impl AnvilResultHandler {
-    /// Creates a new `AnvilResultHandler`
+    /// Creates a new handler.
     pub const fn new(
         input_container: Shared<SimpleContainer>,
         result_container: Shared<ResultContainer>,
@@ -53,10 +53,8 @@ impl AnvilResultHandler {
 }
 
 impl ResultHandler for AnvilResultHandler {
-    /// Recalculate the result based on current inputs.
     fn update_result(&self, _guard: &mut ContainerLockGuard) {}
 
-    /// Consume inputs when the result is taken. Return overflow remainders.
     fn on_result_taken(
         &self,
         guard: &mut ContainerLockGuard,
@@ -73,14 +71,16 @@ impl ResultHandler for AnvilResultHandler {
 
         input.set_item(0, ItemStack::empty());
 
-        let second = input.get_item_mut(1);
-        if !second.is_empty() {
-            let repair_cost = self.repair_item_count.load(Ordering::Relaxed);
-            if repair_cost > 0 {
+        let repair_cost = self.repair_item_count.load(Ordering::Relaxed);
+        if repair_cost > 0 {
+            let second = input.get_item_mut(1);
+            if !second.is_empty() && second.count() > repair_cost {
                 second.shrink(repair_cost);
             } else {
                 input.set_item(1, ItemStack::empty());
             }
+        } else {
+            input.set_item(1, ItemStack::empty());
         }
 
         self.level_cost.store(0, Ordering::Relaxed);
@@ -119,11 +119,9 @@ impl ResultHandler for AnvilResultHandler {
         None
     }
 
-    /// Returns whether the stored result item still matches what the current
-    /// inputs would produce. Used to reject stale pickups on result slots.
     fn is_result_valid(&self, _guard: &ContainerLockGuard, player: &Player) -> bool {
         let level_cost = self.level_cost.load(Ordering::Relaxed);
-        player.has_infinite_materials()
-            || player.experience.lock().level() >= level_cost && level_cost > 0
+        (player.has_infinite_materials() || player.experience.lock().level() >= level_cost)
+            && level_cost > 0
     }
 }

@@ -10,19 +10,13 @@ use crate::{
     player::Player,
 };
 
-/// Shared predicate deciding whether an item may be placed into a
-/// [`RestrictedSlot`].
+/// Predicate deciding whether an item may be placed into a [`RestrictedSlot`].
 pub type MayPlaceFn = Arc<dyn Fn(usize, &ItemStack) -> bool + Send + Sync>;
-/// Shared predicate gating whether the player may take the current item back
-/// out of a [`RestrictedSlot`].
+/// Predicate gating pickup from a [`RestrictedSlot`].
 pub type MayPickupFn =
     Arc<dyn Fn(usize, &ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync>;
 
-/// A [`NormalSlot`] whose place/pickup rules and max stack size are supplied
-/// as closures instead of a dedicated [`Slot`] impl.
-///
-/// Built via
-/// [`MenuBuilder::restricted_section`](crate::inventory::MenuBuilder::restricted_section).
+/// A [`NormalSlot`] whose place/pickup rules and max stack size are closures.
 pub struct RestrictedSlot {
     base: NormalSlot,
     may_place_fn: MayPlaceFn,
@@ -31,8 +25,7 @@ pub struct RestrictedSlot {
 }
 
 impl RestrictedSlot {
-    /// Creates a restricted slot over `container[index]`. Pass `None` for
-    /// `may_pickup_fn` to always allow pickup.
+    /// Creates a restricted slot. `None` pickup fn always allows pickup.
     pub fn new(
         container: impl Into<ContainerRef>,
         index: usize,
@@ -50,17 +43,14 @@ impl RestrictedSlot {
 }
 
 impl Slot for RestrictedSlot {
-    #[doc = " Returns a reference to the item in this slot."]
     fn get_item<'a>(&self, guard: &'a ContainerLockGuard) -> &'a ItemStack {
         self.base.get_item(guard)
     }
 
-    #[doc = " Returns a mutable reference to the item in this slot."]
     fn get_item_mut<'a>(&self, guard: &'a mut ContainerLockGuard) -> &'a mut ItemStack {
         self.base.get_item_mut(guard)
     }
 
-    #[doc = " Sets the item in this slot."]
     fn set_item(&self, guard: &mut ContainerLockGuard, stack: ItemStack) {
         self.base.set_item(guard, stack);
     }
@@ -80,20 +70,14 @@ impl Slot for RestrictedSlot {
         })
     }
 
-    #[doc = " Returns the maximum stack size for this slot."]
-    #[doc = ""]
-    #[doc = " For normal slots, this delegates to the container\'s max stack size."]
-    #[doc = " For special slots (like armor), this may return a fixed value (e.g., 1)."]
     fn get_max_stack_size(&self, _guard: &ContainerLockGuard) -> i32 {
         self.max_stack
     }
 
-    #[doc = " Marks the slot\'s container as changed."]
     fn set_changed(&self, guard: &mut ContainerLockGuard) {
         self.base.set_changed(guard);
     }
 
-    #[doc = " Returns the container slot index."]
     fn get_container_slot(&self) -> usize {
         self.base.get_container_slot()
     }

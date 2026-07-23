@@ -1,11 +1,11 @@
-//! The player's inventory menu.
+//! Player inventory menu.
 //!
 //! Slot layout (46 total):
 //! - Slot 0: Crafting result
-//! - Slots 1-4: 2x2 crafting grid
+//! - Slots 1-4: 2x2 grid
 //! - Slots 5-8: Armor (head, chest, legs, feet)
-//! - Slots 9-35: Main inventory (27 slots)
-//! - Slots 36-44: Hotbar (9 slots)
+//! - Slots 9-35: Main inventory (27)
+//! - Slots 36-44: Hotbar (9)
 //! - Slot 45: Offhand
 
 use steel_registry::item_stack::ItemStack;
@@ -20,8 +20,7 @@ use crate::player::player_inventory::PlayerInventory;
 /// Container ID for the player inventory (always 0).
 pub const INVENTORY_MENU_CONTAINER_ID: u8 = 0;
 
-/// Builds the player's inventory menu — the menu that is always open when no
-/// other menu is open.
+/// Builds the player inventory menu, always open when no other menu is.
 ///
 /// The inventory container should contain:
 /// - Slots 0-35: Main inventory (hotbar 0-8, main 9-35)
@@ -36,22 +35,18 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
 
     let mut builder = MenuBuilder::new(None, INVENTORY_MENU_CONTAINER_ID);
 
-    // Slot 0: crafting result.
     let result = builder.result_slot(handler.clone(), result_container.clone());
-    // Slots 1-4: 2x2 crafting grid.
     let grid = builder.section(crafting_container, 4);
-    // Slots 5-8: armor (head, chest, legs, feet → inventory slots 39, 38, 37, 36).
+    // Armor maps head, chest, legs, feet to inventory slots 39, 38, 37, 36.
     let armor = builder.custom_section(armor_slots(&inventory), [inventory.clone()]);
-    // Slots 9-44: main inventory + hotbar.
     let player = builder.player_inventory(&inventory);
-    // Slot 45: offhand (inventory slot 40).
+    // Offhand is inventory slot 40.
     let offhand = builder.custom_section(
         [SlotType::Normal(NormalSlot::new(inventory.clone(), 40))],
         [inventory],
     );
 
-    // No routes — quick_move is a custom override (armor/offhand auto-equip).
-    // The grid is drained back to the player on close.
+    // No routes: quick_move is a custom override. The grid drains on close.
     builder.drain([grid]);
 
     builder.build(InventoryKind {
@@ -67,40 +62,40 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
     })
 }
 
-/// The per-menu part of the player inventory: the recipe handler, the virtual
-/// result container, and the section handles its custom shift-click needs.
+/// Per-menu player-inventory state: recipe handler, result container, and the
+/// section handles for its custom shift-click.
 pub struct InventoryKind {
-    /// The crafting result container.
+    /// The result container.
     result_container: Shared<ResultContainer>,
     handler: CraftingHandler,
-    /// The crafting result (slot 0).
+    /// The result (slot 0).
     result: Section,
-    /// The 2x2 crafting grid (slots 1-4).
+    /// The 2x2 grid (slots 1-4).
     grid: Section,
-    /// The four armor slots (slots 5-8).
+    /// Armor slots (slots 5-8).
     armor: Section,
-    /// Main inventory + hotbar combined (slots 9-44).
+    /// Main inventory + hotbar (slots 9-44).
     inv: Section,
-    /// Main inventory only (slots 9-35).
+    /// Main inventory (slots 9-35).
     main: Section,
-    /// Hotbar only (slots 36-44).
+    /// Hotbar (slots 36-44).
     hotbar: Section,
     /// Offhand (slot 45).
     offhand: Section,
 }
 
 impl InventoryKind {
-    /// The `ContainerId` of the 2x2 crafting grid.
+    /// `ContainerId` of the 2x2 grid.
     pub(crate) fn crafting_id(&self) -> ContainerId {
         self.handler.crafting_id()
     }
 
-    /// A shared handle to the 2x2 crafting grid container.
+    /// Shared handle to the 2x2 grid container.
     pub(crate) fn crafting_container(&self) -> Shared<CraftingContainer> {
         self.handler.crafting_container()
     }
 
-    /// Recomputes the crafting result from the current grid contents.
+    /// Recomputes the result from the current grid contents.
     pub(crate) fn update_result(&self, guard: &mut ContainerLockGuard) {
         self.handler.update_result(guard);
     }
@@ -114,7 +109,6 @@ impl InventoryKind {
         stack: &mut ItemStack,
     ) -> bool {
         if self.main.contains(slot_index) {
-            // Main inventory -> hotbar.
             behavior.move_item_stack_to(
                 guard,
                 stack,
@@ -123,7 +117,6 @@ impl InventoryKind {
                 FillDirection::Forward,
             )
         } else if self.hotbar.contains(slot_index) {
-            // Hotbar -> main inventory.
             behavior.move_item_stack_to(
                 guard,
                 stack,
@@ -132,7 +125,6 @@ impl InventoryKind {
                 FillDirection::Forward,
             )
         } else {
-            // Offhand (or fallback) -> main inventory + hotbar.
             behavior.move_item_stack_to(
                 guard,
                 stack,
@@ -145,12 +137,10 @@ impl InventoryKind {
 }
 
 impl MenuKind for InventoryKind {
-    /// Handles shift-click (quick move) for a slot.
-    /// Based on Java's `InventoryMenu::quickMoveStack`.
+    /// Handles shift-click for a slot, including armor/offhand auto-equip.
     ///
-    /// Always returns `Some` (the inventory menu fully owns its shift-click,
-    /// including armor/offhand auto-equip): the item originally in the slot, or
-    /// empty if nothing was moved.
+    /// Always returns `Some`: the item originally in the slot, or empty if
+    /// nothing moved.
     #[expect(
         clippy::too_many_lines,
         reason = "mirrors Java's InventoryMenu::quickMoveStack branch structure"
@@ -179,10 +169,9 @@ impl MenuKind for InventoryKind {
         let clicked = stack.clone();
         let mut stack_mut = stack;
 
-        // Determine target range based on which slot was clicked
-        // This matches the Java implementation in InventoryMenu::quickMoveStack
+        // Target range depends on the clicked slot.
         let moved = if self.result.contains(slot_index) {
-            // Crafting result -> inventory, prefer to fill existing stacks first.
+            // Result to inventory, filling existing stacks first.
             behavior.move_item_stack_to(
                 guard,
                 &mut stack_mut,
@@ -191,7 +180,7 @@ impl MenuKind for InventoryKind {
                 FillDirection::Backward,
             )
         } else if self.grid.contains(slot_index) || self.armor.contains(slot_index) {
-            // Crafting grid / armor -> inventory.
+            // Grid or armor to inventory.
             behavior.move_item_stack_to(
                 guard,
                 &mut stack_mut,
@@ -200,10 +189,9 @@ impl MenuKind for InventoryKind {
                 FillDirection::Forward,
             )
         } else {
-            // Item is in inventory/hotbar - try to equip it first
+            // Item is in inventory/hotbar, try to equip it first.
             let equippable_slot = clicked.get_equippable_slot();
 
-            // Try to move to armor slot if it's armor
             if let Some(eq_slot) = equippable_slot {
                 if eq_slot.slot_type() == EquipmentSlotType::HumanoidArmor {
                     // Armor slots are ordered head, chest, legs, feet.
@@ -216,9 +204,7 @@ impl MenuKind for InventoryKind {
                             _ => unreachable!(),
                         };
 
-                    // Only try to move if the target armor slot is empty
                     if behavior.slots()[armor_slot_index].has_item(guard) {
-                        // Armor slot occupied, move between inventory/hotbar
                         self.move_between_inventory_and_hotbar(
                             behavior,
                             guard,
@@ -235,7 +221,6 @@ impl MenuKind for InventoryKind {
                         )
                     }
                 } else if eq_slot == EquipmentSlot::OffHand {
-                    // Try to move to offhand slot if empty
                     if behavior.slots()[self.offhand.start()].has_item(guard) {
                         self.move_between_inventory_and_hotbar(
                             behavior,
@@ -276,13 +261,12 @@ impl MenuKind for InventoryKind {
         }
 
         if let Some(remainder) = behavior.slots()[slot_index].on_take(guard, &stack_mut, player) {
-            // Try to place crafting remainders (e.g., empty buckets) back in inventory
+            // Crafting remainders like empty buckets go back to the inventory.
             player.add_item_or_drop_with_guard(guard, remainder);
         }
 
         if self.result.contains(slot_index) {
-            // Java: if (slotIndex == 0) { player.drop(stack, false); }
-            // Drop any items from the result slot that couldn't fit in the inventory
+            // Drop result output that didn't fit.
             if !stack_mut.is_empty() {
                 let _ = guard.run_unlocked(|| player.drop_item(stack_mut, false, true));
             }
@@ -291,14 +275,12 @@ impl MenuKind for InventoryKind {
         Some(clicked)
     }
 
-    /// Returns true if the item can be taken from the slot during pickup all.
-    /// Prevents taking from the crafting result slot.
+    /// Prevents taking from the result slot during pickup-all.
     fn can_take_item_for_pick_all(&self, _carried: &ItemStack, slot_index: usize) -> bool {
         !self.result.contains(slot_index)
     }
 
-    /// Called when the inventory menu is closed. The grid is drained back to the
-    /// player by [`Menu::removed`]; here we just clear the virtual result.
+    /// Clears the virtual result on close. The grid is drained by [`Menu::removed`].
     fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
         self.result_container.lock().set_item(0, ItemStack::empty());
     }

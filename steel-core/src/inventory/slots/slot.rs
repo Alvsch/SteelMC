@@ -1,10 +1,4 @@
 //! Slot abstraction for inventory access.
-//!
-//! This module provides slot types and helper functions for building menus.
-//! The helper functions mirror vanilla Java's `AbstractContainerMenu` methods:
-//! - `add_standard_inventory_slots` - adds main inventory (27 slots) + hotbar (9 slots)
-//! - `add_inventory_slots` - adds main inventory (27 slots, indices 9-35)
-//! - `add_hotbar_slots` - adds hotbar (9 slots, indices 0-8)
 
 use std::sync::Arc;
 
@@ -21,8 +15,7 @@ use crate::inventory::slots::result_slot::ResultSlot;
 use crate::player::Player;
 use crate::player::player_inventory::PlayerInventory;
 
-/// A slot is a view into a single position in a container.
-/// Slots require a `ContainerLockGuard` to access items, ensuring proper locking.
+/// A view into a single position in a container, accessed via a `ContainerLockGuard`.
 #[enum_dispatch]
 pub trait Slot {
     /// Returns a reference to the item in this slot.
@@ -34,13 +27,7 @@ pub trait Slot {
     /// Sets the item in this slot.
     fn set_item(&self, guard: &mut ContainerLockGuard, stack: ItemStack);
 
-    /// Sets the item in this slot, triggered by a player action.
-    ///
-    /// This is called when a player directly places or swaps an item in a slot.
-    /// The `previous` parameter contains the item that was in the slot before.
-    ///
-    /// Subclasses can override this to trigger events like equipment change sounds.
-    /// The default implementation just calls `set_item`.
+    /// Sets the item, triggered by a player action. `previous` is the prior item.
     fn set_by_player(
         &self,
         guard: &mut ContainerLockGuard,
@@ -61,30 +48,19 @@ pub trait Slot {
     }
 
     /// Returns true if items can be picked up from this slot.
-    ///
-    /// Vanilla signature: `mayPickup(Player)`. The `player` is needed because
-    /// some slots (e.g. armor with Curse of Binding) conditionally prevent pickup.
     fn may_pickup(&self, _guard: &ContainerLockGuard, _player: &Player) -> bool {
         true
     }
 
     /// Returns true if partial removal is allowed from this slot.
-    ///
-    /// For normal slots: `may_pickup() && may_place(current_item)`
-    /// For result slots: `false` (must take the full stack)
     fn allow_modification(&self, guard: &ContainerLockGuard, player: &Player) -> bool {
         self.may_pickup(guard, player) && self.may_place(self.get_item(guard))
     }
 
     /// Returns the maximum stack size for this slot.
-    ///
-    /// For normal slots, this delegates to the container's max stack size.
-    /// For special slots (like armor), this may return a fixed value (e.g., 1).
     fn get_max_stack_size(&self, guard: &ContainerLockGuard) -> i32;
 
-    /// Returns the maximum stack size for a specific item in this slot.
-    ///
-    /// Takes the minimum of the slot's max stack size and the item's max stack size.
+    /// Returns the max stack size for `stack` here (min of slot and item limits).
     fn get_max_stack_size_for_item(&self, guard: &ContainerLockGuard, stack: &ItemStack) -> i32 {
         self.get_max_stack_size(guard).min(stack.max_stack_size())
     }
@@ -99,10 +75,6 @@ pub trait Slot {
     }
 
     /// Tries to remove items from this slot with validation.
-    ///
-    /// Returns `Some(items)` if removal succeeded, `None` otherwise.
-    /// If `allow_modification()` is false and `max_amount < item.count`,
-    /// returns `None` (forcing full stack pickup for result slots).
     fn try_remove(
         &self,
         guard: &mut ContainerLockGuard,
@@ -116,7 +88,6 @@ pub trait Slot {
 
         let item_count = self.get_item(guard).count();
 
-        // If modification not allowed (e.g., result slots), must take full stack
         if !self.allow_modification(guard, player) && max_amount < item_count {
             return None;
         }
@@ -134,8 +105,7 @@ pub trait Slot {
         Some(result)
     }
 
-    /// Called when an item is taken from this slot.
-    /// Returns any remainder items that couldn't be placed back (e.g., crafting remainders).
+    /// Called when an item is taken. Returns any remainder that couldn't be placed back.
     fn on_take(
         &self,
         guard: &mut ContainerLockGuard,
@@ -146,11 +116,7 @@ pub trait Slot {
         None
     }
 
-    /// Safely takes items from this slot with all checks and callbacks.
-    ///
-    /// This combines `try_remove` and `on_take` into a single operation.
-    ///
-    /// Returns the items taken (empty if nothing could be taken).
+    /// Takes items with all checks and callbacks. Returns the items taken.
     fn safe_take(
         &self,
         guard: &mut ContainerLockGuard,
@@ -160,7 +126,6 @@ pub trait Slot {
     ) -> ItemStack {
         if let Some(taken) = self.try_remove(guard, amount, max_amount, player) {
             if let Some(remainder) = self.on_take(guard, &taken, player) {
-                // Try to add remainder to player inventory, or drop it
                 player.add_item_or_drop_with_guard(guard, remainder);
             }
             taken
@@ -169,7 +134,7 @@ pub trait Slot {
         }
     }
 
-    /// Inserts up to `amount` items with Vanilla's `Slot::safeInsert` callback behavior.
+    /// Inserts up to `amount` items, firing set callbacks.
     fn safe_insert(
         &self,
         guard: &mut ContainerLockGuard,
@@ -206,24 +171,13 @@ pub trait Slot {
     /// Returns the container slot index.
     fn get_container_slot(&self) -> usize;
 
-    /// Returns true if this is a "fake" slot (like crafting result).
-    /// Fake slots don't persist items and are virtual views.
+    /// Returns true if this is a fake slot that doesn't persist items.
     fn is_fake(&self) -> bool {
         false
     }
 }
 
-/// Forwarding impl so any smart pointer to a `Slot` is itself a `Slot`.
-///
-/// This is what lets `SlotType::Custom(Arc<dyn Slot + Send + Sync>)` satisfy
-/// `enum_dispatch`'s requirement that every variant's inner type implements
-/// the trait directly. It also makes `Arc<NormalSlot>`, `Arc<MyPluginSlot>`,
-/// etc. usable wherever a `Slot` is expected.
-///
-/// Every method is forwarded explicitly (not just the required ones) so that
-/// overrides on the inner type — e.g. `ArmorSlot::may_pickup` — are preserved
-/// when called through the wrapper, instead of silently falling back to the
-/// trait defaults.
+/// Forwards `Slot` through `Arc`. Every method is forwarded so inner overrides survive.
 impl<T: Slot + ?Sized> Slot for Arc<T> {
     fn get_item<'a>(&self, guard: &'a ContainerLockGuard) -> &'a ItemStack {
         (**self).get_item(guard)
@@ -325,18 +279,14 @@ pub enum SlotType {
     Armor(ArmorSlot),
     /// Result slot (fake, doesn't persist items).
     Result(ResultSlot),
-    /// A slot that takes a predicate function to restrict when and what can be placed and removed
+    /// Slot whose place/pickup rules come from closures.
     Restricted(RestrictedSlot),
     /// Custom implementations by Plugins
     Custom(Arc<dyn Slot + Send + Sync>),
 }
 
 impl SlotType {
-    /// Returns the primary container ID and container slot index for this slot.
-    /// Used for matching slots between menus when transferring state.
-    ///
-    /// Only returns `Some` for slots that reference a persistent container
-    /// (player inventory). Returns `None` for fake/virtual slots like crafting results.
+    /// Container ID and slot index. `None` for fake slots like crafting results.
     #[must_use]
     pub fn container_key(&self) -> Option<(ContainerId, usize)> {
         match self {
@@ -347,50 +297,21 @@ impl SlotType {
     }
 }
 
-// These functions mirror vanilla Java's AbstractContainerMenu methods for
-// adding standard inventory slots. They create SlotType vectors that can
-// be appended to a menu's slot list.
-
-/// Adds hotbar slots (9 slots) to the given slot vector.
-///
-/// Maps menu slots to player inventory indices 0-8.
-/// This mirrors Java's `AbstractContainerMenu::addInventoryHotbarSlots`.
-///
-/// # Arguments
-/// * `slots` - The slot vector to append to
-/// * `inventory` - The player's inventory
+/// Adds hotbar slots (player inventory indices 0-8).
 pub fn add_hotbar_slots(slots: &mut Vec<SlotType>, inventory: &Shared<PlayerInventory>) {
     for i in 0..9 {
         slots.push(SlotType::Normal(NormalSlot::new(inventory.clone(), i)));
     }
 }
 
-/// Adds main inventory slots (27 slots) to the given slot vector.
-///
-/// Maps menu slots to player inventory indices 9-35.
-/// This mirrors Java's `AbstractContainerMenu::addInventoryExtendedSlots`.
-///
-/// # Arguments
-/// * `slots` - The slot vector to append to
-/// * `inventory` - The player's inventory
+/// Adds main inventory slots (player inventory indices 9-35).
 pub fn add_inventory_slots(slots: &mut Vec<SlotType>, inventory: &Shared<PlayerInventory>) {
     for i in 9..36 {
         slots.push(SlotType::Normal(NormalSlot::new(inventory.clone(), i)));
     }
 }
 
-/// Adds standard inventory slots (36 slots total) to the given slot vector.
-///
-/// This adds:
-/// - Main inventory: 27 slots (inventory indices 9-35)
-/// - Hotbar: 9 slots (inventory indices 0-8)
-///
-/// This mirrors Java's `AbstractContainerMenu::addStandardInventorySlots`,
-/// which calls `addInventoryExtendedSlots` followed by `addInventoryHotbarSlots`.
-///
-/// # Arguments
-/// * `slots` - The slot vector to append to
-/// * `inventory` - The player's inventory
+/// Adds the main inventory (indices 9-35) followed by the hotbar (indices 0-8).
 pub fn add_standard_inventory_slots(
     slots: &mut Vec<SlotType>,
     inventory: &Shared<PlayerInventory>,
@@ -399,8 +320,7 @@ pub fn add_standard_inventory_slots(
     add_hotbar_slots(slots, inventory);
 }
 
-/// The four armor slots of a player inventory, in display order
-/// (head, chest, legs, feet → inventory indices 39, 38, 37, 36).
+/// The four armor slots in display order (head, chest, legs, feet).
 #[must_use]
 pub fn armor_slots(inventory: &Shared<PlayerInventory>) -> [SlotType; 4] {
     [

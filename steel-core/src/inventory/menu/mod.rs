@@ -8,7 +8,7 @@ pub mod kinds;
 mod layout;
 
 use crate::inventory::container::Container as _;
-pub use behavior::{MenuBehavior, RemoteSlot};
+pub use behavior::MenuBehavior;
 pub use builder::{
     ContainerSlots, DataSlot, FillDirection, IntoSections, MenuBuilder, PlayerInventorySections,
     Section, SectionSource,
@@ -34,14 +34,11 @@ use crate::{
 
 use crate::inventory::click::{Click, ClickOutcome, SwapTarget, can_item_quick_replace};
 
-/// A menu opened by a player: all the shared click machinery plus one
+/// A menu opened by a player: the shared click machinery plus one
 /// [`MenuKind`].
 ///
-/// This is the single concrete menu type — there is no `trait Menu`. It owns
-/// the [`MenuBehavior`] (slots, sync state), the `MenuLayout` (sections,
-/// shift-click routes, drain list), and a [`MenuKindType`] which is the only
-/// per-menu part (recipe recompute, validity, close cleanup). Every click
-/// handler lives here as an inherent method.
+/// The single concrete menu type. It owns the [`MenuBehavior`], the
+/// `MenuLayout`, and a [`MenuKindType`]. Click handlers are inherent methods.
 pub struct Menu {
     behavior: MenuBehavior,
     layout: MenuLayout,
@@ -58,9 +55,7 @@ impl fmt::Debug for Menu {
 }
 
 impl Menu {
-    /// Assembles a menu from its parts. Crate-internal: the only way to obtain
-    /// a `Menu` is [`MenuBuilder::build`](crate::inventory::MenuBuilder::build),
-    /// which guarantees the layout's slot ranges match the behavior's slots.
+    /// Assembles a menu from its parts.
     pub(super) const fn from_parts(
         behavior: MenuBehavior,
         layout: MenuLayout,
@@ -102,7 +97,7 @@ impl Menu {
     }
 
     /// The menu type for the open-screen packet, or `None` for the player's own
-    /// inventory (which is never opened via `open_menu`).
+    /// inventory.
     #[must_use]
     pub const fn menu_type(&self) -> Option<MenuTypeRef> {
         self.behavior.menu_type()
@@ -120,12 +115,9 @@ impl Menu {
         self.kind.can_take_item_for_pick_all(carried, slot_index)
     }
 
-    /// Called when the menu is closed/removed. Hands the carried item and the
-    /// input sections back to the player, then runs the kind's extra cleanup.
-    ///
-    /// Mirrors vanilla `AbstractContainerMenu.removed` / `clearContainer`: the
-    /// items go back into the inventory only if the player is alive and still
-    /// connected, otherwise they are dropped into the world (see
+    /// Called when the menu is closed. Hands the carried item and input sections
+    /// back to the player, then runs the kind's cleanup. Items drop into the
+    /// world if the player can't take them (see
     /// [`Player::returns_menu_items_to_inventory`]).
     pub fn removed(&mut self, player: &Player) {
         let return_to_inventory = player.returns_menu_items_to_inventory();
@@ -145,17 +137,15 @@ impl Menu {
         kind.removed(behavior, player);
     }
 
-    /// Applies an anvil rename to this menu; a no-op unless it is an anvil menu.
-    pub fn set_anvil_item_name(&mut self, name: impl Into<String>, player: &Player) {
+    /// Applies a client rename to the menu's kind. A no-op for kinds without a
+    /// rename input.
+    pub fn set_item_name(&mut self, name: impl Into<String>, player: &Player) {
         let Self { behavior, kind, .. } = self;
-        if let MenuKindType::Anvil(anvil) = kind {
-            anvil.set_item_name(behavior, name.into(), player);
-        }
+        kind.on_rename(behavior, name.into(), player);
     }
 
-    /// Clears or counts crafting-grid items in the base inventory menu using
-    /// vanilla `/clear` semantics, returning the number cleared or counted. A
-    /// no-op (returns 0) for any other menu.
+    /// Clears or counts crafting-grid items in the base inventory menu,
+    /// returning the number cleared or counted. Returns 0 for any other menu.
     pub(crate) fn clear_or_count_crafting_items(
         &mut self,
         predicate: &dyn Fn(&ItemStack) -> bool,
@@ -200,8 +190,8 @@ impl Menu {
         kind.slots_changed(behavior, guard, player);
     }
 
-    /// Runs the kind's `on_open` hook. Called after the menu's contents are
-    /// built but before they are sent to the client.
+    /// Runs the kind's `on_open` hook, after contents are built but before they
+    /// are sent to the client.
     pub fn on_open(&mut self, player: &Player) {
         let mut guard = self.behavior().lock_all_containers();
         let Self { behavior, kind, .. } = self;
@@ -215,11 +205,9 @@ impl Menu {
         kind.on_tick(behavior, &mut guard, player);
     }
 
-    /// Handles shift-click (quick move) for a slot: the kind's override if it
-    /// provides one, otherwise the declarative route table.
-    ///
-    /// Returns the item originally in the slot, or empty if nothing was moved.
-    /// Based on Java's `AbstractContainerMenu::quickMoveStack`.
+    /// Shift-click (quick move) for a slot: the kind's override if any, else the
+    /// declarative route table. Returns the item originally in the slot, or
+    /// empty if nothing moved.
     fn quick_move_stack(
         &mut self,
         guard: &mut ContainerLockGuard,
@@ -238,11 +226,8 @@ impl Menu {
         }
     }
 
-    /// Handles a click action in this menu.
-    ///
-    /// Clicks are parsed and validated at the packet boundary via
-    /// [`Click::parse`], so every slot index here is already in range.
-    /// Based on Java's `AbstractContainerMenu::clicked` and `doClick`.
+    /// Handles a click action in this menu. Clicks are validated at the packet
+    /// boundary via [`Click::parse`], so every slot index here is in range.
     ///
     /// TODO: Add `tryItemClickBehaviorOverride` for bundle item support.
     pub fn clicked(&mut self, click: Click, player: &Player) {
@@ -262,14 +247,13 @@ impl Menu {
                 });
             }
         } else {
-            // Any non-quickcraft click resets quickcraft state if in progress
+            // Any non-quickcraft click resets an in-progress quickcraft.
             if self.behavior().quickcraft().is_some() {
                 self.behavior_mut().reset_quick_craft();
             }
 
-            // Menu-defined click hook (buttons). If the menu consumes the click,
-            // skip the default pickup/swap/move handling. The guard is dropped
-            // before the default arms below, which re-lock the same containers.
+            // Menu-defined click hook. A consumed click skips default handling.
+            // The guard is dropped before the default arms re-lock the same containers.
             let outcome = {
                 let mut guard = self.behavior().lock_all_containers();
                 let Self { behavior, kind, .. } = self;
@@ -303,11 +287,8 @@ impl Menu {
                 }
             }
         }
-        // Recompute recipe-driven slots after the click. Slot-carrying clicks
-        // are in range by construction; a QuickCraft (drag) distributes its
-        // items on the end phase without a slot, so recompute on any non-empty
-        // menu too — otherwise the result stays stale after a drag-place into
-        // a grid.
+        // Recompute recipe-driven slots after the click. A QuickCraft drag has
+        // no slot on its end phase, so recompute on any non-empty menu.
         let should_recompute = match click {
             Click::DropCarried { .. } => false,
             Click::QuickCraft(_) => !self.behavior().slots().is_empty(),
@@ -320,7 +301,6 @@ impl Menu {
     }
 
     /// Handles quick move (shift-click).
-    /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.QUICK_MOVE`.
     fn do_quick_move(&mut self, slot_index: usize, player: &Player) {
         let mut guard = self.behavior().lock_all_containers();
 
@@ -333,7 +313,7 @@ impl Menu {
             return;
         }
 
-        // Call quick_move_stack in a loop while the item type remains the same
+        // Loop while the slot still holds the same item type.
         let mut result = self.quick_move_stack(&mut guard, slot_index, player);
 
         while !result.is_empty() {
@@ -345,10 +325,8 @@ impl Menu {
         }
     }
 
-    /// Handles swap (number keys to swap with a hotbar slot, or the
-    /// swap-hands key for the offhand).
-    ///
-    /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.SWAP`.
+    /// Handles swap (number keys for a hotbar slot, or swap-hands for the
+    /// offhand).
     fn do_swap(&mut self, slot_index: usize, with: SwapTarget, player: &Player) {
         let mut guard = self.behavior().lock_all_containers();
 
@@ -368,7 +346,7 @@ impl Menu {
         }
 
         if source_item.is_empty() {
-            // Move from target to inventory
+            // Move target -> inventory.
             if target_slot.may_pickup(&guard, player)
                 && let Some(taken) =
                     target_slot.try_remove(&mut guard, target_item.count, i32::MAX, player)
@@ -381,7 +359,7 @@ impl Menu {
                 }
             }
         } else if target_item.is_empty() {
-            // Move from inventory to target
+            // Move inventory -> target.
             if target_slot.may_place(&source_item) {
                 let max_size = target_slot.get_max_stack_size_for_item(&guard, &source_item);
                 if source_item.count > max_size {
@@ -401,11 +379,11 @@ impl Menu {
                 }
             }
         } else {
-            // Swap items between target and inventory
+            // Swap target <-> inventory.
             if target_slot.may_pickup(&guard, player) && target_slot.may_place(&source_item) {
                 let max_size = target_slot.get_max_stack_size_for_item(&guard, &source_item);
                 if source_item.count > max_size {
-                    // Source is too big - place partial and add target to inventory
+                    // Source too big: place a partial stack, return target to inventory.
                     target_slot.set_by_player(
                         &mut guard,
                         source_item.copy_with_count(max_size),
@@ -414,13 +392,11 @@ impl Menu {
                     if let Some(remainder) = target_slot.on_take(&mut guard, &target_item, player) {
                         player.add_item_or_drop_with_guard(&mut guard, remainder);
                     }
-                    // Try to add target item to inventory, drop if can't fit
                     if let Some(inv) = guard.get_mut(player_inv_id) {
                         inv.get_item_mut(inventory_slot).shrink(max_size);
                     }
                     player.add_item_or_drop_with_guard(&mut guard, target_item);
                 } else {
-                    // Simple swap
                     if let Some(inv) = guard.get_mut(player_inv_id) {
                         inv.set_item(inventory_slot, target_item.clone());
                     }
@@ -433,9 +409,8 @@ impl Menu {
         }
     }
 
-    /// Handles pickup all (double-click).
-    /// Collects matching items from all slots into the carried stack.
-    /// Based on Java's `AbstractContainerMenu::doClick` for `ClickType.PICKUP_ALL`.
+    /// Handles pickup all (double-click): collects matching items from all slots
+    /// into the carried stack.
     fn do_pickup_all(&mut self, slot_index: usize, direction: FillDirection, player: &Player) {
         let mut guard = self.behavior().lock_all_containers();
 
@@ -444,8 +419,6 @@ impl Menu {
         let slot_has_item = !slot.get_item(&guard).is_empty();
         let slot_may_pickup = slot.may_pickup(&guard, player);
 
-        // Can only pickup all if carried is not empty and (slot is empty or can't be picked up)
-        // Java: if (!carried.isEmpty() && (!slotxx.hasItem() || !slotxx.mayPickup(player)))
         if behavior.carried().is_empty() || (slot_has_item && slot_may_pickup) {
             return;
         }
@@ -454,33 +427,31 @@ impl Menu {
         let carried_item = behavior.carried().clone();
         let slot_count = behavior.slots().len();
 
-        // Determine iteration direction (Java uses button == 0 for forward,
-        // button == 1 for reverse).
         let (start, step): (i32, i32) = match direction {
             FillDirection::Forward => (0, 1),
             FillDirection::Backward => (slot_count as i32 - 1, -1),
         };
 
-        // Two passes: first collect non-full stacks, then full stacks
+        // First pass collects non-full stacks, second pass the full ones.
         for pass in 0..2 {
             let mut i = start;
             while i >= 0 && i < slot_count as i32 && self.behavior().carried().count < max_stack {
                 let target_slot = &self.behavior().slots()[i as usize];
                 let target_item = target_slot.get_item(&guard).clone();
 
-                // Java checks: target.hasItem() && canItemQuickReplace(target, carried, true)
-                //              && target.mayPickup(player) && this.canTakeItemForPickAll(carried, target)
                 if !target_item.is_empty()
                     && can_item_quick_replace(&target_item, &carried_item, true)
                     && target_slot.may_pickup(&guard, player)
                     && self.can_take_item_for_pick_all(&carried_item, i as usize)
                 {
-                    // First pass: skip full stacks; Second pass: include full stacks
+                    // First pass skips full stacks, second pass includes them.
                     if pass != 0 || target_item.count != target_item.max_stack_size() {
                         let can_take = max_stack - self.behavior().carried().count;
                         let to_take = target_item.count.min(can_take);
                         let removed = target_slot.safe_take(&mut guard, to_take, can_take, player);
-                        self.behavior_mut().carried_mut().grow(removed.count);
+                        self.behavior_mut()
+                            .carried_mut()
+                            .grow(removed.count.min(can_take));
                     }
                 }
 

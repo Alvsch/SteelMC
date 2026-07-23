@@ -11,22 +11,16 @@ use crate::{
     player::Player,
 };
 
-/// The static layout of a built menu: named section ranges and the shift-click
-/// route table. Held alongside [`MenuBehavior`] so a menu can drive a generic
-/// [`quick_move`](MenuLayout::quick_move) instead of writing one by hand.
+/// Static layout of a built menu: section ranges and the shift-click route table.
 pub(crate) struct MenuLayout {
     pub(crate) routes: Vec<Route>,
     pub(crate) drain_sections: Vec<Range<usize>>,
 }
 
 impl MenuLayout {
-    /// Returns every item in the [`drain`](crate::inventory::MenuBuilder::drain) sections to the
-    /// player, emptying those slots. Call from `removed` so input grids hand
-    /// their contents back on close instead of deleting them.
+    /// Returns every item in the drain sections to the player, emptying those slots.
     ///
-    /// When `return_to_inventory` is false (a dead or disconnected player) the
-    /// items are dropped into the world instead, mirroring vanilla's
-    /// `clearContainer` guard.
+    /// When `return_to_inventory` is false the items are dropped into the world.
     pub fn return_drained_items(
         &self,
         behavior: &MenuBehavior,
@@ -53,15 +47,9 @@ impl MenuLayout {
         }
     }
 
-    /// Performs a generic shift-click for `slot_index` using the route table.
+    /// Generic shift-click for `slot_index` via the route table.
     ///
-    /// This reproduces the hand-written `quick_move_stack` shape: find the route
-    /// whose source contains the clicked slot, move the stack into the first
-    /// target that accepts it, write the remainder back, and — for fake result
-    /// slots — fire `on_take` (returning any crafting remainder to the player).
-    ///
-    /// Returns the item that was originally in the slot, or empty if nothing
-    /// moved, matching [`Menu::quick_move_stack`](crate::inventory::menu::Menu::quick_move_stack).
+    /// Returns the item originally in the slot, or empty if nothing moved.
     pub fn quick_move(
         &self,
         behavior: &MenuBehavior,
@@ -78,8 +66,7 @@ impl MenuLayout {
             return ItemStack::empty();
         }
 
-        // Reject stale pickups — e.g. a result slot whose recipe no longer
-        // matches the inputs. Normal slots always allow it.
+        // Reject stale pickups like a result slot whose recipe no longer matches.
         if !behavior.slots()[slot_index].may_pickup(guard, player) {
             return ItemStack::empty();
         }
@@ -100,7 +87,7 @@ impl MenuLayout {
 
         behavior.update_quick_move_source(guard, slot_index, &remaining, &clicked);
 
-        // Nothing actually left the slot (e.g. the target was full).
+        // Nothing left the slot.
         if remaining.count == clicked.count {
             return ItemStack::empty();
         }
@@ -109,8 +96,7 @@ impl MenuLayout {
         if let Some(leftover) = slot.on_take(guard, &remaining, player) {
             player.add_item_or_drop_with_guard(guard, leftover);
         }
-        // Output that didn't fit in the inventory is dropped, matching
-        // vanilla's result-slot shift-click (`player.drop(stack, false)`).
+        // Output that didn't fit is dropped.
         if slot.is_fake() && !remaining.is_empty() {
             let _ = guard.run_unlocked(|| player.drop_item(remaining.clone(), false, true));
         }

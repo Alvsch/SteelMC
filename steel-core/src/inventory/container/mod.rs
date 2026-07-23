@@ -410,12 +410,10 @@ mod tests {
             &mut self.items
         }
 
-        #[doc = " Returns the number of slots in this container."]
         fn get_container_size(&self) -> usize {
             self.items.len()
         }
 
-        #[doc = " Marks this container as changed (dirty) for saving/syncing."]
         fn set_changed(&mut self) {}
     }
 

@@ -16,8 +16,7 @@ use crate::behavior::{
     InteractionResult, InventoryAccess, PlacementSource,
 };
 use crate::block_entity::entities::ComparatorBlockEntity;
-use crate::entity::Entity;
-use crate::entity::entities::ItemFrameEntity;
+use crate::entity::{Entity, ItemFrame};
 use crate::player::Player;
 use crate::world::tick_scheduler::TickPriority;
 use crate::world::{
@@ -73,7 +72,7 @@ impl ComparatorBlock {
         );
         let frames = world.get_entities_in_aabb_matching(&bounds, |entity| {
             entity
-                .downcast_ref::<ItemFrameEntity>()
+                .as_item_frame()
                 .is_some_and(|frame| frame.direction() == direction)
         });
         if frames.len() != 1 {
@@ -81,8 +80,8 @@ impl ComparatorBlock {
         }
         frames[0]
             .as_ref()
-            .downcast_ref::<ItemFrameEntity>()
-            .map(ItemFrameEntity::analog_output)
+            .as_item_frame()
+            .map(ItemFrame::analog_output)
     }
 
     fn get_input_signal(world: &Arc<World>, pos: BlockPos, state: BlockStateId) -> i32 {
@@ -390,9 +389,43 @@ impl BlockBehavior for ComparatorBlock {
 
 #[cfg(test)]
 mod tests {
+    use glam::DVec3;
+    use steel_registry::entity_type::EntityTypeRef;
     use steel_registry::test_support::init_test_registry;
+    use steel_registry::{vanilla_blocks, vanilla_entities};
+    use steel_utils::ChunkPos;
 
     use super::*;
+    use crate::entity::{EntityBase, SharedEntity};
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+
+    struct TestItemFrame {
+        base: EntityBase,
+        direction: Direction,
+        analog_output: i32,
+    }
+
+    crate::entity::impl_test_downcast_type!(TestItemFrame);
+
+    impl Entity for TestItemFrame {
+        fn base(&self) -> &EntityBase {
+            &self.base
+        }
+
+        fn entity_type(&self) -> EntityTypeRef {
+            &vanilla_entities::ITEM_FRAME
+        }
+    }
+
+    impl ItemFrame for TestItemFrame {
+        fn direction(&self) -> Direction {
+            self.direction
+        }
+
+        fn analog_output(&self) -> i32 {
+            self.analog_output
+        }
+    }
 
     #[test]
     fn output_calculation_matches_compare_and_subtract_modes() {
@@ -446,5 +479,32 @@ mod tests {
             .into_created()
             .expect("comparator should create its block entity");
         assert!(entity.downcast_ref::<ComparatorBlockEntity>().is_some());
+    }
+
+    #[test]
+    fn item_frame_signal_uses_item_frame_capability() {
+        init_test_registry();
+        let world = fresh_test_world("comparator_item_frame_capability");
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(&world, ChunkPos::from_block_pos(pos));
+
+        let frame: SharedEntity = Arc::new(TestItemFrame {
+            base: EntityBase::new(
+                9_001,
+                DVec3::new(8.5, 64.25, 8.5),
+                vanilla_entities::ITEM_FRAME.dimensions,
+                Arc::downgrade(&world),
+            ),
+            direction: Direction::North,
+            analog_output: 6,
+        });
+        world
+            .try_add_entity(frame)
+            .expect("test item frame should enter loaded chunk");
+
+        assert_eq!(
+            ComparatorBlock::item_frame_signal(world.as_ref(), Direction::North, pos),
+            Some(6)
+        );
     }
 }

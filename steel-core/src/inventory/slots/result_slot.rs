@@ -30,7 +30,6 @@ impl ResultSlot {
 }
 
 impl Slot for ResultSlot {
-    /// Returns a reference to the item in this slot.
     fn get_item<'a>(&self, guard: &'a ContainerLockGuard) -> &'a ItemStack {
         guard
             .get(self.result_container.container_id())
@@ -38,7 +37,6 @@ impl Slot for ResultSlot {
             .get_item(0)
     }
 
-    /// Returns a mutable reference to the item in this slot."]
     fn get_item_mut<'a>(&self, guard: &'a mut ContainerLockGuard) -> &'a mut ItemStack {
         guard
             .get_mut(self.result_container.container_id())
@@ -46,7 +44,6 @@ impl Slot for ResultSlot {
             .get_item_mut(0)
     }
 
-    /// Sets the item in this slot.
     fn set_item(&self, guard: &mut ContainerLockGuard, stack: ItemStack) {
         guard
             .get_mut(self.result_container.container_id())
@@ -54,10 +51,6 @@ impl Slot for ResultSlot {
             .set_item(0, stack);
     }
 
-    /// Returns the maximum stack size for this slot.
-    ///
-    /// For normal slots, this delegates to the container's max stack size.
-    /// For special slots (like armor), this may return a fixed value (e.g., 1).
     fn get_max_stack_size(&self, guard: &ContainerLockGuard) -> i32 {
         guard
             .get(self.result_container.container_id())
@@ -65,7 +58,6 @@ impl Slot for ResultSlot {
             .get_max_stack_size()
     }
 
-    /// Marks the slot's container as changed.
     fn set_changed(&self, guard: &mut ContainerLockGuard) {
         guard
             .get_mut(self.result_container.container_id())
@@ -73,7 +65,6 @@ impl Slot for ResultSlot {
             .set_changed();
     }
 
-    /// Returns the container slot index.
     fn get_container_slot(&self) -> usize {
         0
     }

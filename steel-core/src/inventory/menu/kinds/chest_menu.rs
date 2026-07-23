@@ -1,9 +1,9 @@
-//! The chest menu for chest-like containers (chests, barrels, ender chests, shulker boxes).
+//! Chest menu for chest-like containers (chests, barrels, ender chests, shulker boxes).
 //!
-//! Supports 1-6 rows of 9 slots each. The slot layout is:
-//! - Slots 0 to `rows * 9 - 1`: Container slots
-//! - Slots `rows * 9` to `rows * 9 + 26`: Main inventory (27 slots)
-//! - Slots `rows * 9 + 27` to `rows * 9 + 35`: Hotbar (9 slots)
+//! 1-6 rows of 9 slots. Layout:
+//! - Slots 0 to `rows * 9 - 1`: Container
+//! - Slots `rows * 9` to `rows * 9 + 26`: Main inventory (27)
+//! - Slots `rows * 9 + 27` to `rows * 9 + 35`: Hotbar (9)
 
 use steel_registry::menu_type::MenuTypeRef;
 use steel_registry::vanilla_menu_types;
@@ -11,14 +11,10 @@ use steel_registry::vanilla_menu_types;
 use crate::inventory::prelude::*;
 use crate::player::player_inventory::PlayerInventory;
 
-/// Number of slots per row in a chest menu.
+/// Slots per row in a chest menu.
 pub const SLOTS_PER_ROW: usize = 9;
 
-/// Builds a chest-like menu with `rows` rows of 9 slots plus the player
-/// inventory.
-///
-/// Used for chests (3 rows), double chests (6 rows), barrels (3 rows), ender
-/// chests (3 rows) and shulker boxes (3 rows). Based on Java's `ChestMenu`.
+/// Builds a chest-like menu with `rows` rows of 9 slots plus the player inventory.
 ///
 /// # Panics
 /// Panics if `rows` is 0 or greater than 6.
@@ -45,7 +41,7 @@ pub fn chest(
     builder.build(ChestKind { container })
 }
 
-/// Returns the appropriate menu type for the given row count.
+/// Menu type for a chest of `rows` rows.
 ///
 /// # Panics
 /// Panics if `rows` is 0 or greater than 6.
@@ -62,20 +58,14 @@ pub fn menu_type_for_rows(rows: usize) -> MenuTypeRef {
     }
 }
 
-/// The per-menu part of a chest menu: just the backing container, used for the
-/// validity check. Carried-item return and shift-click routing are handled by
-/// [`Menu`] and the route table built by [`MenuBuilder`](crate::inventory::MenuBuilder).
+/// Per-menu chest state: just the backing container for the validity check.
 pub struct ChestKind {
-    /// Reference to the container (chest, barrel, etc.).
+    /// The backing container.
     container: ContainerRef,
 }
 
 impl MenuKind for ChestKind {
     /// Returns true if the backing container is still valid for the player.
-    ///
-    /// Java's `ChestMenu::removed` also calls `container.stopOpen(player)`; we
-    /// don't have that callback yet, so there is no `removed` override (the
-    /// default returns the carried item via [`Menu::removed`]).
     fn still_valid(&self, _behavior: &MenuBehavior, player: &Player) -> bool {
         self.container.still_valid(player)
     }

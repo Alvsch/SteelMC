@@ -38,6 +38,5 @@ impl Container for SimpleContainer {
         &mut self.items
     }
 
-    #[doc = " Marks this container as changed (dirty) for saving/syncing."]
     fn set_changed(&mut self) {}
 }

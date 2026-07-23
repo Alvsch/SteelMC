@@ -1,7 +1,4 @@
-//! The per-menu part of a menu: the [`MenuKind`] hooks and their dispatch
-//! enum [`MenuKindType`]. Everything menus share (slots, click handling,
-//! client sync) lives in [`MenuBehavior`]; a kind only carries what makes its
-//! menu different.
+//! The [`MenuKind`] hooks and their dispatch enum [`MenuKindType`].
 
 use std::fmt;
 
@@ -15,18 +12,11 @@ use enum_dispatch::enum_dispatch;
 
 use crate::inventory::click::{Click, ClickOutcome, QuickCraft};
 
-/// The per-menu behavior that isn't shared: recompute-on-change, validity,
-/// close cleanup, and the optional shift-click override.
-///
-/// Every method has a default, so a trivial storage menu needs to implement
-/// none of them. Dispatched through [`MenuKindType`] (static dispatch for the
-/// vanilla variants, boxed for plugins), mirroring
-/// [`SlotType`](crate::inventory::slots::slot::SlotType) /
-/// [`ResultHandler`](crate::inventory::slots::ResultHandler).
+/// Per-menu behavior that isn't shared: recompute-on-change, validity, close
+/// cleanup, and the optional shift-click override.
 #[enum_dispatch]
 pub trait MenuKind: Send + Sync {
-    /// Recompute recipe-driven slots after a slot changed (crafting result,
-    /// anvil result). Called after every click that touched a real slot.
+    /// Recompute recipe-driven slots after a click touched a real slot.
     fn slots_changed(
         &mut self,
         _behavior: &mut MenuBehavior,
@@ -35,15 +25,15 @@ pub trait MenuKind: Send + Sync {
     ) {
     }
 
-    /// Extra cleanup on close, beyond returning the carried item and draining
-    /// the input sections (both handled by [`Menu::removed`]) — e.g. clearing a
-    /// virtual result container.
+    /// Extra cleanup on close beyond [`Menu::removed`].
     fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {}
 
-    /// Called after the menu is opened and its initial contents have been built,
-    /// but before they're sent to the client — so anything populated here appears
-    /// in the first render. Use for dynamic population, animations, or a sound.
-    /// Bukkit's `InventoryOpenEvent`.
+    /// Applies a rename from the client (anvil-style text input) and recomputes
+    /// any result. No-op for kinds without a rename input.
+    fn on_rename(&mut self, _behavior: &mut MenuBehavior, _name: String, _player: &Player) {}
+
+    /// Runs after initial contents are built but before they're sent, so
+    /// anything populated here appears in the first render.
     fn on_open(
         &mut self,
         _behavior: &mut MenuBehavior,
@@ -52,9 +42,7 @@ pub trait MenuKind: Send + Sync {
     ) {
     }
 
-    /// Called once per server tick while the menu is open, right before changes
-    /// are synced to the client. Use for live/animated menus (timers, updating
-    /// icons). Keep it cheap — it runs every tick for every viewer.
+    /// Runs once per tick per viewer while open, before changes are synced.
     fn on_tick(
         &mut self,
         _behavior: &mut MenuBehavior,
@@ -63,10 +51,9 @@ pub trait MenuKind: Send + Sync {
     ) {
     }
 
-    /// Called for every non-drag click before the default handling. Return
-    /// [`ClickOutcome::Consume`] to treat the slot as a button and skip the
-    /// default pickup/swap/move behavior, or [`ClickOutcome::Fallthrough`] to
-    /// let the menu handle it normally. The clicked slot lives inside `click`.
+    /// Runs for every non-drag click before default handling. Return
+    /// [`ClickOutcome::Consume`] to treat the slot as a button, or
+    /// [`ClickOutcome::Fallthrough`] for default handling.
     fn on_slot_clicked(
         &mut self,
         _behavior: &mut MenuBehavior,
@@ -77,8 +64,8 @@ pub trait MenuKind: Send + Sync {
         ClickOutcome::Fallthrough
     }
 
-    /// Called for each drag (quickcraft) phase before the default handling.
-    /// Return [`ClickOutcome::Consume`] to cancel the drag.
+    /// Runs for each drag phase before default handling. Return
+    /// [`ClickOutcome::Consume`] to cancel the drag.
     fn on_drag(
         &mut self,
         _behavior: &mut MenuBehavior,
@@ -89,28 +76,23 @@ pub trait MenuKind: Send + Sync {
         ClickOutcome::Fallthrough
     }
 
-    /// Returns true if a drag may distribute items into `slot_index`. Unlike
-    /// [`on_drag`](Self::on_drag), which can only cancel the whole drag, this
-    /// vetoes single slots.
+    /// Returns true if a drag may distribute items into `slot_index`.
     fn can_drag_to(&self, _slot_index: usize) -> bool {
         true
     }
 
-    /// Returns true if this menu is still valid for the player (backing block
-    /// still present, player still in range).
+    /// Returns true if this menu is still valid for the player.
     fn still_valid(&self, _behavior: &MenuBehavior, _player: &Player) -> bool {
         true
     }
 
-    /// Returns true if an item may be taken from `slot_index` during a
-    /// double-click pickup-all. Override to protect result slots.
+    /// Returns true if an item may be taken from `slot_index` during pickup-all.
     fn can_take_item_for_pick_all(&self, _carried: &ItemStack, _slot_index: usize) -> bool {
         true
     }
 
-    /// Shift-click override. Return `Some` to fully handle the quick-move (the
-    /// inventory menu's armor/offhand auto-equip does this); return `None` to
-    /// fall back to the declarative route table (`MenuLayout::quick_move`).
+    /// Shift-click override. Return `Some` to fully handle the quick-move, or
+    /// `None` to fall back to the route table.
     fn quick_move(
         &mut self,
         _behavior: &mut MenuBehavior,
@@ -122,8 +104,7 @@ pub trait MenuKind: Send + Sync {
     }
 }
 
-/// Static dispatch over the vanilla menu kinds, with a boxed escape hatch for
-/// plugins. Mirrors [`SlotType`](crate::inventory::slots::slot::SlotType).
+/// Static dispatch over vanilla menu kinds, with a boxed escape hatch for plugins.
 #[enum_dispatch(MenuKind)]
 pub enum MenuKindType {
     /// The always-open player inventory (2×2 grid, armor, offhand).
@@ -134,10 +115,18 @@ pub enum MenuKindType {
     Crafting(CraftingKind),
     /// An anvil (two inputs + result + level-cost data slot).
     Anvil(AnvilKind),
-    /// A menu with no per-kind behavior; all-default vanilla handling.
+    /// Plain vanilla menu with no per-kind behavior.
     Basic(BasicKind),
     /// Plugin-defined menu logic.
     Custom(Box<dyn MenuKind>),
+}
+
+impl MenuKindType {
+    /// Wraps a plugin-defined [`MenuKind`] into [`MenuKindType::Custom`].
+    #[must_use]
+    pub fn custom(kind: impl MenuKind + 'static) -> Self {
+        Self::Custom(Box::new(kind))
+    }
 }
 
 impl fmt::Debug for MenuKindType {
@@ -154,9 +143,7 @@ impl fmt::Debug for MenuKindType {
     }
 }
 
-// Mirror of `impl Slot for Arc<dyn Slot>` in slot.rs, needed for the `Custom`
-// variant. It's `Box`, not `Arc`, because `MenuKind` methods take `&mut self`
-// and `Arc` only hands out shared references.
+// `Box` not `Arc` because `MenuKind` methods take `&mut self`.
 impl MenuKind for Box<dyn MenuKind> {
     fn slots_changed(
         &mut self,
@@ -169,6 +156,10 @@ impl MenuKind for Box<dyn MenuKind> {
 
     fn removed(&mut self, behavior: &mut MenuBehavior, player: &Player) {
         (**self).removed(behavior, player);
+    }
+
+    fn on_rename(&mut self, behavior: &mut MenuBehavior, name: String, player: &Player) {
+        (**self).on_rename(behavior, name, player);
     }
 
     fn still_valid(&self, behavior: &MenuBehavior, player: &Player) -> bool {

@@ -15,18 +15,15 @@ pub trait ResultHandler: Send + Sync {
     fn on_result_taken(&self, guard: &mut ContainerLockGuard, player: &Player)
     -> Option<ItemStack>;
 
-    /// Returns whether the stored result item still matches what the current
-    /// inputs would produce. Used to reject stale pickups on result slots.
+    /// Whether the stored result still matches the current inputs.
     fn is_result_valid(&self, guard: &ContainerLockGuard, player: &Player) -> bool;
 }
 
 impl<T: ResultHandler + ?Sized> ResultHandler for Arc<T> {
-    #[doc = " Recalculate the result based on current inputs."]
     fn update_result(&self, guard: &mut ContainerLockGuard) {
         (**self).update_result(guard);
     }
 
-    #[doc = " Consume inputs when the result is taken. Return overflow remainders."]
     fn on_result_taken(
         &self,
         guard: &mut ContainerLockGuard,
@@ -35,8 +32,6 @@ impl<T: ResultHandler + ?Sized> ResultHandler for Arc<T> {
         (**self).on_result_taken(guard, player)
     }
 
-    #[doc = " Returns whether the stored result item still matches what the current"]
-    #[doc = " inputs would produce. Used to reject stale pickups on result slots."]
     fn is_result_valid(&self, guard: &ContainerLockGuard, player: &Player) -> bool {
         (**self).is_result_valid(guard, player)
     }

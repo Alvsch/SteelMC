@@ -911,8 +911,8 @@ impl Player {
             log::debug!("rename item without an open menu");
             return;
         };
-        if matches!(menu.kind(), MenuKindType::Anvil(_)) && menu.still_valid(self) {
-            menu.set_anvil_item_name(packet.name, self);
+        if menu.still_valid(self) {
+            menu.set_item_name(packet.name, self);
         }
     }
 
@@ -1093,9 +1093,15 @@ impl Player {
     /// once per player tick, before syncing inventory changes to the client.
     pub fn tick_open_menu(&self) {
         let mut open_menu = self.open_menu.lock();
-        if let Some(ref mut menu) = *open_menu {
-            menu.on_tick(self);
+        let Some(menu) = open_menu.as_mut() else {
+            return;
+        };
+        if !menu.still_valid(self) {
+            drop(open_menu);
+            self.close_container();
+            return;
         }
+        menu.on_tick(self);
     }
 
     /// Broadcasts inventory changes to the client (incremental sync).

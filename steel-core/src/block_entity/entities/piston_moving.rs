@@ -186,6 +186,8 @@ impl PistonMovingBlockEntity {
 }
 
 impl PistonMovingState {
+    // Vanilla's two-argument `EntityGetter.getEntities` applies
+    // `EntitySelector.NO_SPECTATORS` before the piston loop.
     fn can_move_collided_entity(entity: &dyn Entity, cause_bounce: bool) -> bool {
         !entity.is_spectator()
             && entity.piston_push_reaction() != PushReaction::Ignore

@@ -1,4 +1,4 @@
-//! The implementations of the different vanilla menus
+//! Vanilla menu kind implementations.
 
 mod anvil_menu;
 mod basic_menu;
