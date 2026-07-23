@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use steel_registry::{
     equipment::EquipmentSlot, item_stack::ItemStack, vanilla_enchantments::BINDING_CURSE,
 };
@@ -7,29 +5,24 @@ use steel_utils::locks::Shared;
 
 use crate::{
     inventory::{
-        lock::{ContainerId, ContainerLockGuard, ContainerRef},
-        slots::slot::Slot,
+        lock::{ContainerLockGuard, ContainerRef},
+        slots::{NormalSlot, Slot},
     },
     player::{Player, player_inventory::PlayerInventory},
 };
 
-/// An armor slot that only accepts items equippable in the corresponding slot.
+/// A [`NormalSlot`] that only accepts items equippable in its equipment slot,
+/// caps at one item, and blocks pickup of curse-of-binding gear.
 pub struct ArmorSlot {
-    container: Shared<PlayerInventory>,
-    index: usize,
+    base: NormalSlot,
     slot: EquipmentSlot,
 }
 
 impl ArmorSlot {
     /// Creates a new armor slot.
-    pub const fn new(
-        container: Shared<PlayerInventory>,
-        index: usize,
-        slot: EquipmentSlot,
-    ) -> Self {
+    pub fn new(container: Shared<PlayerInventory>, index: usize, slot: EquipmentSlot) -> Self {
         Self {
-            container,
-            index,
+            base: NormalSlot::new(container, index),
             slot,
         }
     }
@@ -43,30 +36,21 @@ impl ArmorSlot {
     /// Returns a reference to the container.
     #[must_use]
     pub fn container_ref(&self) -> ContainerRef {
-        ContainerRef::from(Arc::clone(&self.container))
+        self.base.container_ref()
     }
 }
 
 impl Slot for ArmorSlot {
     fn get_item<'a>(&self, guard: &'a ContainerLockGuard) -> &'a ItemStack {
-        guard
-            .get(ContainerId::from_arc(&self.container))
-            .expect("container not locked")
-            .get_item(self.index)
+        self.base.get_item(guard)
     }
 
     fn get_item_mut<'a>(&self, guard: &'a mut ContainerLockGuard) -> &'a mut ItemStack {
-        guard
-            .get_mut(ContainerId::from_arc(&self.container))
-            .expect("container not locked")
-            .get_item_mut(self.index)
+        self.base.get_item_mut(guard)
     }
 
     fn set_item(&self, guard: &mut ContainerLockGuard, stack: ItemStack) {
-        guard
-            .get_mut(ContainerId::from_arc(&self.container))
-            .expect("container not locked")
-            .set_item(self.index, stack);
+        self.base.set_item(guard, stack);
     }
 
     fn set_by_player(
@@ -100,13 +84,10 @@ impl Slot for ArmorSlot {
     }
 
     fn set_changed(&self, guard: &mut ContainerLockGuard) {
-        guard
-            .get_mut(ContainerId::from_arc(&self.container))
-            .expect("container not locked")
-            .set_changed();
+        self.base.set_changed(guard);
     }
 
     fn get_container_slot(&self) -> usize {
-        self.index
+        self.base.get_container_slot()
     }
 }

@@ -117,6 +117,14 @@ pub enum MenuKindType {
     Custom(Box<dyn MenuKind>),
 }
 
+impl MenuKindType {
+    /// Wraps a plugin-defined [`MenuKind`] into [`MenuKindType::Custom`].
+    #[must_use]
+    pub fn custom(kind: impl MenuKind + 'static) -> Self {
+        Self::Custom(Box::new(kind))
+    }
+}
+
 impl fmt::Debug for MenuKindType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {

@@ -450,7 +450,9 @@ impl Menu {
                         let can_take = max_stack - self.behavior().carried().count;
                         let to_take = target_item.count.min(can_take);
                         let removed = target_slot.safe_take(&mut guard, to_take, can_take, player);
-                        self.behavior_mut().carried_mut().grow(removed.count);
+                        self.behavior_mut()
+                            .carried_mut()
+                            .grow(removed.count.min(can_take));
                     }
                 }
 

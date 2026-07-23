@@ -611,6 +611,12 @@ impl MenuBuilder {
         let targets: Vec<Range<usize>> = targets.into_sections().map(|s| self.owned(s)).collect();
         for from in from.into_sections() {
             let from = self.owned(from);
+            assert!(
+                !targets
+                    .iter()
+                    .any(|t| t.start < from.end && from.start < t.end),
+                "shift-click route target {targets:?} overlaps its own source {from:?}",
+            );
             self.routes.push(Route {
                 from,
                 targets: targets.clone(),
