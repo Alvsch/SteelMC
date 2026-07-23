@@ -49,7 +49,7 @@ fn invsee(container_id: u8, source: &Arc<Player>, target: &Arc<Player>) -> Menu 
             [target_ref.clone()],
         );
         let offhand = g.place_slots(
-            Rect::cols(4).rows(..),
+            Rect::cell(4, 0),
             [SlotType::Normal(NormalSlot::new(target_ref.clone(), 40))],
             [target_ref],
         );
@@ -71,7 +71,7 @@ fn invsee(container_id: u8, source: &Arc<Player>, target: &Arc<Player>) -> Menu 
         FillDirection::Forward,
     );
 
-    b.build(MenuKindType::Custom(Box::new(InvseeMenuKind {})))
+    b.build(MenuKindType::custom(InvseeMenuKind {}))
 }
 
 #[derive(Debug)]
