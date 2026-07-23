@@ -71,14 +71,16 @@ impl ResultHandler for AnvilResultHandler {
 
         input.set_item(0, ItemStack::empty());
 
-        let second = input.get_item_mut(1);
-        if !second.is_empty() {
-            let repair_cost = self.repair_item_count.load(Ordering::Relaxed);
-            if repair_cost > 0 {
+        let repair_cost = self.repair_item_count.load(Ordering::Relaxed);
+        if repair_cost > 0 {
+            let second = input.get_item_mut(1);
+            if !second.is_empty() && second.count() > repair_cost {
                 second.shrink(repair_cost);
             } else {
                 input.set_item(1, ItemStack::empty());
             }
+        } else {
+            input.set_item(1, ItemStack::empty());
         }
 
         self.level_cost.store(0, Ordering::Relaxed);
@@ -119,7 +121,7 @@ impl ResultHandler for AnvilResultHandler {
 
     fn is_result_valid(&self, _guard: &ContainerLockGuard, player: &Player) -> bool {
         let level_cost = self.level_cost.load(Ordering::Relaxed);
-        player.has_infinite_materials()
-            || player.experience.lock().level() >= level_cost && level_cost > 0
+        (player.has_infinite_materials() || player.experience.lock().level() >= level_cost)
+            && level_cost > 0
     }
 }

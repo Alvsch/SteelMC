@@ -345,7 +345,7 @@ impl AnvilKind {
             .chars()
             .filter(|char| char != &'§' && char >= &' ' && char != &'\x7F')
             .collect::<String>();
-        (filtered.len() <= 50).then_some(filtered)
+        (filtered.chars().count() <= 50).then_some(filtered)
     }
 
     fn can_store_enchantments(item_stack: &ItemStack) -> bool {
