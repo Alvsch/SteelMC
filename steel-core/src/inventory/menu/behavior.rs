@@ -174,7 +174,7 @@ impl MenuBehavior {
     }
 
     /// Resets the quickcraft state.
-    pub fn reset_quick_craft(&mut self) {
+    pub(crate) fn reset_quick_craft(&mut self) {
         self.quickcraft = None;
         self.quickcraft_slots.clear();
     }
@@ -309,7 +309,7 @@ impl MenuBehavior {
 
     /// Copies another menu's remote slot state, matched by (`container_id`,
     /// `container_slot`), so closing a menu doesn't resync shared inventory slots.
-    pub fn transfer_state(&mut self, other: &MenuBehavior) {
+    pub(crate) fn transfer_state(&mut self, other: &MenuBehavior) {
         use rustc_hash::FxHashMap;
 
         let mut other_slots: FxHashMap<(ContainerId, usize), usize> = FxHashMap::default();
@@ -350,7 +350,7 @@ impl MenuBehavior {
 
     /// Sends every slot, the carried item and all data slots to the client and
     /// marks them synced.
-    pub fn send_all_data_to_remote(&mut self, connection: &Arc<PlayerConnection>) {
+    pub(crate) fn send_all_data_to_remote(&mut self, connection: &Arc<PlayerConnection>) {
         let guard = self.lock_all_containers();
 
         let items: Vec<ItemStack> = self
@@ -487,21 +487,21 @@ impl MenuBehavior {
 
     /// Sets a remote slot to a known `ItemStack` when we know exactly what the
     /// client has.
-    pub fn set_remote_slot_known(&mut self, slot: usize, item: &ItemStack) {
+    pub(crate) fn set_remote_slot_known(&mut self, slot: usize, item: &ItemStack) {
         if slot < self.remote_slots.len() {
             self.remote_slots[slot].force(item);
         }
     }
 
     /// Forgets what the client has in `slot`, forcing a resync on the next broadcast.
-    pub fn mark_remote_slot_unknown(&mut self, slot: usize) {
+    pub(crate) fn mark_remote_slot_unknown(&mut self, slot: usize) {
         if slot < self.remote_slots.len() {
             self.remote_slots[slot] = RemoteSlot::Unknown;
         }
     }
 
     /// Records the client's reported perception of a slot.
-    pub fn set_remote_slot(&mut self, slot: usize, hash: HashedStack) {
+    pub(crate) fn set_remote_slot(&mut self, slot: usize, hash: HashedStack) {
         if slot < self.remote_slots.len() {
             self.remote_slots[slot].receive(hash);
         } else {
@@ -514,7 +514,7 @@ impl MenuBehavior {
     }
 
     /// Records the client's reported carried item.
-    pub fn set_remote_carried(&mut self, hash: HashedStack) {
+    pub(crate) fn set_remote_carried(&mut self, hash: HashedStack) {
         self.remote_carried.receive(hash);
     }
 
@@ -813,7 +813,7 @@ impl MenuBehavior {
 
 /// What the server believes the client is showing in one slot.
 #[derive(Debug, Clone, Default)]
-pub enum RemoteSlot {
+pub(crate) enum RemoteSlot {
     /// We don't know what the client has.
     #[default]
     Unknown,

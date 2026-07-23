@@ -8,7 +8,7 @@ pub mod kinds;
 mod layout;
 
 use crate::inventory::container::Container as _;
-pub use behavior::{MenuBehavior, RemoteSlot};
+pub use behavior::MenuBehavior;
 pub use builder::{
     ContainerSlots, DataSlot, FillDirection, IntoSections, MenuBuilder, PlayerInventorySections,
     Section, SectionSource,

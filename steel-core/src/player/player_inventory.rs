@@ -1093,9 +1093,15 @@ impl Player {
     /// once per player tick, before syncing inventory changes to the client.
     pub fn tick_open_menu(&self) {
         let mut open_menu = self.open_menu.lock();
-        if let Some(ref mut menu) = *open_menu {
-            menu.on_tick(self);
+        let Some(menu) = open_menu.as_mut() else {
+            return;
+        };
+        if !menu.still_valid(self) {
+            drop(open_menu);
+            self.close_container();
+            return;
         }
+        menu.on_tick(self);
     }
 
     /// Broadcasts inventory changes to the client (incremental sync).

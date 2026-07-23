@@ -8,7 +8,7 @@ pub use crate::inventory::{
         ContainerSlots, DataSlot, FillDirection, GridPlacer, Menu, MenuBehavior, MenuBuilder,
         MenuKind, MenuKindType, PlayerInventorySections, Rect, Region, Section, SectionSource,
     },
-    slots::{ResultHandler, SlotType},
+    slots::{NormalSlot, ResultHandler, RestrictedSlot, Slot, SlotType},
 };
 
 pub use crate::player::Player;
