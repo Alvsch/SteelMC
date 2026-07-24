@@ -2857,6 +2857,7 @@ mod tests {
         entities::ItemEntity, next_entity_id,
     };
     use crate::inventory::{
+        click::{Click, ClickOutcome, MouseButton},
         container::{Container as _, SimpleContainer},
         equipment::EquipmentSlot,
         lock::ContainerLockGuard,
@@ -2956,11 +2957,11 @@ mod tests {
             &mut self,
             _behavior: &mut MenuBehavior,
             _guard: &mut ContainerLockGuard,
-            _click: crate::inventory::click::Click,
+            _click: Click,
             player: &Player,
-        ) -> crate::inventory::click::ClickOutcome {
+        ) -> ClickOutcome {
             player.close_container();
-            crate::inventory::click::ClickOutcome::Consume
+            ClickOutcome::Consume
         }
     }
 
@@ -3219,9 +3220,9 @@ mod tests {
         let invalid_slot = menu.behavior().slot_count();
 
         menu.clicked(
-            crate::inventory::click::Click::Pickup {
+            Click::Pickup {
                 slot: invalid_slot,
-                button: crate::inventory::click::MouseButton::Left,
+                button: MouseButton::Left,
             },
             &player,
         );

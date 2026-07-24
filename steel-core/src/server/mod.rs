@@ -498,6 +498,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one setup exercises all explicit and implicit saved-location planning branches"
+    )]
     fn saved_location_planning_honors_explicit_world_selection() {
         let saved_world = fresh_test_world_in_domain("target", "saved");
         let selected_world = fresh_test_world_in_domain("target", "selected");
@@ -607,9 +611,11 @@ mod tests {
                 data: matching_data,
                 ..
             } = matching_plan;
-            let matching_data = match matching_data {
-                UnpreparedDomainPlayerData::SavedRestored { data } => data,
-                _ => panic!("matching explicit world should restore saved location"),
+            let UnpreparedDomainPlayerData::SavedRestored {
+                data: matching_data,
+            } = matching_data
+            else {
+                panic!("matching explicit world should restore saved location");
             };
             let matching_request = matching_world.request_player_spawn_chunks(saved_position);
             let matching_state = DomainPlayerState {
