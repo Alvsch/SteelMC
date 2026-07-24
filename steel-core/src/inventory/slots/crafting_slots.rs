@@ -52,6 +52,12 @@ impl CraftingHandler {
         self.crafting_container.clone()
     }
 
+    /// A shared handle to the result container.
+    #[must_use]
+    pub(crate) fn result_container(&self) -> Shared<ResultContainer> {
+        self.result_container.clone()
+    }
+
     /// The `ContainerId` of the result container
     #[must_use]
     pub fn result_id(&self) -> ContainerId {

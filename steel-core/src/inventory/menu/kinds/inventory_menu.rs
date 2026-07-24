@@ -95,6 +95,11 @@ impl InventoryKind {
         self.handler.crafting_container()
     }
 
+    /// Shared recipe handler for the 2x2 crafting grid and its result.
+    pub(crate) fn crafting_handler(&self) -> CraftingHandler {
+        self.handler.clone()
+    }
+
     /// Recomputes the result from the current grid contents.
     pub(crate) fn update_result(&self, guard: &mut ContainerLockGuard) {
         self.handler.update_result(guard);

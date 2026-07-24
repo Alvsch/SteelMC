@@ -29,7 +29,7 @@ use crate::{
         equipment::{EntityEquipment, EquipmentSlot},
         lock::{ContainerId, ContainerLockGuard},
         menu::{Menu, MenuKindType, kinds::INVENTORY_MENU_CONTAINER_ID},
-        slots::Slot,
+        slots::{CraftingHandler, Slot},
     },
     player::Player,
     world::World,
@@ -1048,6 +1048,16 @@ impl Player {
             unreachable!("a player's inventory_menu is always the Inventory kind");
         };
         kind.crafting_container()
+    }
+
+    /// A shared handler for the 2x2 crafting grid of the always-open inventory
+    /// menu and its result.
+    pub(crate) fn inventory_crafting_handler(&self) -> CraftingHandler {
+        let menu = self.inventory_menu.lock();
+        let MenuKindType::Inventory(kind) = menu.kind() else {
+            unreachable!("a player's inventory_menu is always the Inventory kind");
+        };
+        kind.crafting_handler()
     }
 
     /// Closes the currently open container and returns to the inventory menu.
