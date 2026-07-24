@@ -378,7 +378,7 @@ use super::{
 
 /// Builder for creating a persistent chunk with its own palettes.
 struct ChunkBuilder<'a> {
-    block_states: Vec<PersistentBlockState>,
+    block_states: Vec<PersistentBlockState<'static>>,
     biomes: Vec<Identifier>,
     registry: &'a Registry,
 }
@@ -472,9 +472,10 @@ impl ChunkStorage {
         min_y: i32,
         height: i32,
         level: Weak<World>,
+        thread_pool: &rayon::ThreadPool,
     ) -> io::Result<Option<LoadedChunk>> {
         match self {
-            Self::Disk(rm) => rm.load_chunk(pos, min_y, height, level).await,
+            Self::Disk(rm) => rm.load_chunk(pos, min_y, height, level, thread_pool).await,
             Self::RamOnly(ram) => ram.load_chunk(pos, min_y, height, level).await,
         }
     }
@@ -745,7 +746,7 @@ impl ChunkStorage {
         structure_references: Vec<PersistentStructureReference>,
         pois: Vec<PersistentPoi>,
         chunk_pos: ChunkPos,
-    ) -> PersistentChunk {
+    ) -> PersistentChunk<'static> {
         let mut builder = ChunkBuilder::new(&REGISTRY);
 
         let persistent_sections = sections
@@ -1304,7 +1305,7 @@ impl ChunkStorage {
         reason = "chunk persistence conversion is a linear field-by-field transform"
     )]
     pub(crate) fn persistent_to_chunk(
-        persistent: &PersistentChunk,
+        persistent: &PersistentChunk<'_>,
         pos: ChunkPos,
         status: ChunkStatus,
         min_y: i32,
@@ -2866,7 +2867,7 @@ impl ChunkStorage {
     /// Converts a persistent section to runtime format.
     fn persistent_to_section(
         persistent: &PersistentSection,
-        chunk: &PersistentChunk,
+        chunk: &PersistentChunk<'_>,
     ) -> ChunkSection {
         match persistent {
             PersistentSection::Homogeneous {
@@ -2908,7 +2909,7 @@ impl ChunkStorage {
     /// Converts persistent biome data to runtime format.
     fn persistent_to_biomes(
         persistent: &PersistentBiomeData,
-        chunk: &PersistentChunk,
+        chunk: &PersistentChunk<'_>,
     ) -> PalettedContainer<u16, 4> {
         match persistent {
             PersistentBiomeData::Homogeneous { biome } => {
@@ -2941,7 +2942,7 @@ impl ChunkStorage {
     }
 
     /// Resolves a chunk palette index to a runtime `BlockStateId`.
-    fn resolve_block_state(chunk: &PersistentChunk, index: u16) -> BlockStateId {
+    fn resolve_block_state(chunk: &PersistentChunk<'_>, index: u16) -> BlockStateId {
         if let Some(state) = chunk.block_states.get(index as usize)
             && let Some(state_id) = REGISTRY
                 .blocks
@@ -2953,7 +2954,7 @@ impl ChunkStorage {
     }
 
     /// Resolves a chunk palette index to a runtime biome ID.
-    fn resolve_biome(chunk: &PersistentChunk, index: u16) -> u16 {
+    fn resolve_biome(chunk: &PersistentChunk<'_>, index: u16) -> u16 {
         if let Some(biome_key) = chunk.biomes.get(index as usize)
             && let Some(id) = REGISTRY.biomes.id_from_key(biome_key)
         {
