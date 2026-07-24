@@ -2829,10 +2829,11 @@ impl TextResolutor for Player {
 mod tests {
     use std::cell::Cell;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use glam::DVec3;
     use rustc_hash::FxHashMap;
+    use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
     use steel_protocol::packets::game::{ClickType, HashedStack, SContainerClick};
     use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::blocks::properties::{BlockStateProperties, Direction};
@@ -2844,15 +2845,16 @@ mod tests {
         vanilla_attributes, vanilla_blocks, vanilla_damage_types, vanilla_entities,
         vanilla_game_rules, vanilla_items, vanilla_menu_types,
     };
-    use steel_utils::locks::IntoShared as _;
+    use steel_utils::locks::{IntoShared as _, Shared};
     use steel_utils::types::{Difficulty, GameType, UpdateFlags};
     use steel_utils::{BlockPos, ChunkPos, Downcast as _, WorldAabb};
+    use text_components::TextComponent;
     use uuid::Uuid;
 
     use crate::behavior::init_behaviors;
     use crate::entity::{
         Entity, EntitySyncedData, LivingEntity, RemovalReason, damage::DamageSource,
-        entities::ItemEntity,
+        entities::ItemEntity, next_entity_id,
     };
     use crate::inventory::{
         container::{Container as _, SimpleContainer},
@@ -2861,6 +2863,8 @@ mod tests {
         menu::{Menu, MenuBehavior, MenuBuilder, MenuKind, MenuKindType, kinds::BasicKind},
     };
     use crate::permission::{PermissionEntry, PermissionKey, PermissionMetadataSet, PermissionSet};
+    use crate::player::PlayerConnection;
+    use crate::player::connection::NetworkConnection;
     use crate::test_support::{
         TestPlayerBuilder, fresh_test_world, hard_damage_test_world, insert_ready_full_chunk,
         test_world,
@@ -2877,6 +2881,59 @@ mod tests {
         let player = TestPlayerBuilder::new(world, Uuid::from_u128(1), "TestPlayer", 1).build();
         player.set_client_loaded(true);
         player
+    }
+
+    struct LockProbeState {
+        armed: AtomicBool,
+        saw_packet: AtomicBool,
+        all_callbacks_saw_container_unlocked: AtomicBool,
+    }
+
+    struct LockProbeConnection {
+        state: Arc<LockProbeState>,
+        container: Shared<SimpleContainer>,
+    }
+
+    impl LockProbeConnection {
+        fn record_if_armed(&self) {
+            if !self.state.armed.load(Ordering::Acquire) {
+                return;
+            }
+            self.state.saw_packet.store(true, Ordering::Release);
+            if self.container.try_lock().is_none() {
+                self.state
+                    .all_callbacks_saw_container_unlocked
+                    .store(false, Ordering::Release);
+            }
+        }
+    }
+
+    impl NetworkConnection for LockProbeConnection {
+        fn compression(&self) -> Option<CompressionInfo> {
+            None
+        }
+
+        fn send_encoded(&self, _packet: EncodedPacket) {
+            self.record_if_armed();
+        }
+
+        fn send_encoded_bundle(&self, _packets: Vec<EncodedPacket>) {
+            self.record_if_armed();
+        }
+
+        fn disconnect_with_reason(&self, _reason: TextComponent) {}
+
+        fn tick(&self) {}
+
+        fn latency(&self) -> i32 {
+            0
+        }
+
+        fn close(&self) {}
+
+        fn closed(&self) -> bool {
+            false
+        }
     }
 
     struct CloseOnTick;
@@ -3033,6 +3090,32 @@ mod tests {
             .lock()
             .set_item(0, ItemStack::new(&vanilla_items::STONE));
 
+        let probe_state = Arc::new(LockProbeState {
+            armed: AtomicBool::new(false),
+            saw_packet: AtomicBool::new(false),
+            all_callbacks_saw_container_unlocked: AtomicBool::new(true),
+        });
+        let observer_connection =
+            Arc::new(PlayerConnection::Other(Box::new(LockProbeConnection {
+                state: Arc::clone(&probe_state),
+                container: Arc::clone(&transient),
+            })));
+        let observer = TestPlayerBuilder::new(
+            Arc::clone(&world),
+            Uuid::from_u128(2),
+            "Observer",
+            next_entity_id(),
+        )
+        .connection(observer_connection)
+        .build();
+        assert!(world.add_player(Arc::clone(&observer), ResetReason::InitialJoin));
+        let _ = observer.mark_joined_world();
+        observer.set_client_loaded(true);
+        observer
+            .chunk_sender
+            .lock()
+            .mark_chunk_sent_for_test(ChunkPos::new(0, 0));
+
         let menu_container = Arc::clone(&transient);
         let inventory = Arc::clone(&player.inventory);
         player.open_menu("Transient", move |container_id, _world| {
@@ -3043,9 +3126,16 @@ mod tests {
             builder.build(MenuKindType::Basic(BasicKind {}))
         });
 
+        probe_state.armed.store(true, Ordering::Release);
         player.close_connection();
         player.do_close_container();
 
+        assert!(probe_state.saw_packet.load(Ordering::Acquire));
+        assert!(
+            probe_state
+                .all_callbacks_saw_container_unlocked
+                .load(Ordering::Acquire)
+        );
         assert!(transient.lock().get_item(0).is_empty());
         assert!(
             player
@@ -3065,6 +3155,9 @@ mod tests {
             panic!("dropped entity should retain its concrete item type");
         };
         assert!(item.get_item().is(&vanilla_items::STONE));
+
+        probe_state.armed.store(false, Ordering::Release);
+        world.remove_player_for_world_change(&observer);
     }
 
     #[test]

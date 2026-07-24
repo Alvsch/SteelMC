@@ -41,7 +41,7 @@ impl MenuLayout {
                 if return_to_inventory {
                     player.add_item_or_drop_with_guard(&mut guard, item);
                 } else {
-                    let _ = player.drop_item(item, false, false);
+                    let _ = guard.run_unlocked(|| player.drop_item(item, false, false));
                 }
             }
         }
