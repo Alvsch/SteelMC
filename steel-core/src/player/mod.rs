@@ -771,6 +771,11 @@ impl Player {
             world.player_area_map.remove_by_entity_id(self.id());
             world.chunk_map.remove_player(self);
             self.set_removed(RemovalReason::Killed);
+            assert_eq!(
+                self.remove_all_menus_with_disposition(MenuItemDisposition::Drop),
+                MenuRemovalStatus::Complete,
+                "death removal menu cleanup must run outside a menu callback"
+            );
         }
     }
 
@@ -959,8 +964,6 @@ impl Player {
             });
         }
 
-        let _ = self.remove_all_menus_with_disposition(MenuItemDisposition::Drop);
-
         if !world.get_game_rule(&KEEP_INVENTORY) {
             let items: Vec<ItemStack> = {
                 let mut inventory = self.inventory.lock();
@@ -1117,7 +1120,11 @@ impl Player {
     }
 
     fn reset_state_for_death_respawn(&self) {
-        self.close_container();
+        assert_eq!(
+            self.remove_all_menus_with_disposition(MenuItemDisposition::Drop),
+            MenuRemovalStatus::Complete,
+            "death respawn menu cleanup must run outside a menu callback"
+        );
         self.detach_relationships_for_respawn();
 
         self.attributes().lock().remove_all_transient();
@@ -1794,9 +1801,9 @@ impl Player {
     /// world change. If the player is currently in a different world, they are
     /// removed from the old world first.
     ///
-    /// Vanilla equivalent: the work that happens when a fresh `ServerPlayer` is
-    /// constructed during respawn / world change, since vanilla recreates the
-    /// player object. We reuse the same `Player`, so we reset manually.
+    /// Vanilla creates a fresh `ServerPlayer` for death and End-credits respawns,
+    /// but reuses it for dimension changes. Steel reuses the same `Player` for
+    /// every path, so this resets only the transient state appropriate to `reason`.
     pub(crate) fn reset(self: &Arc<Self>, new_world: Arc<World>, reason: ResetReason) {
         self.reset_inner_after(new_world, reason, false, || {});
     }
@@ -1828,6 +1835,13 @@ impl Player {
                 MenuRemovalStatus::Complete,
                 "player reset menu removal must run outside a menu callback"
             );
+        }
+        if matches!(reason, ResetReason::Respawn | ResetReason::EndCredits) {
+            // Vanilla creates a fresh ServerPlayer and inventory menu for these paths.
+            self.inventory_menu
+                .lock()
+                .behavior_mut()
+                .reset_quick_craft();
         }
 
         let old_world = self.get_world();
@@ -2965,7 +2979,7 @@ mod tests {
         entities::ItemEntity, next_entity_id,
     };
     use crate::inventory::{
-        click::{Click, ClickOutcome, MouseButton},
+        click::{Click, ClickOutcome, DragKind, MouseButton, QuickCraft},
         container::{Container as _, SimpleContainer},
         equipment::{EntityEquipment, EquipmentSlot},
         lock::ContainerLockGuard,
@@ -2981,9 +2995,9 @@ mod tests {
     use crate::world::World;
 
     use super::{
-        MenuItemDisposition, MenuRemovalStatus, Player, PlayerPermissionState, ResetReason,
-        block_breaking::BlockBreakAction, experience::Experience, first_point_level_up_sound,
-        nullable_game_mode_id, player_data::PersistentPlayerData,
+        DEATH_DURATION, MenuItemDisposition, MenuRemovalStatus, Player, PlayerPermissionState,
+        ResetReason, block_breaking::BlockBreakAction, experience::Experience,
+        first_point_level_up_sound, nullable_game_mode_id, player_data::PersistentPlayerData,
     };
 
     fn test_player(world: Arc<World>) -> Arc<Player> {
@@ -3419,6 +3433,184 @@ mod tests {
         let killed = test_player(Arc::clone(test_world()));
         killed.set_removed(RemovalReason::Killed);
         assert!(!killed.returns_menu_items_to_inventory());
+    }
+
+    #[test]
+    fn death_keeps_menu_items_until_entity_removal() {
+        init_test_registry();
+        let world = fresh_test_world("death_menu_cleanup");
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        assert!(world.set_game_rule(&vanilla_game_rules::KEEP_INVENTORY, true));
+        let player = test_player(Arc::clone(&world));
+        let kept_item = ItemStack::new(&vanilla_items::DIAMOND);
+        player.inventory.lock().set_item(0, kept_item);
+        let transient = SimpleContainer::new(9).into_shared();
+        transient
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 3));
+        let crafting = player.crafting_container();
+        crafting
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::DIRT, 2));
+        *player.inventory_menu.lock().behavior_mut().carried_mut() =
+            ItemStack::new(&vanilla_items::STICK);
+        player.inventory_menu.lock().clicked(
+            Click::QuickCraft(QuickCraft::Start {
+                kind: DragKind::Left,
+            }),
+            &player,
+        );
+        let active_drag = player.inventory_menu.lock().behavior().quickcraft();
+        assert_eq!(active_drag, Some(DragKind::Left));
+
+        let menu_container = Arc::clone(&transient);
+        let inventory = Arc::clone(&player.inventory);
+        player.open_menu("Death cleanup", move |container_id, _world| {
+            let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+            let transient_slots = builder.section(menu_container, 9);
+            builder.player_inventory(&inventory);
+            builder.drain([transient_slots]);
+            builder.build(MenuKindType::Basic(BasicKind {}))
+        });
+
+        player.set_health(0.0);
+        player.die(&DamageSource::environment(&vanilla_damage_types::GENERIC));
+
+        assert_eq!(transient.lock().get_item(0).count(), 3);
+        assert_eq!(crafting.lock().get_item(0).count(), 2);
+        assert!(
+            player
+                .inventory_menu
+                .lock()
+                .behavior()
+                .carried()
+                .is(&vanilla_items::STICK)
+        );
+        assert!(
+            world
+                .get_entities_in_aabb_matching(
+                    &WorldAabb::new(-2.0, -1.0, -2.0, 2.0, 3.0, 2.0),
+                    |entity| entity.entity_type() == &vanilla_entities::ITEM,
+                )
+                .is_empty()
+        );
+
+        for _ in 1..DEATH_DURATION {
+            player.tick_death();
+        }
+        assert_eq!(transient.lock().get_item(0).count(), 3);
+
+        player.tick_death();
+
+        assert!(transient.lock().get_item(0).is_empty());
+        assert!(crafting.lock().get_item(0).is_empty());
+        assert!(player.inventory_menu.lock().behavior().carried().is_empty());
+        let active_drag = player.inventory_menu.lock().behavior().quickcraft();
+        assert_eq!(active_drag, Some(DragKind::Left));
+        assert!(
+            player
+                .inventory
+                .lock()
+                .get_item(0)
+                .is(&vanilla_items::DIAMOND)
+        );
+        let dropped = world.get_entities_in_aabb_matching(
+            &WorldAabb::new(-2.0, -1.0, -2.0, 2.0, 3.0, 2.0),
+            |entity| entity.entity_type() == &vanilla_entities::ITEM,
+        );
+        assert_eq!(dropped.len(), 3);
+        let mut dropped_stacks = Vec::new();
+        for entity in dropped {
+            let Some(item) = entity.as_ref().downcast_ref::<ItemEntity>() else {
+                panic!("dropped entity should retain its concrete item type");
+            };
+            dropped_stacks.push(item.get_item());
+        }
+        assert!(
+            dropped_stacks
+                .iter()
+                .any(|item| item.is(&vanilla_items::STONE) && item.count() == 3)
+        );
+        assert!(
+            dropped_stacks
+                .iter()
+                .any(|item| item.is(&vanilla_items::DIRT) && item.count() == 2)
+        );
+        assert!(
+            dropped_stacks
+                .iter()
+                .any(|item| item.is(&vanilla_items::STICK) && item.count() == 1)
+        );
+    }
+
+    #[test]
+    fn death_respawn_drops_menu_items_exactly_once() {
+        init_test_registry();
+        let world = fresh_test_world("death_respawn_menu_cleanup");
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        let player = test_player(Arc::clone(&world));
+        let transient = SimpleContainer::new(9).into_shared();
+        transient
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 3));
+        {
+            let mut inventory_menu = player.inventory_menu.lock();
+            *inventory_menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::STICK);
+            inventory_menu.clicked(
+                Click::QuickCraft(QuickCraft::Start {
+                    kind: DragKind::Left,
+                }),
+                &player,
+            );
+            *inventory_menu.behavior_mut().carried_mut() = ItemStack::empty();
+        }
+
+        let menu_container = Arc::clone(&transient);
+        let inventory = Arc::clone(&player.inventory);
+        player.open_menu("Respawn cleanup", move |container_id, _world| {
+            let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+            let transient_slots = builder.section(menu_container, 9);
+            builder.player_inventory(&inventory);
+            builder.drain([transient_slots]);
+            builder.build(MenuKindType::Basic(BasicKind {}))
+        });
+
+        player.set_health(0.0);
+        player.die(&DamageSource::environment(&vanilla_damage_types::GENERIC));
+        player.reset_state_for_death_respawn();
+        let _ = player.base.clear_removed();
+        player.reset(Arc::clone(&world), ResetReason::Respawn);
+        {
+            let mut inventory_menu = player.inventory_menu.lock();
+            assert_eq!(inventory_menu.behavior().quickcraft(), None);
+            *inventory_menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::STICK);
+            inventory_menu.clicked(
+                Click::QuickCraft(QuickCraft::Start {
+                    kind: DragKind::Left,
+                }),
+                &player,
+            );
+            assert_eq!(inventory_menu.behavior().quickcraft(), Some(DragKind::Left));
+        }
+
+        assert!(transient.lock().get_item(0).is_empty());
+        assert!(
+            player
+                .inventory
+                .lock()
+                .items()
+                .iter()
+                .all(|item| !item.is(&vanilla_items::STONE))
+        );
+        let dropped = world.get_entities_in_aabb_matching(
+            &WorldAabb::new(-2.0, -1.0, -2.0, 2.0, 3.0, 2.0),
+            |entity| entity.entity_type() == &vanilla_entities::ITEM,
+        );
+        assert_eq!(dropped.len(), 1);
+        let Some(item) = dropped[0].as_ref().downcast_ref::<ItemEntity>() else {
+            panic!("dropped entity should retain its concrete item type");
+        };
+        assert_eq!(item.get_item().count(), 3);
     }
 
     #[test]
