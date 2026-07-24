@@ -1058,6 +1058,7 @@ impl MenuBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inventory::slots::Slot as _;
     use steel_utils::locks::IntoShared;
 
     fn container(size: usize) -> ContainerRef {

@@ -75,6 +75,7 @@ impl MenuLayout {
         let moved = route.targets.iter().any(|target| {
             behavior.move_item_stack_to(
                 guard,
+                slot_index,
                 &mut remaining,
                 target.start,
                 target.end,

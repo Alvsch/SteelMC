@@ -4,7 +4,7 @@ use steel_registry::item_stack::ItemStack;
 
 use crate::{
     inventory::{
-        lock::{ContainerLockGuard, ContainerRef},
+        lock::{ContainerId, ContainerLockGuard, ContainerRef},
         slots::{ResultHandler, Slot},
     },
     player::Player,
@@ -67,6 +67,10 @@ impl Slot for ResultSlot {
 
     fn get_container_slot(&self) -> usize {
         0
+    }
+
+    fn container_key(&self) -> Option<(ContainerId, usize)> {
+        Some((self.result_container.container_id(), 0))
     }
 
     fn on_take(

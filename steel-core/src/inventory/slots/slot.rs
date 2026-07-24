@@ -171,6 +171,12 @@ pub trait Slot {
     /// Returns the container slot index.
     fn get_container_slot(&self) -> usize;
 
+    /// Returns the physical container and slot backing this slot.
+    ///
+    /// Every container-backed slot returns `Some`, including fake slots.
+    /// Slots without stable physical storage return `None`.
+    fn container_key(&self) -> Option<(ContainerId, usize)>;
+
     /// Returns true if this is a fake slot that doesn't persist items.
     fn is_fake(&self) -> bool {
         false
@@ -265,6 +271,10 @@ impl<T: Slot + ?Sized> Slot for Arc<T> {
         (**self).get_container_slot()
     }
 
+    fn container_key(&self) -> Option<(ContainerId, usize)> {
+        (**self).container_key()
+    }
+
     fn is_fake(&self) -> bool {
         (**self).is_fake()
     }
@@ -283,18 +293,6 @@ pub enum SlotType {
     Restricted(RestrictedSlot),
     /// Custom implementations by Plugins
     Custom(Arc<dyn Slot + Send + Sync>),
-}
-
-impl SlotType {
-    /// Container ID and slot index. `None` for fake slots like crafting results.
-    #[must_use]
-    pub fn container_key(&self) -> Option<(ContainerId, usize)> {
-        match self {
-            SlotType::Normal(s) => Some((s.container_ref().container_id(), s.get_container_slot())),
-            SlotType::Armor(s) => Some((s.container_ref().container_id(), s.get_container_slot())),
-            _ => None,
-        }
-    }
 }
 
 /// Adds hotbar slots (player inventory indices 0-8).

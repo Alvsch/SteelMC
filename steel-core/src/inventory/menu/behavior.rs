@@ -199,11 +199,13 @@ impl MenuBehavior {
         }
     }
 
-    /// Moves items from `item_stack` into slots `[start_slot, end_slot)`, walking
-    /// the range in `direction`. Returns true if anything moved.
+    /// Moves items from `source_slot` into slots `[start_slot, end_slot)`, walking
+    /// the range in `direction`. Aliases of the source's physical storage are
+    /// skipped. Returns true if anything moved.
     pub fn move_item_stack_to(
         &self,
         guard: &mut ContainerLockGuard,
+        source_slot: usize,
         item_stack: &mut ItemStack,
         start_slot: usize,
         end_slot: usize,
@@ -215,6 +217,7 @@ impl MenuBehavior {
 
         let backwards = direction == FillDirection::Backward;
         let mut anything_changed = false;
+        let source_key = self.slots[source_slot].container_key();
 
         // First pass: stack onto existing items.
         if item_stack.is_stackable() {
@@ -230,6 +233,19 @@ impl MenuBehavior {
                 }
 
                 let slot = &self.slots[dest_slot];
+                if dest_slot == source_slot
+                    || source_key.is_some_and(|key| slot.container_key() == Some(key))
+                {
+                    if backwards {
+                        if dest_slot == 0 {
+                            break;
+                        }
+                        dest_slot -= 1;
+                    } else {
+                        dest_slot += 1;
+                    }
+                    continue;
+                }
                 let target = slot.get_item(guard).clone();
 
                 if !target.is_empty()
@@ -272,6 +288,19 @@ impl MenuBehavior {
                 dest_slot < end_slot
             } {
                 let slot = &self.slots[dest_slot];
+                if dest_slot == source_slot
+                    || source_key.is_some_and(|key| slot.container_key() == Some(key))
+                {
+                    if backwards {
+                        if dest_slot == 0 {
+                            break;
+                        }
+                        dest_slot -= 1;
+                    } else {
+                        dest_slot += 1;
+                    }
+                    continue;
+                }
                 let target = slot.get_item(guard).clone();
 
                 if target.is_empty() && slot.may_place(item_stack) {
@@ -314,12 +343,18 @@ impl MenuBehavior {
 
         let mut other_slots: FxHashMap<(ContainerId, usize), usize> = FxHashMap::default();
         for (slot_index, slot) in other.slots.iter().enumerate() {
+            if slot.is_fake() {
+                continue;
+            }
             if let Some(key) = slot.container_key() {
                 other_slots.insert(key, slot_index);
             }
         }
 
         for (slot_index, slot) in self.slots.iter().enumerate() {
+            if slot.is_fake() {
+                continue;
+            }
             if let Some(key) = slot.container_key()
                 && let Some(&other_slot_index) = other_slots.get(&key)
             {
@@ -964,13 +999,21 @@ mod tests {
     use std::sync::Arc;
 
     use steel_registry::{item_stack::ItemStack, test_support::init_test_registry, vanilla_items};
-    use steel_utils::{DowncastType, DowncastTypeKey, locks::SyncMutex};
+    use steel_utils::{
+        DowncastType, DowncastTypeKey,
+        locks::{IntoShared, SyncMutex},
+    };
 
     use crate::inventory::{
-        container::Container,
+        container::{Container, SimpleContainer},
         lock::ContainerRef,
-        menu::{Menu, builder::MenuBuilder, kind::MenuKindType, kinds::BasicKind},
-        slots::{NormalSlot, Slot as _, SlotType},
+        menu::{
+            Menu,
+            builder::{FillDirection, MenuBuilder},
+            kind::MenuKindType,
+            kinds::BasicKind,
+        },
+        slots::{NormalSlot, RestrictedSlot, Slot as _, SlotType},
     };
 
     struct RecordingContainer {
@@ -1070,5 +1113,52 @@ mod tests {
         assert_eq!(state.item.count(), 8);
         assert_eq!(state.set_item_calls, 1);
         assert_eq!(state.set_changed_calls, 2);
+    }
+
+    #[test]
+    fn quick_move_skips_aliases_of_the_source_slot() {
+        init_test_registry();
+        let container = SimpleContainer::new(2).into_shared();
+        container
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 5));
+        let container_ref = ContainerRef::from(container);
+
+        let mut builder = MenuBuilder::new(None, 1);
+        builder.custom_section(
+            [
+                SlotType::Normal(NormalSlot::new(container_ref.clone(), 0)),
+                SlotType::Restricted(RestrictedSlot::new(
+                    container_ref.clone(),
+                    0,
+                    Arc::new(|_, _| true),
+                    None,
+                    64,
+                )),
+                SlotType::Normal(NormalSlot::new(container_ref.clone(), 1)),
+            ],
+            [container_ref.clone()],
+        );
+        let menu = builder.build(MenuKindType::Basic(BasicKind {}));
+        let behavior = menu.behavior();
+        let mut guard = behavior.lock_all_containers();
+        let clicked = behavior.slots()[0].get_item(&guard).clone();
+        let mut remaining = clicked.clone();
+
+        assert!(behavior.move_item_stack_to(
+            &mut guard,
+            0,
+            &mut remaining,
+            1,
+            3,
+            FillDirection::Forward,
+        ));
+        behavior.update_quick_move_source(&mut guard, 0, &remaining, &clicked);
+
+        let container = guard
+            .get(container_ref.container_id())
+            .expect("simple container should remain locked");
+        assert!(container.get_item(0).is_empty());
+        assert_eq!(container.get_item(1).count(), 5);
     }
 }

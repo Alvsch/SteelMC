@@ -4,7 +4,7 @@ use steel_registry::item_stack::ItemStack;
 
 use crate::{
     inventory::{
-        lock::{ContainerLockGuard, ContainerRef},
+        lock::{ContainerId, ContainerLockGuard, ContainerRef},
         slots::{NormalSlot, Slot},
     },
     player::Player,
@@ -80,5 +80,9 @@ impl Slot for RestrictedSlot {
 
     fn get_container_slot(&self) -> usize {
         self.base.get_container_slot()
+    }
+
+    fn container_key(&self) -> Option<(ContainerId, usize)> {
+        self.base.container_key()
     }
 }

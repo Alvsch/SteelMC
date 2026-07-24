@@ -111,6 +111,7 @@ impl InventoryKind {
         if self.main.contains(slot_index) {
             behavior.move_item_stack_to(
                 guard,
+                slot_index,
                 stack,
                 self.hotbar.start(),
                 self.hotbar.end(),
@@ -119,6 +120,7 @@ impl InventoryKind {
         } else if self.hotbar.contains(slot_index) {
             behavior.move_item_stack_to(
                 guard,
+                slot_index,
                 stack,
                 self.main.start(),
                 self.main.end(),
@@ -127,6 +129,7 @@ impl InventoryKind {
         } else {
             behavior.move_item_stack_to(
                 guard,
+                slot_index,
                 stack,
                 self.inv.start(),
                 self.inv.end(),
@@ -174,6 +177,7 @@ impl MenuKind for InventoryKind {
             // Result to inventory, filling existing stacks first.
             behavior.move_item_stack_to(
                 guard,
+                slot_index,
                 &mut stack_mut,
                 self.inv.start(),
                 self.inv.end(),
@@ -183,6 +187,7 @@ impl MenuKind for InventoryKind {
             // Grid or armor to inventory.
             behavior.move_item_stack_to(
                 guard,
+                slot_index,
                 &mut stack_mut,
                 self.inv.start(),
                 self.inv.end(),
@@ -214,6 +219,7 @@ impl MenuKind for InventoryKind {
                     } else {
                         behavior.move_item_stack_to(
                             guard,
+                            slot_index,
                             &mut stack_mut,
                             armor_slot_index,
                             armor_slot_index + 1,
@@ -231,6 +237,7 @@ impl MenuKind for InventoryKind {
                     } else {
                         behavior.move_item_stack_to(
                             guard,
+                            slot_index,
                             &mut stack_mut,
                             self.offhand.start(),
                             self.offhand.end(),
