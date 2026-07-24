@@ -28,7 +28,7 @@ use steel_utils::types::GameType;
 use crate::inventory::container::CraftingContainer;
 use crate::inventory::slots::slot::Slot;
 use crate::{
-    inventory::lock::{ContainerId, ContainerLockGuard},
+    inventory::lock::{ContainerId, ContainerLockGuard, ContainerRef},
     player::Player,
 };
 
@@ -336,18 +336,19 @@ impl Menu {
     /// Handles swap (number keys for a hotbar slot, or swap-hands for the
     /// offhand).
     fn do_swap(&mut self, slot_index: usize, with: SwapTarget, player: &Player) {
-        let mut guard = self.behavior().lock_all_containers();
-
+        let player_inventory = ContainerRef::from(player.inventory.clone());
         let player_inv_id = ContainerId::from_arc(&player.inventory);
+        let mut guard = self.behavior().lock_all_containers_with(player_inventory);
 
         let behavior = self.behavior();
         let target_slot = &behavior.slots()[slot_index];
         let inventory_slot = with.inventory_slot();
 
         let target_item = target_slot.get_item(&guard).clone();
-        let source_item = guard
-            .get(player_inv_id)
-            .map_or_else(ItemStack::empty, |inv| inv.get_item(inventory_slot).clone());
+        let Some(inventory) = guard.get(player_inv_id) else {
+            unreachable!("the explicitly locked player inventory must be present");
+        };
+        let source_item = inventory.get_item(inventory_slot).clone();
 
         if source_item.is_empty() && target_item.is_empty() {
             return;
@@ -356,9 +357,10 @@ impl Menu {
         if source_item.is_empty() {
             // Move target -> inventory.
             if target_slot.may_pickup(&guard, player) {
-                if let Some(inv) = guard.get_mut(player_inv_id) {
-                    inv.set_item(inventory_slot, target_item.clone());
-                }
+                let Some(inventory) = guard.get_mut(player_inv_id) else {
+                    unreachable!("the explicitly locked player inventory must be present");
+                };
+                inventory.set_item(inventory_slot, target_item.clone());
                 target_slot.set_by_player(&mut guard, ItemStack::empty(), &target_item);
                 if let Some(remainder) = target_slot.on_take(&mut guard, &target_item, player) {
                     player.add_item_or_drop_with_guard(&mut guard, remainder);
@@ -375,9 +377,10 @@ impl Menu {
                     let to_place = inv.get_item_mut(inventory_slot).split(max_size);
                     target_slot.set_by_player(&mut guard, to_place, &ItemStack::empty());
                 } else {
-                    if let Some(inv) = guard.get_mut(player_inv_id) {
-                        inv.set_item(inventory_slot, ItemStack::empty());
-                    }
+                    let Some(inventory) = guard.get_mut(player_inv_id) else {
+                        unreachable!("the explicitly locked player inventory must be present");
+                    };
+                    inventory.set_item(inventory_slot, ItemStack::empty());
                     target_slot.set_by_player(&mut guard, source_item, &ItemStack::empty());
                 }
             }
@@ -397,9 +400,10 @@ impl Menu {
                     }
                     player.add_item_or_drop_with_guard(&mut guard, target_item);
                 } else {
-                    if let Some(inv) = guard.get_mut(player_inv_id) {
-                        inv.set_item(inventory_slot, target_item.clone());
-                    }
+                    let Some(inventory) = guard.get_mut(player_inv_id) else {
+                        unreachable!("the explicitly locked player inventory must be present");
+                    };
+                    inventory.set_item(inventory_slot, target_item.clone());
                     target_slot.set_by_player(&mut guard, source_item, &target_item);
                     if let Some(remainder) = target_slot.on_take(&mut guard, &target_item, player) {
                         player.add_item_or_drop_with_guard(&mut guard, remainder);
@@ -460,3 +464,6 @@ impl Menu {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
