@@ -7,7 +7,7 @@ use steel_registry::item_stack::ItemStack;
 use super::EquipmentSlot;
 
 /// Equipment access shared by player inventories and owned entity storage.
-pub trait EntityEquipment {
+pub trait EntityEquipment: Send {
     /// Gets a reference to the item in a slot.
     fn get_ref(&self, slot: EquipmentSlot) -> &ItemStack;
 
@@ -67,12 +67,6 @@ impl OwnedEntityEquipment {
             ],
             dirty_slots: [false; 8],
         }
-    }
-
-    /// Checks if all slots are empty.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.slots.iter().all(ItemStack::is_empty)
     }
 
     const fn mark_dirty(&mut self, slot: EquipmentSlot) {

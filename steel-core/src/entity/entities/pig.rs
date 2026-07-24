@@ -801,7 +801,7 @@ mod tests {
     use crate::entity::entities::LeashFenceKnotEntity;
     use crate::entity::mob::LeashAttachment;
     use crate::entity::{Animal, DEATH_DURATION, ItemSteerable, RemovalReason, SharedEntity};
-    use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
+    use crate::inventory::equipment::EquipmentSlot;
     use crate::test_support::test_world;
     use crate::world::LevelReader;
 

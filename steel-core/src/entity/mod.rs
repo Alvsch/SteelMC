@@ -65,7 +65,7 @@ use crate::behavior::{
 use crate::chunk_saver::ChunkStorage;
 use crate::entity::attribute::{AttributeMap, AttributeModifier, AttributeModifierOperation};
 use crate::fluid::{LavaFluid, get_fluid_state, get_height};
-use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
+use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::{
     COLLISION_EPSILON, CollisionWorld, EntityPhysicsState, MoveResult, MoverType,
     WorldCollisionProvider, move_entity as resolve_entity_movement,

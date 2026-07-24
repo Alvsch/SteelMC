@@ -1013,7 +1013,6 @@ mod tests {
     use crate::entity::{
         EntityBase, LivingEntity, LivingEntityBase, entities::FireworkRocketEntity,
     };
-    use crate::inventory::equipment::EntityEquipment;
     use crate::test_support::test_world;
 
     struct TestLivingEntity {

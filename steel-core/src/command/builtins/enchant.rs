@@ -233,7 +233,6 @@ mod tests {
             execution::{CommandSource, SteelArgumentType, SteelCommandRuntime},
         },
         entity::{Entity, EntityBase, LivingEntity, LivingEntityBase},
-        inventory::equipment::EntityEquipment,
     };
 
     type Dispatcher = CommandDispatcher<CommandSource, SteelCommandRuntime>;

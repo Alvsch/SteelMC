@@ -549,7 +549,8 @@ impl Player {
 
         let pos = DVec3::new(0.0, 0.0, 0.0);
 
-        let living_base = LivingEntityBase::new(&vanilla_entities::PLAYER);
+        let equipment = inventory.clone();
+        let living_base = LivingEntityBase::with_equipment(&vanilla_entities::PLAYER, equipment);
         let player_uuid = gameprofile.id;
         let world_ref = Arc::downgrade(&world);
         let chat_spam_threshold_seconds = config.chat_spam_threshold_seconds;
@@ -4287,13 +4288,14 @@ mod tests {
             target.inventory.lock().get_ref(EquipmentSlot::Head),
             &helmet
         );
-        assert!(
+        assert_eq!(
             target
                 .living_base()
                 .equipment()
                 .lock()
-                .get_ref(EquipmentSlot::Head)
-                .is_empty()
+                .get_ref(EquipmentSlot::Head),
+            &helmet,
+            "LivingEntityBase and Player::inventory must share one equipment backing",
         );
         assert_eq!(
             Entity::drain_dirty_equipment(target.as_ref()),
