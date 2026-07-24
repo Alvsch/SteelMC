@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use glam::DVec3;
 use steel_registry::{
-    item_stack::ItemStack, test_support::init_test_registry, vanilla_blocks, vanilla_enchantments,
-    vanilla_items,
+    data_components::vanilla_components::CUSTOM_NAME, item_stack::ItemStack,
+    test_support::init_test_registry, vanilla_blocks, vanilla_enchantments, vanilla_items,
 };
 use steel_utils::{
     BlockPos, ChunkPos,
@@ -11,7 +11,7 @@ use steel_utils::{
 };
 use uuid::Uuid;
 
-use super::anvil;
+use super::{AnvilKind, anvil};
 use crate::{
     behavior::init_behaviors,
     entity::Entity as _,
@@ -154,4 +154,41 @@ fn rename_only_result_preserves_unused_second_input() {
     assert!(input.get_item(0).is_empty());
     assert!(input.get_item(1).is(&vanilla_items::DIAMOND_SWORD));
     assert!(menu.behavior().carried().is(&vanilla_items::DIAMOND_SWORD));
+}
+
+#[test]
+fn rename_validation_counts_filtered_java_utf16_units() {
+    let maximum = "😀".repeat(25);
+    assert_eq!(
+        AnvilKind::validate_item_name(maximum.clone()),
+        Some(maximum.clone())
+    );
+    assert_eq!(AnvilKind::validate_item_name("😀".repeat(26)), None);
+    assert_eq!(
+        AnvilKind::validate_item_name(format!("{maximum}§")),
+        Some(maximum)
+    );
+}
+
+#[test]
+fn rename_uses_java_blank_rules() {
+    let (_world, player, _pos, mut menu) = test_anvil("anvil_menu_java_blank_rename");
+    let (input_container, result_container) = match menu.kind() {
+        MenuKindType::Anvil(kind) => (
+            Arc::clone(&kind.input_container),
+            Arc::clone(&kind.result_container),
+        ),
+        _ => panic!("anvil builder should create an anvil menu"),
+    };
+    input_container
+        .lock()
+        .set_item(0, ItemStack::new(&vanilla_items::DIAMOND_SWORD));
+
+    menu.set_item_name("\u{0085}", &player);
+
+    let result = result_container.lock().get_item(0).clone();
+    assert_eq!(
+        result.get(CUSTOM_NAME).map(ToString::to_string).as_deref(),
+        Some("\u{0085}")
+    );
 }

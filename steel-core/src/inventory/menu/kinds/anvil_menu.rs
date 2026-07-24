@@ -17,7 +17,7 @@ use steel_registry::{
     vanilla_items, vanilla_menu_types,
 };
 use steel_utils::{
-    BlockPos, Identifier,
+    BlockPos, Identifier, java,
     locks::{IntoShared, Shared, SyncMutex},
 };
 use text_components::TextComponent;
@@ -273,7 +273,7 @@ impl AnvilKind {
 
         // Renaming
         let item_name = self.item_name.lock();
-        if let Some(name) = item_name.as_deref().filter(|name| !name.trim().is_empty()) {
+        if let Some(name) = item_name.as_deref().filter(|name| !java::is_blank(name)) {
             if name != first.hover_name().to_string() {
                 rename_cost = 1;
                 additional_cost += rename_cost as u32;
@@ -334,7 +334,7 @@ impl AnvilKind {
             .chars()
             .filter(|char| char != &'§' && char >= &' ' && char != &'\x7F')
             .collect::<String>();
-        (filtered.chars().count() <= 50).then_some(filtered)
+        (filtered.encode_utf16().count() <= 50).then_some(filtered)
     }
 
     fn can_store_enchantments(item_stack: &ItemStack) -> bool {

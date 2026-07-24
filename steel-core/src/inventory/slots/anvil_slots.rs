@@ -5,9 +5,9 @@ use std::sync::{
 
 use steel_registry::{
     REGISTRY, TaggedRegistryExt, blocks::block_state_ext::BlockStateExt, item_stack::ItemStack,
-    level_events, vanilla_block_tags::BlockTag, vanilla_blocks,
+    level_events, vanilla_block_tags::BlockTag,
 };
-use steel_utils::{BlockPos, locks::Shared, types::UpdateFlags};
+use steel_utils::{BlockPos, BlockStateId, locks::Shared, types::UpdateFlags};
 
 use crate::{
     behavior::blocks::AnvilBlock,
@@ -53,6 +53,19 @@ impl AnvilResultHandler {
             world,
         }
     }
+
+    fn damage_anvil(&self, state: BlockStateId) {
+        if let Some(new_state) = AnvilBlock::damage(state) {
+            self.world
+                .set_block(self.block_pos, new_state, UpdateFlags::UPDATE_CLIENTS);
+            self.world
+                .level_event(level_events::SOUND_ANVIL_USED, self.block_pos, 0, None);
+        } else {
+            self.world.remove_block(self.block_pos, false);
+            self.world
+                .level_event(level_events::SOUND_ANVIL_BROKEN, self.block_pos, 0, None);
+        }
+    }
 }
 
 impl ResultHandler for AnvilResultHandler {
@@ -95,20 +108,7 @@ impl ResultHandler for AnvilResultHandler {
                 .is_in_tag(state.get_block(), &BlockTag::ANVIL)
             && rand::random_bool(0.12)
         {
-            if let Some(new_state) = AnvilBlock::damage(state) {
-                self.world
-                    .set_block(self.block_pos, new_state, UpdateFlags::UPDATE_ALL);
-                self.world
-                    .level_event(level_events::SOUND_ANVIL_USED, self.block_pos, 0, None);
-            } else {
-                self.world.set_block(
-                    self.block_pos,
-                    vanilla_blocks::AIR.default_state(),
-                    UpdateFlags::UPDATE_ALL,
-                );
-                self.world
-                    .level_event(level_events::SOUND_ANVIL_BROKEN, self.block_pos, 0, None);
-            }
+            self.damage_anvil(state);
         } else {
             self.world
                 .level_event(level_events::SOUND_ANVIL_USED, self.block_pos, 0, None);
@@ -126,5 +126,82 @@ impl ResultHandler for AnvilResultHandler {
         let level_cost = self.level_cost.load(Ordering::Relaxed);
         (player.has_infinite_materials() || player.experience.lock().level() >= level_cost)
             && level_cost > 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicI32},
+    };
+
+    use steel_registry::{
+        blocks::{block_state_ext::BlockStateExt as _, properties::BlockStateProperties},
+        test_support::init_test_registry,
+        vanilla_blocks,
+    };
+    use steel_utils::{BlockPos, ChunkPos, locks::IntoShared as _, types::UpdateFlags};
+
+    use super::AnvilResultHandler;
+    use crate::{
+        behavior::init_behaviors,
+        inventory::container::{ResultContainer, SimpleContainer},
+        test_support::{fresh_test_world, insert_ready_full_chunk},
+        world::SignalGetter as _,
+    };
+
+    #[test]
+    fn anvil_damage_does_not_notify_neighbors() {
+        init_test_registry();
+        init_behaviors();
+        let world = fresh_test_world("anvil_damage_update_flags");
+        let anvil_pos = BlockPos::new(8, 64, 8);
+        let lamp_pos = anvil_pos.east();
+        let power_pos = lamp_pos.east();
+        insert_ready_full_chunk(&world, ChunkPos::from_block_pos(anvil_pos));
+
+        assert!(world.set_block(
+            power_pos,
+            vanilla_blocks::REDSTONE_BLOCK.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        ));
+        assert!(world.set_block(
+            lamp_pos,
+            vanilla_blocks::REDSTONE_LAMP.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        ));
+        assert!(world.set_block(
+            anvil_pos,
+            vanilla_blocks::ANVIL.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        ));
+        assert!(world.has_neighbor_signal(lamp_pos));
+        assert!(
+            !world
+                .get_block_state(lamp_pos)
+                .get_value(&BlockStateProperties::LIT)
+        );
+
+        let handler = AnvilResultHandler::new(
+            SimpleContainer::new(2).into_shared(),
+            ResultContainer::new().into_shared(),
+            Arc::new(AtomicI32::new(0)),
+            Arc::new(AtomicI32::new(0)),
+            Arc::new(AtomicBool::new(false)),
+            anvil_pos,
+            Arc::clone(&world),
+        );
+        handler.damage_anvil(world.get_block_state(anvil_pos));
+
+        assert_eq!(
+            world.get_block_state(anvil_pos).get_block(),
+            &vanilla_blocks::CHIPPED_ANVIL
+        );
+        assert!(
+            !world
+                .get_block_state(lamp_pos)
+                .get_value(&BlockStateProperties::LIT)
+        );
     }
 }

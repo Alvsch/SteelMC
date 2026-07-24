@@ -1,12 +1,16 @@
 //! Item stack implementation.
 
-use std::io::{Cursor, Result, Write};
+use std::{
+    borrow::Cow,
+    io::{Cursor, Result, Write},
+};
 
 use rand::RngExt;
 
 use steel_utils::{
     DowncastType, Identifier,
     codec::VarInt,
+    java,
     random::{Random, xoroshiro::Xoroshiro},
     serial::{ReadFrom, WriteTo},
 };
@@ -24,7 +28,8 @@ use crate::{
             ENCHANTABLE, ENCHANTMENTS, EQUIPPABLE, Equippable, ITEM_NAME, ItemAttributeModifiers,
             ItemEnchantments, MAX_DAMAGE, MAX_STACK_SIZE, MINIMUM_ATTACK_CHARGE,
             OMINOUS_BOTTLE_AMPLIFIER, OminousBottleAmplifier, PIERCING_WEAPON, PiercingWeapon,
-            REPAIRABLE, STORED_ENCHANTMENTS, TOOL, Tool, UNBREAKABLE, WEAPON, Weapon,
+            REPAIRABLE, STORED_ENCHANTMENTS, TOOL, Tool, UNBREAKABLE, WEAPON, WRITTEN_BOOK_CONTENT,
+            Weapon,
         },
     },
     enchantment_effect::EnchantmentEffectComponent,
@@ -1007,19 +1012,25 @@ impl ItemStack {
         true
     }
 
-    /// Returns the custom name stored in the `CUSTOM_NAME` component, if any.
+    /// Vanilla `ItemStack.getCustomName`: an explicit custom name, or a
+    /// nonblank written-book title.
     #[must_use]
-    pub fn custom_name(&self) -> Option<&TextComponent> {
-        self.get(CUSTOM_NAME)
+    pub fn custom_name(&self) -> Option<Cow<'_, TextComponent>> {
+        if let Some(name) = self.get(CUSTOM_NAME) {
+            return Some(Cow::Borrowed(name));
+        }
+
+        let title = self.get(WRITTEN_BOOK_CONTENT)?.title().raw();
+        (!java::is_blank(title)).then(|| Cow::Owned(TextComponent::plain(title.to_owned())))
     }
 
     /// Vanilla `ItemStack.getHoverName`: the custom name if set, otherwise the
     /// item's default name.
     #[must_use]
-    pub fn hover_name(&self) -> &TextComponent {
+    pub fn hover_name(&self) -> Cow<'_, TextComponent> {
         self.custom_name()
-            .or_else(|| self.get(ITEM_NAME))
-            .unwrap_or(&EMPTY_NAME)
+            .or_else(|| self.get(ITEM_NAME).map(Cow::Borrowed))
+            .unwrap_or(Cow::Borrowed(&EMPTY_NAME))
     }
 }
 
@@ -1265,6 +1276,72 @@ mod enchantment_tests {
                 enchantments.get_level(&vanilla_enchantments::SHARPNESS.key)
             }),
             Some(3)
+        );
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use text_components::TextComponent;
+
+    use super::ItemStack;
+    use crate::data_components::components::{Filterable, WrittenBookContent};
+    use crate::data_components::vanilla_components::{CUSTOM_NAME, WRITTEN_BOOK_CONTENT};
+    use crate::test_support::init_test_registry;
+    use crate::vanilla_items;
+
+    fn written_book(raw_title: &str, filtered_title: Option<&str>) -> ItemStack {
+        let content = WrittenBookContent::new(
+            Filterable::new(raw_title.to_owned(), filtered_title.map(ToOwned::to_owned)),
+            "Author".to_owned(),
+            0,
+            Vec::new(),
+            true,
+        );
+        let Ok(content) = content else {
+            panic!("test written-book content should be valid");
+        };
+        let mut book = ItemStack::new(&vanilla_items::WRITTEN_BOOK);
+        book.set(WRITTEN_BOOK_CONTENT, content);
+        book
+    }
+
+    #[test]
+    fn written_book_raw_title_is_its_custom_and_hover_name() {
+        init_test_registry();
+        let book = written_book("Raw title", Some("Filtered title"));
+        let expected = TextComponent::plain("Raw title");
+
+        assert_eq!(book.custom_name().as_deref(), Some(&expected));
+        assert_eq!(book.hover_name().as_ref(), &expected);
+    }
+
+    #[test]
+    fn explicit_custom_name_takes_precedence_over_written_book_title() {
+        init_test_registry();
+        let mut book = written_book("Book title", None);
+        let explicit = TextComponent::plain("Explicit name");
+        book.set(CUSTOM_NAME, explicit.clone());
+
+        assert_eq!(book.custom_name().as_deref(), Some(&explicit));
+        assert_eq!(book.hover_name().as_ref(), &explicit);
+    }
+
+    #[test]
+    fn written_book_title_uses_java_blank_rules() {
+        init_test_registry();
+        let blank = written_book("\u{00a0}\u{202f}", None);
+        assert!(blank.custom_name().is_none());
+        let Some(default_name) = blank.get(crate::data_components::vanilla_components::ITEM_NAME)
+        else {
+            panic!("written book should have a default item name");
+        };
+        assert_eq!(blank.hover_name().as_ref(), default_name);
+
+        let next_line = written_book("\u{0085}", None);
+        assert_eq!(
+            next_line.custom_name().as_deref(),
+            Some(&TextComponent::plain("\u{0085}"))
         );
     }
 }
