@@ -44,14 +44,50 @@ pub enum EquipmentSwapResult {
     Fail,
 }
 
+/// Whether a terminal menu removal completed synchronously.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub enum MenuRemovalStatus {
+    /// Both the base inventory menu and any external menu were removed.
+    Complete,
+    /// A callback or in-flight open operation owns menu state; removal will
+    /// finish when it unwinds.
+    Pending,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MenuItemDisposition {
+    ReturnToInventory,
+    Drop,
+}
+
+impl MenuItemDisposition {
+    const fn combine(self, other: Self) -> Self {
+        if matches!(self, Self::Drop) || matches!(other, Self::Drop) {
+            Self::Drop
+        } else {
+            Self::ReturnToInventory
+        }
+    }
+}
+
 pub(super) struct OpenMenuState {
     menu: Option<Menu>,
     dispatch: Option<OpenMenuDispatch>,
+    terminal_removal: Option<TerminalMenuRemoval>,
+    active_open_operations: usize,
 }
 
 struct OpenMenuDispatch {
     container_id: u8,
     actions: Vec<DeferredMenuAction>,
+}
+
+struct TerminalMenuRemoval {
+    disposition: MenuItemDisposition,
+    main_cleanup_complete: bool,
+    pending_cleanup_in_progress: bool,
+    pending_menus: Vec<Menu>,
 }
 
 enum DeferredMenuAction {
@@ -74,6 +110,8 @@ impl OpenMenuState {
         Self {
             menu: None,
             dispatch: None,
+            terminal_removal: None,
+            active_open_operations: 0,
         }
     }
 }
@@ -820,7 +858,14 @@ impl Player {
                 open_menu.menu = Some(menu);
                 return;
             };
+            if let Some(terminal_removal) = open_menu.terminal_removal.as_mut() {
+                Self::queue_deferred_menus(terminal_removal, dispatch.actions);
+                drop(open_menu);
+                self.finish_terminal_menu_main_cleanup(Some(menu));
+                return;
+            }
             open_menu.menu = Some(menu);
+            open_menu.active_open_operations += 1;
             dispatch.actions
         };
 
@@ -833,6 +878,13 @@ impl Player {
             let Some(dispatch) = open_menu.dispatch.take() else {
                 return;
             };
+            if let Some(terminal_removal) = open_menu.terminal_removal.as_mut() {
+                Self::queue_deferred_menus(terminal_removal, dispatch.actions);
+                drop(open_menu);
+                self.finish_terminal_menu_main_cleanup(None);
+                return;
+            }
+            open_menu.active_open_operations += 1;
             dispatch.actions
         };
 
@@ -855,6 +907,38 @@ impl Player {
                 }
             }
         }
+
+        self.finish_menu_open_operation();
+    }
+
+    fn queue_deferred_menus(
+        terminal_removal: &mut TerminalMenuRemoval,
+        actions: Vec<DeferredMenuAction>,
+    ) {
+        terminal_removal
+            .pending_menus
+            .extend(actions.into_iter().filter_map(|action| match action {
+                DeferredMenuAction::Open(prepared) => Some(prepared.menu),
+                DeferredMenuAction::Close { .. } => None,
+            }));
+    }
+
+    fn begin_menu_open_operation(&self) -> bool {
+        let mut open_menu = self.open_menu.lock();
+        if open_menu.terminal_removal.is_some() {
+            return false;
+        }
+        open_menu.active_open_operations += 1;
+        true
+    }
+
+    fn finish_menu_open_operation(&self) {
+        {
+            let mut open_menu = self.open_menu.lock();
+            debug_assert!(open_menu.active_open_operations > 0);
+            open_menu.active_open_operations -= 1;
+        }
+        self.try_finish_terminal_menu_removal();
     }
 
     /// Attempts to pick up nearby item entities.
@@ -1140,13 +1224,36 @@ impl Player {
         title: impl Into<TextComponent>,
         create: impl FnOnce(u8, &Arc<World>) -> Menu,
     ) {
+        if !self.begin_menu_open_operation() {
+            return;
+        }
+        self.open_menu_inner(title, create);
+        self.finish_menu_open_operation();
+    }
+
+    fn open_menu_inner(
+        &self,
+        title: impl Into<TextComponent>,
+        create: impl FnOnce(u8, &Arc<World>) -> Menu,
+    ) {
         self.do_close_container();
+
+        {
+            let open_menu = self.open_menu.lock();
+            if open_menu.terminal_removal.is_some() {
+                return;
+            }
+        }
 
         let container_id = self.next_container_counter();
         let menu = create(container_id, &self.get_world());
         let title = title.into();
 
         let mut open_menu = self.open_menu.lock();
+        if let Some(terminal_removal) = open_menu.terminal_removal.as_mut() {
+            terminal_removal.pending_menus.push(menu);
+            return;
+        }
         if let Some(dispatch) = open_menu.dispatch.as_mut() {
             dispatch
                 .actions
@@ -1163,11 +1270,23 @@ impl Player {
 
     fn open_prepared_menu(&self, title: TextComponent, mut menu: Menu) {
         loop {
+            {
+                let mut open_menu = self.open_menu.lock();
+                if let Some(terminal_removal) = open_menu.terminal_removal.as_mut() {
+                    terminal_removal.pending_menus.push(menu);
+                    return;
+                }
+            }
+
             // A removal hook may have opened another menu while the initiating
             // open call was closing its predecessor.
             self.do_close_container();
 
             let mut open_menu = self.open_menu.lock();
+            if let Some(terminal_removal) = open_menu.terminal_removal.as_mut() {
+                terminal_removal.pending_menus.push(menu);
+                return;
+            }
             if let Some(dispatch) = open_menu.dispatch.as_mut() {
                 dispatch
                     .actions
@@ -1241,9 +1360,112 @@ impl Player {
         self.close_open_menu(false);
     }
 
+    /// Removes both the base inventory menu and any external menu.
+    ///
+    /// This mirrors `Player::remove`: base crafting and carried items are
+    /// handled before the external menu, and menu hooks cannot install a
+    /// replacement while removal is in progress. The inventory menu remains
+    /// reusable because Steel keeps one `Player` across world changes.
+    pub fn remove_all_menus(&self) -> MenuRemovalStatus {
+        self.remove_all_menus_with_disposition(self.default_menu_item_disposition())
+    }
+
+    pub(super) fn remove_all_menus_with_disposition(
+        &self,
+        disposition: MenuItemDisposition,
+    ) -> MenuRemovalStatus {
+        let menu = {
+            let mut open_menu = self.open_menu.lock();
+            if let Some(terminal_removal) = open_menu.terminal_removal.as_mut() {
+                terminal_removal.disposition = terminal_removal.disposition.combine(disposition);
+                return MenuRemovalStatus::Pending;
+            }
+
+            open_menu.terminal_removal = Some(TerminalMenuRemoval {
+                disposition,
+                main_cleanup_complete: false,
+                pending_cleanup_in_progress: false,
+                pending_menus: Vec::new(),
+            });
+            if open_menu.dispatch.is_some() {
+                return MenuRemovalStatus::Pending;
+            }
+
+            open_menu.menu.take()
+        };
+
+        self.finish_terminal_menu_main_cleanup(menu);
+        if self.open_menu.lock().terminal_removal.is_none() {
+            MenuRemovalStatus::Complete
+        } else {
+            MenuRemovalStatus::Pending
+        }
+    }
+
+    fn finish_terminal_menu_main_cleanup(&self, mut menu: Option<Menu>) {
+        self.inventory_menu.lock().removed(self);
+        if let Some(menu) = menu.as_mut() {
+            self.remove_open_menu(menu);
+        }
+
+        {
+            let mut open_menu = self.open_menu.lock();
+            let Some(terminal_removal) = open_menu.terminal_removal.as_mut() else {
+                return;
+            };
+            terminal_removal.main_cleanup_complete = true;
+        }
+        self.try_finish_terminal_menu_removal();
+    }
+
+    fn try_finish_terminal_menu_removal(&self) {
+        loop {
+            let pending_menus = {
+                let mut open_menu = self.open_menu.lock();
+                if open_menu.active_open_operations != 0 {
+                    return;
+                }
+                let Some(terminal_removal) = open_menu.terminal_removal.as_mut() else {
+                    return;
+                };
+                if !terminal_removal.main_cleanup_complete {
+                    return;
+                }
+                if terminal_removal.pending_cleanup_in_progress {
+                    return;
+                }
+                if terminal_removal.pending_menus.is_empty() {
+                    open_menu.terminal_removal = None;
+                    debug_assert!(open_menu.menu.is_none());
+                    return;
+                }
+                terminal_removal.pending_cleanup_in_progress = true;
+                mem::take(&mut terminal_removal.pending_menus)
+            };
+
+            for mut pending_menu in pending_menus {
+                pending_menu.removed(self);
+            }
+
+            let mut open_menu = self.open_menu.lock();
+            let Some(terminal_removal) = open_menu.terminal_removal.as_mut() else {
+                return;
+            };
+            terminal_removal.pending_cleanup_in_progress = false;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn retry_terminal_menu_removal_for_test(&self) {
+        self.try_finish_terminal_menu_removal();
+    }
+
     fn close_open_menu(&self, send_packet: bool) {
         let menu = {
             let mut open_menu = self.open_menu.lock();
+            if open_menu.terminal_removal.is_some() {
+                return;
+            }
             if let Some(dispatch) = open_menu.dispatch.as_mut() {
                 dispatch
                     .actions
@@ -1484,9 +1706,27 @@ impl Player {
     /// drops the items.
     #[must_use]
     pub fn returns_menu_items_to_inventory(&self) -> bool {
+        if let Some(disposition) = self
+            .open_menu
+            .lock()
+            .terminal_removal
+            .as_ref()
+            .map(|terminal_removal| terminal_removal.disposition)
+        {
+            return disposition == MenuItemDisposition::ReturnToInventory;
+        }
+
+        self.default_menu_item_disposition() == MenuItemDisposition::ReturnToInventory
+    }
+
+    fn default_menu_item_disposition(&self) -> MenuItemDisposition {
         let removed_outside_world_change =
             self.is_removed() && self.removal_reason() != Some(RemovalReason::ChangedWorld);
-        !removed_outside_world_change && !self.connection.closed()
+        if removed_outside_world_change || self.connection.closed() {
+            MenuItemDisposition::Drop
+        } else {
+            MenuItemDisposition::ReturnToInventory
+        }
     }
 
     /// Tries to add an item to the player's inventory, dropping it if it doesn't fit.

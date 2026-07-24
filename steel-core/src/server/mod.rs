@@ -49,6 +49,7 @@ use crate::player::player_data::{
     PersistentEnderPearl, PersistentPlayerData, PersistentRootVehicle,
 };
 use crate::player::player_data_storage::{GlobalPlayerData, PlayerDataStorage};
+use crate::player::player_inventory::MenuRemovalStatus;
 use crate::player::{
     GameProfile, KnownPlayer, KnownPlayerNameLookup, KnownPlayers, Player, ProfileLookupError,
     ResetReason, is_valid_player_name, lookup_online_profile, offline_uuid,
@@ -5030,6 +5031,9 @@ impl Server {
             return Ok(());
         }
 
+        if player.remove_all_menus() != MenuRemovalStatus::Complete {
+            return Err("cannot save domain data while a menu callback is active".to_owned());
+        }
         let current_data = PersistentPlayerData::from_player(&player);
         if let Err(e) = self
             .player_data_storage

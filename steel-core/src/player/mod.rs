@@ -118,7 +118,7 @@ use crate::permission::{
 use crate::physics::MoveResult;
 use crate::player::experience::Experience;
 use crate::player::player_data::{PersistentEnderPearl, PersistentRootVehicle};
-use crate::player::player_inventory::PlayerInventory;
+use crate::player::player_inventory::{MenuItemDisposition, MenuRemovalStatus, PlayerInventory};
 use crate::server::{
     Server,
     jobs::{JobPoll, ServerJob, ServerJobContext},
@@ -948,7 +948,7 @@ impl Player {
             });
         }
 
-        self.do_close_container();
+        let _ = self.remove_all_menus_with_disposition(MenuItemDisposition::Drop);
 
         if !world.get_game_rule(&KEEP_INVENTORY) {
             let items: Vec<ItemStack> = {
@@ -1204,6 +1204,11 @@ impl Player {
             return;
         };
 
+        assert_eq!(
+            player.remove_all_menus(),
+            MenuRemovalStatus::Complete,
+            "End credits menu removal must run outside a menu callback"
+        );
         world.remove_player_for_world_change(&player);
         if player.has_won_game() {
             return;
@@ -1806,11 +1811,18 @@ impl Player {
     ) where
         F: FnOnce(),
     {
+        if reason != ResetReason::InitialJoin {
+            assert_eq!(
+                self.remove_all_menus(),
+                MenuRemovalStatus::Complete,
+                "player reset menu removal must run outside a menu callback"
+            );
+        }
+
         let old_world = self.get_world();
         let switching_worlds = !Arc::ptr_eq(&old_world, &new_world);
 
         if switching_worlds {
-            self.do_close_container();
             self.send_packet(CContainerClose { container_id: 0 });
             if store_root_vehicle {
                 old_world.remove_player_for_domain_switch(self);
@@ -2828,8 +2840,9 @@ impl TextResolutor for Player {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     use glam::DVec3;
     use rustc_hash::FxHashMap;
@@ -2873,9 +2886,9 @@ mod tests {
     use crate::world::World;
 
     use super::{
-        Player, PlayerPermissionState, ResetReason, block_breaking::BlockBreakAction,
-        experience::Experience, first_point_level_up_sound, nullable_game_mode_id,
-        player_data::PersistentPlayerData,
+        MenuItemDisposition, MenuRemovalStatus, Player, PlayerPermissionState, ResetReason,
+        block_breaking::BlockBreakAction, experience::Experience, first_point_level_up_sound,
+        nullable_game_mode_id, player_data::PersistentPlayerData,
     };
 
     fn test_player(world: Arc<World>) -> Arc<Player> {
@@ -3026,6 +3039,109 @@ mod tests {
         }
     }
 
+    struct QueueDrainedReplacementThenRemoveAllOnOpen {
+        transient: Shared<SimpleContainer>,
+    }
+
+    impl MenuKind for QueueDrainedReplacementThenRemoveAllOnOpen {
+        fn on_open(
+            &mut self,
+            _behavior: &mut MenuBehavior,
+            _guard: &mut ContainerLockGuard,
+            player: &Player,
+        ) {
+            let transient = Arc::clone(&self.transient);
+            let inventory = Arc::clone(&player.inventory);
+            player.open_menu("Replacement", move |container_id, _world| {
+                let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+                let transient = builder.section(transient, 9);
+                builder.player_inventory(&inventory);
+                builder.drain([transient]);
+                builder.build(MenuKindType::Basic(BasicKind {}))
+            });
+
+            assert_eq!(
+                player.remove_all_menus(),
+                MenuRemovalStatus::Pending,
+                "the on_open callback owns the current menu"
+            );
+        }
+    }
+
+    struct DropAllMenusOnOpen;
+
+    impl MenuKind for DropAllMenusOnOpen {
+        fn on_open(
+            &mut self,
+            _behavior: &mut MenuBehavior,
+            _guard: &mut ContainerLockGuard,
+            player: &Player,
+        ) {
+            assert_eq!(
+                player.remove_all_menus_with_disposition(MenuItemDisposition::Drop),
+                MenuRemovalStatus::Pending,
+                "the on_open callback owns the current menu"
+            );
+        }
+    }
+
+    struct RemoveAllOnRemoved;
+
+    impl MenuKind for RemoveAllOnRemoved {
+        fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
+            assert_eq!(
+                player.remove_all_menus_with_disposition(MenuItemDisposition::Drop),
+                MenuRemovalStatus::Pending,
+                "the removal callback owns the current menu dispatch"
+            );
+        }
+    }
+
+    struct OpenTerminalReplacementOnRemoved;
+
+    impl MenuKind for OpenTerminalReplacementOnRemoved {
+        fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
+            player.open_menu("Terminal replacement", |container_id, _world| {
+                empty_test_menu(
+                    player,
+                    container_id,
+                    MenuKindType::custom(RemoveAllOnRemoved),
+                )
+            });
+        }
+    }
+
+    struct QueueReplacementOnOpenAndRemoveAllOnRemoved {
+        transient: Shared<SimpleContainer>,
+    }
+
+    impl MenuKind for QueueReplacementOnOpenAndRemoveAllOnRemoved {
+        fn on_open(
+            &mut self,
+            _behavior: &mut MenuBehavior,
+            _guard: &mut ContainerLockGuard,
+            player: &Player,
+        ) {
+            let transient = Arc::clone(&self.transient);
+            let inventory = Arc::clone(&player.inventory);
+            player.open_menu("Queued replacement", move |container_id, _world| {
+                let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+                let transient = builder.section(transient, 9);
+                builder.player_inventory(&inventory);
+                builder.drain([transient]);
+                builder.build(MenuKindType::Basic(BasicKind {}))
+            });
+        }
+
+        fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
+            assert_eq!(
+                player.remove_all_menus_with_disposition(MenuItemDisposition::Drop),
+                MenuRemovalStatus::Pending,
+                "the removal callback owns the current menu dispatch"
+            );
+        }
+    }
+
     struct CountRemovals {
         count: Arc<AtomicUsize>,
     }
@@ -3033,6 +3149,21 @@ mod tests {
     impl MenuKind for CountRemovals {
         fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
             self.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    struct BlockTerminalMenuRemoval {
+        entered: Arc<Barrier>,
+        release: Arc<Barrier>,
+        returned_to_inventory: Arc<AtomicBool>,
+    }
+
+    impl MenuKind for BlockTerminalMenuRemoval {
+        fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
+            self.entered.wait();
+            self.release.wait();
+            self.returned_to_inventory
+                .store(player.returns_menu_items_to_inventory(), Ordering::Release);
         }
     }
 
@@ -3081,7 +3212,7 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_menu_close_drops_transient_items() {
+    fn disconnected_menu_removal_drops_transient_items() {
         init_test_registry();
         let world = fresh_test_world("disconnected_menu_close");
         insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
@@ -3129,7 +3260,7 @@ mod tests {
 
         probe_state.armed.store(true, Ordering::Release);
         player.close_connection();
-        player.do_close_container();
+        assert_eq!(player.remove_all_menus(), MenuRemovalStatus::Complete);
 
         assert!(probe_state.saw_packet.load(Ordering::Acquire));
         assert!(
@@ -3289,6 +3420,306 @@ mod tests {
     }
 
     #[test]
+    fn terminal_menu_removal_returns_carried_item_and_rejects_replacement() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        player
+            .inventory
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 3));
+        let replacement_removals = Arc::new(AtomicUsize::new(0));
+        let opened_container_id = Cell::new(0);
+        player.open_menu("Reopen on removal", |container_id, _world| {
+            opened_container_id.set(container_id);
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(ReopenOnRemoved {
+                    replacement_removals: Arc::clone(&replacement_removals),
+                }),
+            )
+        });
+
+        player.handle_container_click(SContainerClick {
+            container_id: i32::from(opened_container_id.get()),
+            state_id: 0,
+            slot_num: 36,
+            button_num: 0,
+            click_type: ClickType::Pickup,
+            changed_slots: FxHashMap::default(),
+            carried_item: HashedStack::Empty,
+        });
+        assert!(player.inventory.lock().get_item(0).is_empty());
+
+        assert_eq!(player.remove_all_menus(), MenuRemovalStatus::Complete);
+
+        assert!(!player.has_container_open());
+        assert_eq!(replacement_removals.load(Ordering::Relaxed), 0);
+        let inventory = player.inventory.lock();
+        let stone_count: i32 = inventory
+            .items()
+            .iter()
+            .filter(|item| item.is(&vanilla_items::STONE))
+            .map(ItemStack::count)
+            .sum();
+        assert_eq!(stone_count, 3);
+    }
+
+    #[test]
+    fn terminal_menu_removal_drains_base_and_queued_menus() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let crafting = player.crafting_container();
+        crafting
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 2));
+        *player.inventory_menu.lock().behavior_mut().carried_mut() =
+            ItemStack::with_count(&vanilla_items::DIRT, 3);
+        let transient = SimpleContainer::new(9).into_shared();
+        transient
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::OAK_LOG, 4));
+
+        player.open_menu("Terminal on open", |container_id, _world| {
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(QueueDrainedReplacementThenRemoveAllOnOpen {
+                    transient: Arc::clone(&transient),
+                }),
+            )
+        });
+
+        assert!(!player.has_container_open());
+        assert!(crafting.lock().get_item(0).is_empty());
+        assert!(player.inventory_menu.lock().behavior().carried().is_empty());
+        assert!(transient.lock().get_item(0).is_empty());
+
+        let inventory = player.inventory.lock();
+        for (item, expected) in [
+            (&vanilla_items::STONE, 2),
+            (&vanilla_items::DIRT, 3),
+            (&vanilla_items::OAK_LOG, 4),
+        ] {
+            let count: i32 = inventory
+                .items()
+                .iter()
+                .filter(|stack| stack.is(item))
+                .map(ItemStack::count)
+                .sum();
+            assert_eq!(count, expected);
+        }
+    }
+
+    #[test]
+    fn pending_terminal_removal_preserves_drop_disposition() {
+        init_test_registry();
+        let world = fresh_test_world("pending_terminal_menu_drop");
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        let player = test_player(Arc::clone(&world));
+        *player.inventory_menu.lock().behavior_mut().carried_mut() =
+            ItemStack::with_count(&vanilla_items::STONE, 2);
+
+        player.open_menu("Terminal drop on open", |container_id, _world| {
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(DropAllMenusOnOpen),
+            )
+        });
+
+        assert!(!player.has_container_open());
+        assert!(
+            player
+                .inventory
+                .lock()
+                .items()
+                .iter()
+                .all(ItemStack::is_empty)
+        );
+        let dropped = world.get_entities_in_aabb_matching(
+            &WorldAabb::new(-2.0, -1.0, -2.0, 2.0, 3.0, 2.0),
+            |entity| entity.entity_type() == &vanilla_entities::ITEM,
+        );
+        assert_eq!(dropped.len(), 1);
+        let Some(item) = dropped[0].as_ref().downcast_ref::<ItemEntity>() else {
+            panic!("dropped entity should retain its concrete item type");
+        };
+        assert!(item.get_item().is(&vanilla_items::STONE));
+        assert_eq!(item.get_item().count(), 2);
+    }
+
+    #[test]
+    fn menu_open_stops_when_predecessor_removal_turns_terminal() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        player.open_menu("Terminal on removal", |container_id, _world| {
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(RemoveAllOnRemoved),
+            )
+        });
+        let factory_called = Cell::new(false);
+
+        player.open_menu("Rejected", |container_id, _world| {
+            factory_called.set(true);
+            empty_test_menu(&player, container_id, MenuKindType::Basic(BasicKind {}))
+        });
+
+        assert!(!factory_called.get());
+        assert!(!player.has_container_open());
+    }
+
+    #[test]
+    fn prepared_menu_is_cleaned_when_replacement_removal_turns_terminal() {
+        init_test_registry();
+        let world = fresh_test_world("prepared_menu_terminal_cleanup");
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        let player = test_player(Arc::clone(&world));
+        player.open_menu("Open terminal replacement", |container_id, _world| {
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(OpenTerminalReplacementOnRemoved),
+            )
+        });
+        let final_removals = Arc::new(AtomicUsize::new(0));
+        let transient = SimpleContainer::new(9).into_shared();
+        transient
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 2));
+
+        player.open_menu("Rejected after construction", |container_id, _world| {
+            let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+            let transient = builder.section(Arc::clone(&transient), 9);
+            builder.player_inventory(&player.inventory);
+            builder.drain([transient]);
+            builder.build(MenuKindType::custom(CountRemovals {
+                count: Arc::clone(&final_removals),
+            }))
+        });
+
+        assert!(!player.has_container_open());
+        assert_eq!(final_removals.load(Ordering::Relaxed), 1);
+        assert!(transient.lock().get_item(0).is_empty());
+        assert!(
+            player
+                .inventory
+                .lock()
+                .items()
+                .iter()
+                .all(ItemStack::is_empty)
+        );
+        let dropped = world.get_entities_in_aabb_matching(
+            &WorldAabb::new(-2.0, -1.0, -2.0, 2.0, 3.0, 2.0),
+            |entity| entity.entity_type() == &vanilla_entities::ITEM,
+        );
+        assert_eq!(dropped.len(), 1);
+        let Some(item) = dropped[0].as_ref().downcast_ref::<ItemEntity>() else {
+            panic!("dropped entity should retain its concrete item type");
+        };
+        assert!(item.get_item().is(&vanilla_items::STONE));
+        assert_eq!(item.get_item().count(), 2);
+    }
+
+    #[test]
+    fn deferred_open_is_cleaned_when_earlier_close_turns_terminal() {
+        init_test_registry();
+        let world = fresh_test_world("deferred_open_terminal_cleanup");
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        let player = test_player(Arc::clone(&world));
+        let transient = SimpleContainer::new(9).into_shared();
+        transient
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 4));
+
+        player.open_menu("Queue then remove", |container_id, _world| {
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(QueueReplacementOnOpenAndRemoveAllOnRemoved {
+                    transient: Arc::clone(&transient),
+                }),
+            )
+        });
+
+        assert!(!player.has_container_open());
+        assert!(transient.lock().get_item(0).is_empty());
+        assert!(
+            player
+                .inventory
+                .lock()
+                .items()
+                .iter()
+                .all(ItemStack::is_empty)
+        );
+        let dropped = world.get_entities_in_aabb_matching(
+            &WorldAabb::new(-2.0, -1.0, -2.0, 2.0, 3.0, 2.0),
+            |entity| entity.entity_type() == &vanilla_entities::ITEM,
+        );
+        assert_eq!(dropped.len(), 1);
+        let Some(item) = dropped[0].as_ref().downcast_ref::<ItemEntity>() else {
+            panic!("dropped entity should retain its concrete item type");
+        };
+        assert!(item.get_item().is(&vanilla_items::STONE));
+        assert_eq!(item.get_item().count(), 4);
+    }
+
+    #[test]
+    fn terminal_removal_stays_active_while_pending_menu_cleanup_runs() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let factory_entered = Arc::new(Barrier::new(2));
+        let factory_release = Arc::new(Barrier::new(2));
+        let removal_entered = Arc::new(Barrier::new(2));
+        let removal_release = Arc::new(Barrier::new(2));
+        let returned_to_inventory = Arc::new(AtomicBool::new(true));
+
+        let opener_player = Arc::clone(&player);
+        let opener_factory_entered = Arc::clone(&factory_entered);
+        let opener_factory_release = Arc::clone(&factory_release);
+        let opener_removal_entered = Arc::clone(&removal_entered);
+        let opener_removal_release = Arc::clone(&removal_release);
+        let opener_returned_to_inventory = Arc::clone(&returned_to_inventory);
+        let opener = thread::spawn(move || {
+            opener_player.open_menu("Pending cleanup", |container_id, _world| {
+                opener_factory_entered.wait();
+                opener_factory_release.wait();
+                empty_test_menu(
+                    &opener_player,
+                    container_id,
+                    MenuKindType::custom(BlockTerminalMenuRemoval {
+                        entered: opener_removal_entered,
+                        release: opener_removal_release,
+                        returned_to_inventory: opener_returned_to_inventory,
+                    }),
+                )
+            });
+        });
+
+        factory_entered.wait();
+        assert_eq!(player.remove_all_menus(), MenuRemovalStatus::Pending);
+        player.close_connection();
+        assert_eq!(player.remove_all_menus(), MenuRemovalStatus::Pending);
+        factory_release.wait();
+        removal_entered.wait();
+
+        player.retry_terminal_menu_removal_for_test();
+        let replacement_factory_called = Cell::new(false);
+        player.open_menu("Rejected during cleanup", |container_id, _world| {
+            replacement_factory_called.set(true);
+            empty_test_menu(&player, container_id, MenuKindType::Basic(BasicKind {}))
+        });
+        assert!(!replacement_factory_called.get());
+
+        removal_release.wait();
+        assert!(opener.join().is_ok());
+        assert!(!returned_to_inventory.load(Ordering::Acquire));
+        assert!(!player.has_container_open());
+    }
+
+    #[test]
     fn opening_a_menu_closes_a_replacement_created_during_removal() {
         init_test_registry();
         let player = test_player(Arc::clone(test_world()));
@@ -3356,6 +3787,49 @@ mod tests {
         assert_eq!(ResetReason::Respawn.respawn_data_kept(), 0x00);
         assert_eq!(ResetReason::EndCredits.respawn_data_kept(), 0x01);
         assert_eq!(ResetReason::WorldChange.respawn_data_kept(), 0x03);
+    }
+
+    #[test]
+    fn end_credits_removes_all_menus_before_detaching() {
+        init_test_registry();
+        let world = fresh_test_world("end_credits_menu_removal");
+        let player = test_player(Arc::clone(&world));
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+        let _ = player.mark_joined_world();
+
+        player
+            .crafting_container()
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 2));
+        *player.inventory_menu.lock().behavior_mut().carried_mut() =
+            ItemStack::with_count(&vanilla_items::DIRT, 3);
+        let replacement_removals = Arc::new(AtomicUsize::new(0));
+        player.open_menu("Reopen on removal", |container_id, _world| {
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(ReopenOnRemoved {
+                    replacement_removals: Arc::clone(&replacement_removals),
+                }),
+            )
+        });
+
+        player.show_end_credits();
+
+        assert!(player.has_won_game());
+        assert!(!player.has_container_open());
+        assert!(world.players.get_by_uuid(&player.gameprofile.id).is_none());
+        assert_eq!(replacement_removals.load(Ordering::Relaxed), 0);
+        let inventory = player.inventory.lock();
+        for (item, expected) in [(&vanilla_items::STONE, 2), (&vanilla_items::DIRT, 3)] {
+            let count: i32 = inventory
+                .items()
+                .iter()
+                .filter(|stack| stack.is(item))
+                .map(ItemStack::count)
+                .sum();
+            assert_eq!(count, expected);
+        }
     }
 
     #[test]

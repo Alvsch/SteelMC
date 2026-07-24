@@ -16,6 +16,7 @@ use steel::logger::CommandLogger;
 use steel::{SERVER, SteelServer, logger::LoggerLayer};
 use steel_core::player::player_data::PersistentPlayerData;
 use steel_core::player::player_data_storage::GlobalPlayerData;
+use steel_core::player::player_inventory::MenuRemovalStatus;
 use steel_core::server::Server;
 use steel_utils::text::DisplayResolutor;
 use text_components::fmt::set_display_resolutor;
@@ -395,12 +396,14 @@ async fn shutdown_worlds(server: &Arc<Server>) {
         log::error!("Failed to flush known player cache during shutdown: {error}");
     }
 
-    for world in server.worlds.values() {
-        world.players.iter_players(|_, player| {
-            player.close_connection();
-            player.do_close_container();
-            true
-        });
+    let players = server.get_players();
+    for player in &players {
+        player.close_connection();
+        assert_eq!(
+            player.remove_all_menus(),
+            MenuRemovalStatus::Complete,
+            "shutdown menu removal must run after packet processing stops"
+        );
     }
 
     for world in server.worlds.values() {
@@ -410,7 +413,7 @@ async fn shutdown_worlds(server: &Arc<Server>) {
     }
 
     let mut players_to_save = Vec::new();
-    for player in server.get_players() {
+    for player in players {
         let domain = player.get_world().domain().to_owned();
         let data = PersistentPlayerData::from_player(&player);
         player.store_ender_pearls_with_player();
