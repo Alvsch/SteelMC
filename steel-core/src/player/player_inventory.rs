@@ -1157,6 +1157,9 @@ impl Player {
                     slot.set_by_player(&mut guard, item_stack.clone(), &previous);
                 }
             }
+            if (1..=4).contains(&slot_index) {
+                menu.update_crafting_result();
+            }
             menu.behavior_mut()
                 .set_remote_slot_known(slot_index, &item_stack);
             menu.behavior_mut().broadcast_changes(&self.connection);

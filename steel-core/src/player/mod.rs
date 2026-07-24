@@ -2847,7 +2847,9 @@ mod tests {
     use glam::DVec3;
     use rustc_hash::FxHashMap;
     use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
-    use steel_protocol::packets::game::{ClickType, HashedStack, SContainerClick};
+    use steel_protocol::packets::game::{
+        ClickType, HashedStack, SContainerClick, SSetCreativeModeSlot,
+    };
     use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::blocks::properties::{BlockStateProperties, Direction};
     use steel_registry::data_component_predicate::DataComponentMatchers;
@@ -4001,6 +4003,33 @@ mod tests {
         assert_eq!(player.inventory_menu.lock().behavior().carried().count(), 4);
         assert_eq!(player.clear_or_count_matching_items(&stone, -1), 4);
         assert!(player.inventory_menu.lock().behavior().carried().is_empty());
+    }
+
+    #[test]
+    fn creative_crafting_grid_updates_the_result_slot() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        assert!(player.change_game_mode_state(GameType::Creative));
+        let crafting = player.inventory_crafting_handler();
+
+        player.handle_set_creative_mode_slot(SSetCreativeModeSlot {
+            slot_num: 1,
+            item_stack: ItemStack::new(&vanilla_items::OAK_LOG),
+        });
+
+        {
+            let result = crafting.result_container();
+            let result = result.lock();
+            assert!(result.get_item(0).is(&vanilla_items::OAK_PLANKS));
+            assert_eq!(result.get_item(0).count(), 4);
+        }
+
+        player.handle_set_creative_mode_slot(SSetCreativeModeSlot {
+            slot_num: 1,
+            item_stack: ItemStack::empty(),
+        });
+
+        assert!(crafting.result_container().lock().get_item(0).is_empty());
     }
 
     #[test]
