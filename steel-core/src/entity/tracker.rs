@@ -493,16 +493,16 @@ impl EntityTracker {
             (senders.entity_data)(entity_id, dirty_entity_data);
         }
 
+        for (entity_id, dirty_equipment) in equipment_to_broadcast {
+            (senders.equipment)(entity_id, CSetEquipment::new(entity_id, dirty_equipment));
+        }
+
         for (entity_id, dirty_attributes) in attributes_to_broadcast {
             (senders.attributes)(entity_id, dirty_attributes);
         }
 
         for (player_id, packet) in mob_effect_packets_to_send {
             (senders.mob_effects)(player_id, packet);
-        }
-
-        for (entity_id, dirty_equipment) in equipment_to_broadcast {
-            (senders.equipment)(entity_id, CSetEquipment::new(entity_id, dirty_equipment));
         }
 
         for (entity_id, packet) in entity_links_to_broadcast {
@@ -928,6 +928,7 @@ fn direct_player_passenger_delta(
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::RefCell,
         mem,
         sync::{Arc, Weak},
     };
@@ -1369,6 +1370,44 @@ mod tests {
             },
         );
         assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn send_changes_broadcasts_equipment_before_attributes() {
+        test_support::init_test_registry();
+
+        let tracker = EntityTracker::new();
+        let entity_typed = PairingTestEntity::new(1, Vec::new());
+        let entity: SharedEntity = entity_typed.clone();
+        tracker.add(&entity, |_| Vec::new(), |_| None);
+
+        entity_typed.set_dirty_equipment(vec![EquipmentSlotItem {
+            slot: EquipmentSlot::Chest,
+            item_stack: ItemStack::new(&vanilla_items::ELYTRA),
+        }]);
+        entity_typed.set_dirty_attributes(vec![AttributeSnapshot {
+            attribute_id: 7,
+            base_value: 2.5,
+            modifiers: Vec::new(),
+        }]);
+
+        let updates = RefCell::new(Vec::new());
+        tracker.send_changes(
+            |_| Vec::new(),
+            |_| None,
+            EntityChangeSenders {
+                movement: |_, _| {},
+                self_movement: |_, _| {},
+                entity_data: |_, _| {},
+                attributes: |_, _| updates.borrow_mut().push("attributes"),
+                mob_effects: |_, _| {},
+                equipment: |_, _| updates.borrow_mut().push("equipment"),
+                passengers: |_, _| {},
+                entity_link: |_, _| {},
+            },
+        );
+
+        assert_eq!(*updates.borrow(), ["equipment", "attributes"]);
     }
 
     #[test]

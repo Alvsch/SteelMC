@@ -23,9 +23,6 @@ pub trait EntityEquipment: Send {
     /// Clears all equipment slots.
     fn clear(&mut self);
 
-    /// Drains equipment slots that changed since the last sync.
-    fn drain_dirty_items(&mut self) -> Vec<(EquipmentSlot, ItemStack)>;
-
     /// Returns non-empty equipment slots for initial spawn synchronization.
     fn non_empty_items(&self) -> Vec<(EquipmentSlot, ItemStack)> {
         EquipmentSlot::ALL
@@ -41,7 +38,6 @@ pub trait EntityEquipment: Send {
 /// Owned equipment storage used by non-player living entities.
 pub struct OwnedEntityEquipment {
     slots: [ItemStack; 8],
-    dirty_slots: [bool; 8],
 }
 
 impl Default for OwnedEntityEquipment {
@@ -65,12 +61,7 @@ impl OwnedEntityEquipment {
                 ItemStack::empty(),
                 ItemStack::empty(),
             ],
-            dirty_slots: [false; 8],
         }
-    }
-
-    const fn mark_dirty(&mut self, slot: EquipmentSlot) {
-        self.dirty_slots[slot.index()] = true;
     }
 }
 
@@ -80,45 +71,20 @@ impl EntityEquipment for OwnedEntityEquipment {
     }
 
     fn get_mut(&mut self, slot: EquipmentSlot) -> &mut ItemStack {
-        self.mark_dirty(slot);
         &mut self.slots[slot.index()]
     }
 
     fn set(&mut self, slot: EquipmentSlot, stack: ItemStack) -> ItemStack {
-        let old = mem::replace(&mut self.slots[slot.index()], stack);
-        if old != self.slots[slot.index()] {
-            self.mark_dirty(slot);
-        }
-        old
+        mem::replace(&mut self.slots[slot.index()], stack)
     }
 
     fn take(&mut self, slot: EquipmentSlot) -> ItemStack {
-        let old = mem::take(&mut self.slots[slot.index()]);
-        if !old.is_empty() {
-            self.mark_dirty(slot);
-        }
-        old
+        mem::take(&mut self.slots[slot.index()])
     }
 
     fn clear(&mut self) {
         for slot in EquipmentSlot::ALL {
-            if !self.slots[slot.index()].is_empty() {
-                self.slots[slot.index()] = ItemStack::empty();
-                self.mark_dirty(slot);
-            }
+            self.slots[slot.index()] = ItemStack::empty();
         }
-    }
-
-    fn drain_dirty_items(&mut self) -> Vec<(EquipmentSlot, ItemStack)> {
-        let mut dirty_items = Vec::new();
-        for slot in EquipmentSlot::ALL {
-            let index = slot.index();
-            if !self.dirty_slots[index] {
-                continue;
-            }
-            self.dirty_slots[index] = false;
-            dirty_items.push((slot, self.slots[index].clone()));
-        }
-        dirty_items
     }
 }

@@ -21,7 +21,6 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::{SoundEventHolder, SoundEventRef};
 use steel_registry::{REGISTRY, vanilla_attributes, vanilla_damage_types, vanilla_entities};
-use steel_utils::entity_events::EntityStatus;
 use steel_utils::types::{Difficulty, GameType, InteractionHand};
 use steel_utils::{BlockPos, Downcast as _, Identifier, WorldAabb};
 use text_components::TextComponent;
@@ -38,7 +37,6 @@ use crate::enchantment_helper::{self, EnchantmentDamageContext, EnchantmentPostA
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, LivingEntity, SharedEntity};
-use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::collision::{CollisionWorld, WorldCollisionProvider};
 use crate::physics::shapes;
 use crate::player::Player;
@@ -583,7 +581,6 @@ impl Player {
 
     fn piercing_attack(&self, item_stack: &ItemStack, piercing_weapon: &PiercingWeapon) {
         let world = self.get_world();
-        LivingEntity::refresh_equipment_attribute_modifiers(self, EquipmentSlot::MainHand);
         let base_damage = self
             .attributes()
             .lock()
@@ -689,7 +686,6 @@ impl Player {
             return false;
         }
 
-        LivingEntity::refresh_equipment_attribute_modifiers(self, EquipmentSlot::MainHand);
         let attacking_item = {
             let inventory = self.inventory.lock();
             let stack = inventory.get_item_in_hand(InteractionHand::MainHand);
@@ -1120,8 +1116,6 @@ impl Player {
     /// Vanilla: `ServerPlayer.updatePlayerAttributes()` — applies creative-mode
     /// range modifiers every tick.
     pub(super) fn update_player_attributes(&self) {
-        LivingEntity::refresh_all_equipment_attribute_modifiers(self);
-
         let is_creative = self.game_mode() == GameType::Creative;
         let mut attrs = self.attributes().lock();
 
@@ -1421,7 +1415,6 @@ impl Player {
 
                 let changed = self.inventory.lock().swap_hands();
                 if changed {
-                    self.broadcast_entity_event(EntityStatus::SwapHands);
                     self.broadcast_inventory_changes();
                 }
                 // TODO: Stop active item use once the using-item foundation exists.

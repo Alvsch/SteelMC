@@ -5,7 +5,7 @@
 //! embed this struct and expose it via `LivingEntity::living_base()`, just like
 //! `EntityBase` is used for core `Entity` fields.
 
-use std::{array, sync::Arc};
+use std::{array, mem, sync::Arc};
 
 use glam::DVec3;
 use rustc_hash::FxHashMap;
@@ -663,6 +663,8 @@ pub struct LivingEntityBase {
     active_mob_effects: SyncMutex<FxHashMap<MobEffectRef, ActiveMobEffect>>,
     dirty_mob_effects: SyncMutex<Vec<MobEffectSyncChange>>,
     equipment: Shared<dyn EntityEquipment>,
+    last_equipment_items: SyncMutex<[ItemStack; EquipmentSlot::ALL.len()]>,
+    pending_equipment_changes: SyncMutex<[Option<ItemStack>; EquipmentSlot::ALL.len()]>,
     equipment_attribute_modifiers:
         SyncMutex<[Vec<EquipmentAttributeModifierKey>; EquipmentSlot::ALL.len()]>,
 }
@@ -708,6 +710,8 @@ impl LivingEntityBase {
             active_mob_effects: SyncMutex::new(FxHashMap::default()),
             dirty_mob_effects: SyncMutex::new(Vec::new()),
             equipment,
+            last_equipment_items: SyncMutex::new(array::from_fn(|_| ItemStack::empty())),
+            pending_equipment_changes: SyncMutex::new(array::from_fn(|_| None)),
             equipment_attribute_modifiers: SyncMutex::new(array::from_fn(|_| Vec::new())),
         }
     }
@@ -734,6 +738,46 @@ impl LivingEntityBase {
     #[inline]
     pub const fn equipment(&self) -> &Shared<dyn EntityEquipment> {
         &self.equipment
+    }
+
+    /// Collects equipment changes against Vanilla's previous-tick snapshots.
+    pub fn collect_equipment_changes(&self) -> Vec<(EquipmentSlot, ItemStack, ItemStack)> {
+        let current_items: [ItemStack; EquipmentSlot::ALL.len()] = {
+            let equipment = self.equipment.lock();
+            array::from_fn(|index| equipment.get_ref(EquipmentSlot::ALL[index]).clone())
+        };
+        let mut last_items = self.last_equipment_items.lock();
+        let mut changes = Vec::new();
+
+        for slot in EquipmentSlot::ALL {
+            let index = slot.index();
+            if ItemStack::matches(&last_items[index], &current_items[index]) {
+                continue;
+            }
+            let previous = mem::replace(&mut last_items[index], current_items[index].clone());
+            changes.push((slot, previous, current_items[index].clone()));
+        }
+        changes
+    }
+
+    /// Coalesces detected equipment changes until entity tracking sends them.
+    pub fn queue_equipment_changes(
+        &self,
+        changes: impl IntoIterator<Item = (EquipmentSlot, ItemStack)>,
+    ) {
+        let mut pending = self.pending_equipment_changes.lock();
+        for (slot, item_stack) in changes {
+            pending[slot.index()] = Some(item_stack);
+        }
+    }
+
+    /// Drains equipment changes detected by the living tick.
+    pub fn drain_equipment_changes(&self) -> Vec<(EquipmentSlot, ItemStack)> {
+        let mut pending = self.pending_equipment_changes.lock();
+        EquipmentSlot::ALL
+            .into_iter()
+            .filter_map(|slot| pending[slot.index()].take().map(|item| (slot, item)))
+            .collect()
     }
 
     /// Returns vanilla living body/head rotation state.

@@ -105,8 +105,7 @@ use crate::entity::damage::DamageSource;
 use crate::entity::{
     DEATH_DURATION, Entity, EntityAnchor, EntityBase, EntityEventSource, EntityMovementEmission,
     EntitySyncedData, LivingEntity, LivingEntityBase, MobEffectSyncChange, MobEffectSyncPacket,
-    RemovalReason, SharedEntity, apply_entity_look_at, equipment_items_to_packet_items,
-    start_riding_entities,
+    RemovalReason, SharedEntity, apply_entity_look_at, start_riding_entities,
 };
 use crate::fluid::get_fluid_state;
 use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
@@ -636,7 +635,7 @@ impl Player {
         self.reset_vehicle_movement_for_tick();
 
         self.default_tick();
-        self.apply_pending_equipment_attribute_updates();
+        self.detect_equipment_updates();
         self.ai_step();
 
         // Vanilla snaps the player back to firstGood after ServerPlayer.doTick().
@@ -729,25 +728,6 @@ impl Player {
         }
 
         self.connection.tick();
-    }
-
-    fn refresh_equipment_attribute_modifiers_from_stack(
-        &self,
-        slot: EquipmentSlot,
-        item_stack: &ItemStack,
-    ) {
-        self.living_base
-            .refresh_equipment_attribute_modifiers(slot, item_stack);
-    }
-
-    fn apply_pending_equipment_attribute_updates(&self) {
-        let updates = self
-            .inventory
-            .lock()
-            .drain_pending_equipment_attribute_updates();
-        for (slot, item_stack) in updates {
-            self.refresh_equipment_attribute_modifiers_from_stack(slot, &item_stack);
-        }
     }
 
     /// Ticks the death animation timer.
@@ -2534,7 +2514,6 @@ impl Entity for Player {
     }
 
     fn update_data_before_sync(&self) {
-        self.apply_pending_equipment_attribute_updates();
         self.update_dirty_mob_effect_entity_data();
     }
 
@@ -2551,11 +2530,11 @@ impl Entity for Player {
     }
 
     fn pack_all_equipment(&self) -> Vec<EquipmentSlotItem> {
-        equipment_items_to_packet_items(self.inventory.lock().non_empty_items())
+        self.pack_living_equipment()
     }
 
     fn drain_dirty_equipment(&self) -> Vec<EquipmentSlotItem> {
-        equipment_items_to_packet_items(self.inventory.lock().drain_dirty_items())
+        self.drain_dirty_living_equipment()
     }
 
     fn max_up_step(&self) -> f32 {
@@ -4297,6 +4276,7 @@ mod tests {
             &helmet,
             "LivingEntityBase and Player::inventory must share one equipment backing",
         );
+        LivingEntity::detect_equipment_updates(target.as_ref());
         assert_eq!(
             Entity::drain_dirty_equipment(target.as_ref()),
             vec![EquipmentSlotItem {
@@ -4307,7 +4287,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_inventory_equipment_mutation_reconciles_before_sync() {
+    fn living_tick_detects_raw_inventory_equipment_mutation() {
         init_test_registry();
         let player = test_player(Arc::clone(test_world()));
         let (base_armor, base_toughness) = {
@@ -4323,7 +4303,7 @@ mod tests {
             inventory.items_mut()[39] = ItemStack::new(&vanilla_items::DIAMOND_HELMET);
         }
 
-        Entity::update_data_before_sync(player.as_ref());
+        LivingEntity::detect_equipment_updates(player.as_ref());
 
         {
             let attributes = player.attributes().lock();
@@ -4340,6 +4320,82 @@ mod tests {
                 (base_toughness + 2.0).to_bits()
             );
         }
+        assert_eq!(
+            Entity::drain_dirty_equipment(player.as_ref()),
+            vec![EquipmentSlotItem {
+                slot: EquipmentSlot::Head,
+                item_stack: ItemStack::new(&vanilla_items::DIAMOND_HELMET),
+            }]
+        );
+        LivingEntity::detect_equipment_updates(player.as_ref());
+        assert!(Entity::drain_dirty_equipment(player.as_ref()).is_empty());
+    }
+
+    #[test]
+    fn equipment_detection_tracks_selected_main_hand() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        {
+            let mut inventory = player.inventory.lock();
+            inventory.set_item(0, ItemStack::new(&vanilla_items::STICK));
+            inventory.set_item(1, ItemStack::new(&vanilla_items::OAK_LOG));
+        }
+
+        LivingEntity::detect_equipment_updates(player.as_ref());
+        assert_eq!(
+            Entity::drain_dirty_equipment(player.as_ref()),
+            vec![EquipmentSlotItem {
+                slot: EquipmentSlot::MainHand,
+                item_stack: ItemStack::new(&vanilla_items::STICK),
+            }]
+        );
+
+        player.inventory.lock().set_selected_slot(1);
+        LivingEntity::detect_equipment_updates(player.as_ref());
+        assert_eq!(
+            Entity::drain_dirty_equipment(player.as_ref()),
+            vec![EquipmentSlotItem {
+                slot: EquipmentSlot::MainHand,
+                item_stack: ItemStack::new(&vanilla_items::OAK_LOG),
+            }]
+        );
+    }
+
+    #[test]
+    fn equipment_detection_suppresses_exact_hand_swap_packet() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        {
+            let mut inventory = player.inventory.lock();
+            inventory.set_selected_item(ItemStack::new(&vanilla_items::STICK));
+            inventory.set_offhand_item(ItemStack::new(&vanilla_items::SHIELD));
+        }
+        LivingEntity::detect_equipment_updates(player.as_ref());
+        let initial = Entity::drain_dirty_equipment(player.as_ref());
+        assert_eq!(initial.len(), 2);
+
+        assert!(player.inventory.lock().swap_hands());
+        LivingEntity::detect_equipment_updates(player.as_ref());
+
+        assert!(Entity::drain_dirty_equipment(player.as_ref()).is_empty());
+    }
+
+    #[test]
+    fn equipment_detection_coalesces_before_tracker_drain() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        player.inventory.lock().set(
+            EquipmentSlot::Head,
+            ItemStack::new(&vanilla_items::IRON_HELMET),
+        );
+        LivingEntity::detect_equipment_updates(player.as_ref());
+
+        player.inventory.lock().set(
+            EquipmentSlot::Head,
+            ItemStack::new(&vanilla_items::DIAMOND_HELMET),
+        );
+        LivingEntity::detect_equipment_updates(player.as_ref());
+
         assert_eq!(
             Entity::drain_dirty_equipment(player.as_ref()),
             vec![EquipmentSlotItem {
