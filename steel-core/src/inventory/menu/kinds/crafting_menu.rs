@@ -93,3 +93,6 @@ impl MenuKind for CraftingKind {
         self.handler.update_result(guard);
     }
 }
+
+#[cfg(test)]
+mod tests;

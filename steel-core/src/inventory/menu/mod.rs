@@ -10,8 +10,8 @@ mod layout;
 use crate::inventory::container::Container as _;
 pub use behavior::MenuBehavior;
 pub use builder::{
-    ContainerSlots, DataSlot, FillDirection, IntoSections, MenuBuilder, PlayerInventorySections,
-    Section, SectionSource,
+    ContainerSlots, DataSlot, FakeResultRemainderPolicy, FillDirection, IntoSections, MenuBuilder,
+    PlayerInventorySections, Section, SectionSource,
 };
 pub use grid::{ColSpan, GridPlacer, Rect, Region, RowSpan, SpanBounds};
 pub use kind::{MenuKind, MenuKindType};

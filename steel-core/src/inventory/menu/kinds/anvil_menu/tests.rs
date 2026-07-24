@@ -3,10 +3,11 @@ use std::sync::Arc;
 use glam::DVec3;
 use steel_registry::{
     data_components::vanilla_components::CUSTOM_NAME, item_stack::ItemStack,
-    test_support::init_test_registry, vanilla_blocks, vanilla_enchantments, vanilla_items,
+    test_support::init_test_registry, vanilla_blocks, vanilla_enchantments, vanilla_entities,
+    vanilla_items,
 };
 use steel_utils::{
-    BlockPos, ChunkPos,
+    BlockPos, ChunkPos, WorldAabb,
     types::{GameType, UpdateFlags},
 };
 use uuid::Uuid;
@@ -191,4 +192,80 @@ fn rename_uses_java_blank_rules() {
         result.get(CUSTOM_NAME).map(ToString::to_string).as_deref(),
         Some("\u{0085}")
     );
+}
+
+#[test]
+fn full_inputs_do_not_fallback_to_the_hotbar() {
+    let (_world, player, _pos, mut menu) = test_anvil("anvil_menu_full_input_quick_move");
+    let input_container = match menu.kind() {
+        MenuKindType::Anvil(kind) => Arc::clone(&kind.input_container),
+        _ => panic!("anvil builder should create an anvil menu"),
+    };
+    {
+        let mut input = input_container.lock();
+        input.set_item(0, ItemStack::with_count(&vanilla_items::STONE, 64));
+        input.set_item(1, ItemStack::with_count(&vanilla_items::STONE, 64));
+    }
+    player
+        .inventory
+        .lock()
+        .set_item(9, ItemStack::with_count(&vanilla_items::DIRT, 5));
+
+    menu.clicked(Click::QuickMove { slot: 3 }, &player);
+
+    let inventory = player.inventory.lock();
+    assert_eq!(inventory.get_item(9).count(), 5);
+    assert!((0..9).all(|slot| inventory.get_item(slot).is_empty()));
+}
+
+#[test]
+fn client_level_cost_uses_protocol_short_wrapping() {
+    for (cost, expected) in [
+        (32_767, 32_767),
+        (32_768, -32_768),
+        (32_769, -32_767),
+        (65_536, 0),
+    ] {
+        assert_eq!(AnvilKind::client_cost(cost), expected);
+    }
+}
+
+#[test]
+fn partial_result_overflow_is_discarded() {
+    let (world, player, _pos, mut menu) = test_anvil("anvil_menu_partial_result_overflow");
+    player.restore_game_modes(GameType::Creative, None);
+    let (input_container, result_container) = match menu.kind() {
+        MenuKindType::Anvil(kind) => (
+            Arc::clone(&kind.input_container),
+            Arc::clone(&kind.result_container),
+        ),
+        _ => panic!("anvil builder should create an anvil menu"),
+    };
+    input_container
+        .lock()
+        .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 64));
+    menu.set_item_name("Renamed", &player);
+
+    let result = result_container.lock().get_item(0).clone();
+    assert_eq!(result.count(), 64);
+    let mut matching = result.clone();
+    matching.set_count(63);
+    {
+        let mut inventory = player.inventory.lock();
+        for slot in 0..36 {
+            inventory.set_item(slot, ItemStack::with_count(&vanilla_items::DIRT, 64));
+        }
+        inventory.set_item(8, matching);
+    }
+
+    menu.clicked(Click::QuickMove { slot: 2 }, &player);
+
+    assert!(input_container.lock().get_item(0).is_empty());
+    assert!(result_container.lock().get_item(0).is_empty());
+    assert_eq!(player.inventory.lock().get_item(8).count(), 64);
+    let dropped = world.get_entities_in_aabb_matching(
+        &WorldAabb::new(-2.0, 62.0, -2.0, 2.0, 68.0, 2.0),
+        |entity| entity.entity_type() == &vanilla_entities::ITEM,
+    );
+    assert!(dropped.is_empty());
 }

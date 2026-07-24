@@ -67,14 +67,15 @@ pub fn anvil(
 
     let level_cost_data_slot = builder.data_slot(0);
 
-    builder.route(result, [player.all()], FillDirection::Backward);
+    builder.route_with_remainder_policy(
+        result,
+        [player.all()],
+        FillDirection::Backward,
+        FakeResultRemainderPolicy::Discard,
+    );
     builder.route(input, [player.all()], FillDirection::Forward);
     builder.route(player.hotbar(), [input], FillDirection::Forward);
-    builder.route(
-        player.main(),
-        [input, player.hotbar()],
-        FillDirection::Forward,
-    );
+    builder.route(player.main(), [input], FillDirection::Forward);
     builder.drain([input]);
 
     builder.build(AnvilKind {
@@ -109,12 +110,16 @@ pub struct AnvilKind {
 }
 
 impl AnvilKind {
-    /// Sets the level cost. Displayed value is clamped to `i16`, the handler
-    /// reads the full cost.
+    /// Sets the level cost. The client receives the packet's low 16 bits while
+    /// the result handler retains the full server-side cost.
     fn set_cost(&mut self, behavior: &mut MenuBehavior, cost: i32) {
-        self.level_cost
-            .set(behavior, cost.clamp(0, i32::from(i16::MAX)) as i16);
+        self.level_cost.set(behavior, Self::client_cost(cost));
         self.level_cost_value.store(cost, Ordering::Relaxed);
+    }
+
+    const fn client_cost(cost: i32) -> i16 {
+        let [low, high, _, _] = cost.to_le_bytes();
+        i16::from_le_bytes([low, high])
     }
 
     /// Builds the anvil result from combining and renaming the two inputs.

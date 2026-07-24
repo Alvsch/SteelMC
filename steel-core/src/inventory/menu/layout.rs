@@ -5,7 +5,10 @@ use steel_registry::item_stack::ItemStack;
 use crate::{
     inventory::{
         lock::{ContainerLockGuard, ContainerRef},
-        menu::{behavior::MenuBehavior, builder::Route},
+        menu::{
+            behavior::MenuBehavior,
+            builder::{FakeResultRemainderPolicy, Route},
+        },
         slots::Slot,
     },
     player::Player,
@@ -101,8 +104,12 @@ impl MenuLayout {
         if let Some(leftover) = slot.on_take(guard, &remaining, player) {
             player.add_item_or_drop_with_guard(guard, leftover);
         }
-        // Output that didn't fit is dropped.
-        if slot.is_fake() && !remaining.is_empty() {
+        // Result handlers may replace the fake source in `on_take`; apply the
+        // route's policy to any unresolved output from the old result.
+        if slot.is_fake()
+            && !remaining.is_empty()
+            && route.fake_result_remainder == FakeResultRemainderPolicy::Drop
+        {
             let _ = guard.run_unlocked(|| player.drop_item(remaining.clone(), false, true));
         }
 
