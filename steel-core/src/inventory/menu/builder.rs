@@ -610,6 +610,13 @@ impl MenuBuilder {
         for from in from.into_sections() {
             let from = self.owned(from);
             assert!(
+                !self
+                    .routes
+                    .iter()
+                    .any(|route| route.from.start < from.end && from.start < route.from.end),
+                "shift-click route source {from:?} overlaps an existing route source",
+            );
+            assert!(
                 !targets
                     .iter()
                     .any(|t| t.start < from.end && from.start < t.end),
@@ -713,12 +720,25 @@ impl MenuBuilder {
         self.slots.push(slot);
     }
 
-    /// Records that a section covers the container-local `range` of `container`
+    /// Records that a section covers the container-local `range` of `container`.
     ///
     /// # Panics
-    /// Panics if the range was already covered by another `Range`
+    /// Panics if the range exceeds the container or was already covered by another range.
     pub(crate) fn claim(&mut self, container: &ContainerRef, range: Range<usize>) {
         let id = container.container_id();
+        let size = {
+            let guard = ContainerLockGuard::lock_all(slice::from_ref(container));
+            let Some(container) = guard.get(id) else {
+                panic!("container was not locked while validating a menu section");
+            };
+            container.get_container_size()
+        };
+        assert!(
+            range.end <= size,
+            "section takes container slots {}..{}, but the container only has {size} slots",
+            range.start,
+            range.end,
+        );
         for (other_id, other) in &self.claimed {
             assert!(
                 *other_id != id || range.start >= other.end || other.start >= range.end,
@@ -755,9 +775,13 @@ impl MenuBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Weak;
+
     use steel_registry::vanilla_menu_types;
+    use steel_utils::locks::IntoShared;
 
     use super::*;
+    use crate::inventory::container::SimpleContainer;
     use crate::inventory::menu::kinds::BasicKind;
 
     #[test]
@@ -767,5 +791,26 @@ mod tests {
     fn build_rejects_a_slot_count_that_disagrees_with_the_menu_type() {
         let _ = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X6, 1)
             .build(MenuKindType::Basic(BasicKind {}));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "section takes container slots 0..2, but the container only has 1 slots"
+    )]
+    fn direct_section_rejects_a_range_past_container_capacity() {
+        let mut builder = MenuBuilder::new(None, 0);
+        builder.section(SimpleContainer::new(1).into_shared(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "shift-click route source 0..27 overlaps an existing route source")]
+    fn route_rejects_overlapping_source_sections() {
+        let inventory = PlayerInventory::new(Weak::new()).into_shared();
+        let mut builder = MenuBuilder::new(None, 0);
+        let player = builder.player_inventory(&inventory);
+        let target = builder.section(SimpleContainer::new(1).into_shared(), 1);
+
+        builder.route(player.all(), [target], FillDirection::Forward);
+        builder.route(player.main(), [target], FillDirection::Forward);
     }
 }

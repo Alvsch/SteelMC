@@ -3119,6 +3119,24 @@ mod tests {
     }
 
     #[test]
+    fn programmatic_out_of_range_menu_click_is_ignored() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let mut menu = empty_test_menu(&player, 1, MenuKindType::Basic(BasicKind {}));
+        let invalid_slot = menu.behavior().slot_count();
+
+        menu.clicked(
+            crate::inventory::click::Click::Pickup {
+                slot: invalid_slot,
+                button: crate::inventory::click::MouseButton::Left,
+            },
+            &player,
+        );
+
+        assert!(menu.behavior().carried().is_empty());
+    }
+
+    #[test]
     fn menu_open_hook_can_close_the_new_menu() {
         init_test_registry();
         let player = test_player(Arc::clone(test_world()));

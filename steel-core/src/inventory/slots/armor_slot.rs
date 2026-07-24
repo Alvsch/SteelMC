@@ -1,5 +1,5 @@
 use steel_registry::{
-    equipment::EquipmentSlot, item_stack::ItemStack, vanilla_enchantments::BINDING_CURSE,
+    enchantment_effect::EnchantmentEffectComponent, equipment::EquipmentSlot, item_stack::ItemStack,
 };
 use steel_utils::locks::Shared;
 
@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// A [`NormalSlot`] that only accepts items equippable in its equipment slot,
-/// caps at one item, and blocks pickup of curse-of-binding gear.
+/// caps at one item, and respects the prevent-armor-change enchantment effect.
 pub struct ArmorSlot {
     base: NormalSlot,
     slot: EquipmentSlot,
@@ -72,7 +72,7 @@ impl Slot for ArmorSlot {
         let item = self.get_item(guard);
         if !item.is_empty()
             && !player.has_infinite_materials()
-            && item.get_enchantment_level(&BINDING_CURSE.key) > 0
+            && item.has_enchantment_effect(EnchantmentEffectComponent::PreventArmorChange)
         {
             return false;
         }

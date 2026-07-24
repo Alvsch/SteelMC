@@ -83,6 +83,16 @@ impl OpenMenuState {
 /// Slot 40: Offhand
 /// Slot 41: Body armor (for animals, not used for players)
 /// Slot 42: Saddle (for animals, not used for players)
+const CONTAINER_EQUIPMENT_SLOTS: [EquipmentSlot; 7] = [
+    EquipmentSlot::Feet,
+    EquipmentSlot::Legs,
+    EquipmentSlot::Chest,
+    EquipmentSlot::Head,
+    EquipmentSlot::OffHand,
+    EquipmentSlot::Body,
+    EquipmentSlot::Saddle,
+];
+
 const fn slot_to_equipment(slot: usize) -> Option<EquipmentSlot> {
     match slot {
         36 => Some(EquipmentSlot::Feet),
@@ -1573,8 +1583,7 @@ impl Container for PlayerInventory {
     }
 
     fn get_container_size(&self) -> usize {
-        // 36 main slots + 7 equipment slots (feet, legs, chest, head, offhand, body, saddle)
-        Self::INVENTORY_SIZE + 7
+        Self::INVENTORY_SIZE + CONTAINER_EQUIPMENT_SLOTS.len()
     }
 
     /// Adds an item to the player's main inventory (slots 0-35 only).
@@ -1690,7 +1699,7 @@ impl Container for PlayerInventory {
             }
         }
 
-        for slot in EquipmentSlot::ALL {
+        for slot in CONTAINER_EQUIPMENT_SLOTS {
             if !self.equipment.get_ref(slot).is_empty() {
                 return false;
             }
@@ -1713,15 +1722,13 @@ impl Container for PlayerInventory {
             count += item.count();
             *item = ItemStack::empty();
         }
-        for slot in EquipmentSlot::ALL {
+        for slot in CONTAINER_EQUIPMENT_SLOTS {
             count += self.equipment.get_ref(slot).count();
         }
         self.equipment.clear();
         self.refresh_player_equipment_attribute_modifiers(EquipmentSlot::MainHand);
-        for slot in EquipmentSlot::ALL {
-            if slot != EquipmentSlot::MainHand {
-                self.refresh_player_equipment_attribute_modifiers(slot);
-            }
+        for slot in CONTAINER_EQUIPMENT_SLOTS {
+            self.refresh_player_equipment_attribute_modifiers(slot);
         }
         if count > 0 {
             self.set_changed();
@@ -1744,7 +1751,7 @@ impl Container for PlayerInventory {
                 self.items[slot] = ItemStack::empty();
             }
         }
-        for slot in EquipmentSlot::ALL {
+        for slot in CONTAINER_EQUIPMENT_SLOTS {
             let item = self.equipment.get_mut(slot);
             if predicate(item) {
                 count += item.count();
@@ -1755,7 +1762,7 @@ impl Container for PlayerInventory {
         if main_hand_changed {
             self.refresh_player_equipment_attribute_modifiers(EquipmentSlot::MainHand);
         }
-        for slot in EquipmentSlot::ALL {
+        for slot in CONTAINER_EQUIPMENT_SLOTS {
             if equipment_changed[slot.index()] {
                 self.refresh_player_equipment_attribute_modifiers(slot);
             }
@@ -1767,11 +1774,20 @@ impl Container for PlayerInventory {
     }
 
     fn iter(&self) -> Box<dyn Iterator<Item = &ItemStack> + '_> {
-        Box::new(self.items.iter().chain(self.equipment.iter()))
+        let equipment = CONTAINER_EQUIPMENT_SLOTS.map(|slot| self.equipment.get_ref(slot));
+        Box::new(self.items.iter().chain(equipment))
     }
 
     fn iter_mut(&mut self) -> Box<dyn Iterator<Item = &mut ItemStack> + '_> {
-        Box::new(self.items.iter_mut().chain(self.equipment.iter_mut()))
+        let Self {
+            items, equipment, ..
+        } = self;
+        let [_, offhand, feet, legs, chest, head, body, saddle] = equipment.slots_mut();
+        Box::new(
+            items
+                .iter_mut()
+                .chain([feet, legs, chest, head, offhand, body, saddle]),
+        )
     }
 }
 
@@ -2038,6 +2054,63 @@ mod tests {
 
         assert_eq!(inventory.clear_content(), 4);
         assert!(inventory.is_empty());
+    }
+
+    #[test]
+    fn container_traversal_matches_visible_slot_indices() {
+        init_test_registry();
+
+        let mut inventory = PlayerInventory::new(Weak::new());
+        inventory.equipment.set(
+            EquipmentSlot::MainHand,
+            ItemStack::new(&vanilla_items::STICK),
+        );
+        let size = inventory.get_container_size();
+        for slot in 0..size {
+            inventory.set_item(
+                slot,
+                ItemStack::with_count(&vanilla_items::OAK_LOG, slot as i32 + 1),
+            );
+        }
+
+        let iterated_counts: Vec<_> = inventory.iter().map(ItemStack::count).collect();
+        let indexed_counts: Vec<_> = (0..size)
+            .map(|slot| inventory.get_item(slot).count())
+            .collect();
+        assert_eq!(iterated_counts, indexed_counts);
+        assert_eq!(iterated_counts.len(), size);
+
+        let mut mutable_count = 0;
+        for (slot, item) in inventory.iter_mut().enumerate() {
+            mutable_count += 1;
+            item.set_count((size - slot) as i32);
+        }
+        assert_eq!(mutable_count, size);
+        for slot in 0..size {
+            assert_eq!(inventory.get_item(slot).count(), (size - slot) as i32);
+        }
+        assert!(
+            inventory
+                .equipment
+                .get_ref(EquipmentSlot::MainHand)
+                .is(&vanilla_items::STICK)
+        );
+
+        let mut predicate_visits = 0;
+        inventory.clear_content_matching(&mut |_| {
+            predicate_visits += 1;
+            false
+        });
+        assert_eq!(predicate_visits, size);
+
+        let mut shadow_only = PlayerInventory::new(Weak::new());
+        shadow_only.equipment.set(
+            EquipmentSlot::MainHand,
+            ItemStack::new(&vanilla_items::STICK),
+        );
+        assert!(shadow_only.is_empty());
+        assert_eq!(shadow_only.clear_content(), 0);
+        assert!(shadow_only.equipment.is_empty());
     }
 
     #[test]

@@ -226,11 +226,19 @@ impl Menu {
         }
     }
 
-    /// Handles a click action in this menu. Clicks are validated at the packet
-    /// boundary via [`Click::parse`], so every slot index here is in range.
+    /// Handles a click action in this menu. Packet clicks are validated via
+    /// [`Click::parse`]; invalid programmatically constructed clicks are ignored.
     ///
     /// TODO: Add `tryItemClickBehaviorOverride` for bundle item support.
     pub fn clicked(&mut self, click: Click, player: &Player) {
+        if !click.is_valid_for(self.behavior().slot_count()) {
+            log::debug!(
+                "Ignoring programmatic container click that violates parsed-click invariants: \
+                 {click:?}"
+            );
+            return;
+        }
+
         let has_infinite_materials = player.game_mode() == GameType::Creative;
         if let Click::QuickCraft(action) = click {
             let outcome = {

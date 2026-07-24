@@ -263,6 +263,15 @@ impl<T: Slot + ?Sized> Slot for Arc<T> {
         (**self).safe_take(guard, amount, max_amount, player)
     }
 
+    fn safe_insert(
+        &self,
+        guard: &mut ContainerLockGuard,
+        input: ItemStack,
+        amount: i32,
+    ) -> ItemStack {
+        (**self).safe_insert(guard, input, amount)
+    }
+
     fn set_changed(&self, guard: &mut ContainerLockGuard) {
         (**self).set_changed(guard);
     }
@@ -328,4 +337,79 @@ pub fn armor_slots(inventory: &Shared<PlayerInventory>) -> [SlotType; 4] {
         (36, EquipmentSlot::Feet),
     ]
     .map(|(index, slot)| SlotType::Armor(ArmorSlot::new(inventory.clone(), index, slot)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use steel_registry::{test_support::init_test_registry, vanilla_items};
+    use steel_utils::locks::IntoShared;
+
+    use super::*;
+    use crate::inventory::{container::SimpleContainer, lock::ContainerRef};
+
+    struct SafeInsertOverrideSlot {
+        base: NormalSlot,
+        called: Arc<AtomicBool>,
+    }
+
+    impl Slot for SafeInsertOverrideSlot {
+        fn get_item<'a>(&self, guard: &'a ContainerLockGuard) -> &'a ItemStack {
+            self.base.get_item(guard)
+        }
+
+        fn get_item_mut<'a>(&self, guard: &'a mut ContainerLockGuard) -> &'a mut ItemStack {
+            self.base.get_item_mut(guard)
+        }
+
+        fn set_item(&self, guard: &mut ContainerLockGuard, stack: ItemStack) {
+            self.base.set_item(guard, stack);
+        }
+
+        fn safe_insert(
+            &self,
+            _guard: &mut ContainerLockGuard,
+            input: ItemStack,
+            _amount: i32,
+        ) -> ItemStack {
+            self.called.store(true, Ordering::Relaxed);
+            input
+        }
+
+        fn get_max_stack_size(&self, guard: &ContainerLockGuard) -> i32 {
+            self.base.get_max_stack_size(guard)
+        }
+
+        fn set_changed(&self, guard: &mut ContainerLockGuard) {
+            self.base.set_changed(guard);
+        }
+
+        fn get_container_slot(&self) -> usize {
+            self.base.get_container_slot()
+        }
+
+        fn container_key(&self) -> Option<(ContainerId, usize)> {
+            self.base.container_key()
+        }
+    }
+
+    #[test]
+    fn custom_slot_safe_insert_override_survives_arc_erasure() {
+        init_test_registry();
+        let container = SimpleContainer::new(1).into_shared();
+        let container_ref = ContainerRef::from(Arc::clone(&container));
+        let called = Arc::new(AtomicBool::new(false));
+        let slot = SlotType::Custom(Arc::new(SafeInsertOverrideSlot {
+            base: NormalSlot::new(container_ref.clone(), 0),
+            called: Arc::clone(&called),
+        }));
+        let mut guard = ContainerLockGuard::lock_all(&[container_ref]);
+
+        let remaining = slot.safe_insert(&mut guard, ItemStack::new(&vanilla_items::STONE), 1);
+
+        assert!(called.load(Ordering::Relaxed));
+        assert!(remaining.is(&vanilla_items::STONE));
+        assert!(slot.get_item(&guard).is_empty());
+    }
 }

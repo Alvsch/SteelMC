@@ -92,6 +92,29 @@ impl Click {
             Click::DropCarried { .. } | Click::QuickCraft(_) => None,
         }
     }
+
+    /// Returns whether every index encoded in this click satisfies the
+    /// invariants normally established by [`Click::parse`].
+    #[must_use]
+    pub const fn is_valid_for(&self, slot_count: usize) -> bool {
+        match self {
+            Click::Pickup { slot, .. }
+            | Click::QuickMove { slot }
+            | Click::Clone { slot }
+            | Click::Throw { slot, .. }
+            | Click::PickupAll { slot, .. }
+            | Click::QuickCraft(QuickCraft::AddSlot { slot, .. }) => *slot < slot_count,
+            Click::Swap { slot, with } => {
+                *slot < slot_count
+                    && match with {
+                        SwapTarget::Hotbar(index) => *index < 9,
+                        SwapTarget::Offhand => true,
+                    }
+            }
+            Click::DropCarried { .. }
+            | Click::QuickCraft(QuickCraft::Start { .. } | QuickCraft::End { .. }) => true,
+        }
+    }
 }
 
 /// A mouse button, decoded from the raw `button` field.
@@ -409,6 +432,45 @@ mod tests {
         assert_eq!(
             Click::parse(100, (1 << 2) | 1, ClickType::QuickCraft, SLOTS),
             None
+        );
+    }
+
+    #[test]
+    fn programmatic_click_validation_covers_every_public_index() {
+        assert!(
+            !Click::Pickup {
+                slot: SLOTS,
+                button: MouseButton::Left,
+            }
+            .is_valid_for(SLOTS)
+        );
+        assert!(
+            !Click::QuickCraft(QuickCraft::AddSlot {
+                slot: SLOTS,
+                kind: DragKind::Left,
+            })
+            .is_valid_for(SLOTS)
+        );
+        assert!(
+            !Click::Swap {
+                slot: 0,
+                with: SwapTarget::Hotbar(9),
+            }
+            .is_valid_for(SLOTS)
+        );
+
+        assert!(
+            Click::DropCarried {
+                button: MouseButton::Right,
+            }
+            .is_valid_for(SLOTS)
+        );
+        assert!(
+            Click::Swap {
+                slot: SLOTS - 1,
+                with: SwapTarget::Offhand,
+            }
+            .is_valid_for(SLOTS)
         );
     }
 }
