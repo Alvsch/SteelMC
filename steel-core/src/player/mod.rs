@@ -2828,7 +2828,7 @@ impl TextResolutor for Player {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Weak};
 
     use glam::DVec3;
@@ -2842,18 +2842,21 @@ mod tests {
     use steel_registry::data_components::{AdventureModePredicate, BlockPredicate};
     use steel_registry::{
         RegistryHolderSet, item_stack::ItemStack, test_support::init_test_registry,
-        vanilla_attributes, vanilla_blocks, vanilla_damage_types, vanilla_game_rules,
-        vanilla_items, vanilla_menu_types,
+        vanilla_attributes, vanilla_blocks, vanilla_damage_types, vanilla_entities,
+        vanilla_game_rules, vanilla_items, vanilla_menu_types,
     };
     use steel_utils::locks::IntoShared as _;
     use steel_utils::types::{Difficulty, GameType, UpdateFlags};
-    use steel_utils::{BlockPos, ChunkPos};
+    use steel_utils::{BlockPos, ChunkPos, Downcast as _, WorldAabb};
     use text_components::TextComponent;
     use uuid::Uuid;
 
     use crate::behavior::init_behaviors;
     use crate::config::RuntimeConfig;
-    use crate::entity::{Entity, EntitySyncedData, LivingEntity, damage::DamageSource};
+    use crate::entity::{
+        Entity, EntitySyncedData, LivingEntity, RemovalReason, damage::DamageSource,
+        entities::ItemEntity,
+    };
     use crate::inventory::{
         container::{Container as _, SimpleContainer},
         equipment::EquipmentSlot,
@@ -2874,7 +2877,10 @@ mod tests {
         first_point_level_up_sound, nullable_game_mode_id, player_data::PersistentPlayerData,
     };
 
-    struct TestConnection;
+    #[derive(Default)]
+    struct TestConnection {
+        closed: AtomicBool,
+    }
 
     impl NetworkConnection for TestConnection {
         fn compression(&self) -> Option<CompressionInfo> {
@@ -2885,7 +2891,9 @@ mod tests {
 
         fn send_encoded_bundle(&self, _packets: Vec<EncodedPacket>) {}
 
-        fn disconnect_with_reason(&self, _reason: TextComponent) {}
+        fn disconnect_with_reason(&self, _reason: TextComponent) {
+            self.closed.store(true, Ordering::Relaxed);
+        }
 
         fn tick(&self) {}
 
@@ -2893,10 +2901,12 @@ mod tests {
             0
         }
 
-        fn close(&self) {}
+        fn close(&self) {
+            self.closed.store(true, Ordering::Relaxed);
+        }
 
         fn closed(&self) -> bool {
-            false
+            self.closed.load(Ordering::Relaxed)
         }
     }
 
@@ -2926,7 +2936,7 @@ mod tests {
     }
 
     fn test_player(world: Arc<World>) -> Arc<Player> {
-        let connection = Arc::new(PlayerConnection::Other(Box::new(TestConnection)));
+        let connection = Arc::new(PlayerConnection::Other(Box::new(TestConnection::default())));
         let config = test_runtime_config();
         let player = Arc::new_cyclic(|weak_player| {
             Player::new(
@@ -3090,6 +3100,66 @@ mod tests {
         assert_eq!(state.groups, ["moderator"]);
         assert!(!state.overrides.allows_key(&permission_key("steel.fly")));
         assert!(state.effective.allows_key(&permission_key("steel.build")));
+    }
+
+    #[test]
+    fn disconnected_menu_close_drops_transient_items() {
+        init_test_registry();
+        let world = fresh_test_world("disconnected_menu_close");
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        let player = test_player(Arc::clone(&world));
+        let transient = SimpleContainer::new(9).into_shared();
+        transient
+            .lock()
+            .set_item(0, ItemStack::new(&vanilla_items::STONE));
+
+        let menu_container = Arc::clone(&transient);
+        let inventory = Arc::clone(&player.inventory);
+        player.open_menu("Transient", move |container_id, _world| {
+            let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+            let transient_slots = builder.section(menu_container, 9);
+            builder.player_inventory(&inventory);
+            builder.drain([transient_slots]);
+            builder.build(MenuKindType::Basic(BasicKind {}))
+        });
+
+        player.close_connection();
+        player.do_close_container();
+
+        assert!(transient.lock().get_item(0).is_empty());
+        assert!(
+            player
+                .inventory
+                .lock()
+                .items()
+                .iter()
+                .all(|item| !item.is(&vanilla_items::STONE))
+        );
+
+        let dropped = world.get_entities_in_aabb_matching(
+            &WorldAabb::new(-2.0, -1.0, -2.0, 2.0, 3.0, 2.0),
+            |entity| entity.entity_type() == &vanilla_entities::ITEM,
+        );
+        assert_eq!(dropped.len(), 1);
+        let Some(item) = dropped[0].as_ref().downcast_ref::<ItemEntity>() else {
+            panic!("dropped entity should retain its concrete item type");
+        };
+        assert!(item.get_item().is(&vanilla_items::STONE));
+    }
+
+    #[test]
+    fn menu_item_return_policy_preserves_world_changes_only() {
+        init_test_registry();
+        let connected = test_player(Arc::clone(test_world()));
+        assert!(connected.returns_menu_items_to_inventory());
+
+        let changing_world = test_player(Arc::clone(test_world()));
+        changing_world.set_removed(RemovalReason::ChangedWorld);
+        assert!(changing_world.returns_menu_items_to_inventory());
+
+        let killed = test_player(Arc::clone(test_world()));
+        killed.set_removed(RemovalReason::Killed);
+        assert!(!killed.returns_menu_items_to_inventory());
     }
 
     #[test]

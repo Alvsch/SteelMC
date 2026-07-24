@@ -22,7 +22,7 @@ use steel_utils::{DowncastType, DowncastTypeKey};
 use text_components::TextComponent;
 
 use crate::{
-    entity::{Entity, entities::ItemEntity},
+    entity::{Entity, RemovalReason, entities::ItemEntity},
     inventory::{
         click::Click,
         container::{Container, CraftingContainer, clear_or_count_matching_stack},
@@ -31,7 +31,7 @@ use crate::{
         menu::{Menu, MenuKindType, kinds::INVENTORY_MENU_CONTAINER_ID},
         slots::{CraftingHandler, Slot},
     },
-    player::Player,
+    player::{Player, connection::NetworkConnection as _},
     world::World,
 };
 
@@ -1468,9 +1468,15 @@ impl Player {
     /// Returns whether items from a closing menu (crafting grid, anvil inputs,
     /// cursor) should be placed back into the inventory instead of dropped into
     /// the world.
+    ///
+    /// Matches vanilla's `AbstractContainerMenu.dropOrPlaceInInventory`: a
+    /// disconnected player or one removed for any reason except a world change
+    /// drops the items.
     #[must_use]
     pub fn returns_menu_items_to_inventory(&self) -> bool {
-        self.is_alive()
+        let removed_outside_world_change =
+            self.is_removed() && self.removal_reason() != Some(RemovalReason::ChangedWorld);
+        !removed_outside_world_change && !self.connection.closed()
     }
 
     /// Tries to add an item to the player's inventory, dropping it if it doesn't fit.
