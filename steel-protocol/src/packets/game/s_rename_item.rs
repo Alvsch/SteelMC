@@ -7,7 +7,7 @@ use steel_utils::serial::{ReadFrom, prefixed_read::read_utf};
 
 const MAX_PACKET_NAME_LENGTH: usize = 32_767;
 
-/// Sent by the client when the player changes their selected hotbar slot.
+/// Sent by the client when the player changes an anvil's item name.
 #[derive(ServerPacket, Clone, Debug)]
 pub struct SRenameItem {
     /// The new name

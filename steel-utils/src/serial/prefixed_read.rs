@@ -37,9 +37,33 @@ pub fn read_utf(data: &mut Cursor<&[u8]>, max_utf16_units: usize) -> Result<Stri
         ));
     }
 
-    let mut bytes = vec![0; encoded_len];
-    data.read_exact(&mut bytes)?;
-    let decoded = decode_java_utf8_lossy(&bytes);
+    let start = usize::try_from(data.position()).map_err(|_| {
+        Error::new(
+            ErrorKind::UnexpectedEof,
+            "encoded string starts beyond the addressable input",
+        )
+    })?;
+    let end = start.checked_add(encoded_len).ok_or_else(|| {
+        Error::new(
+            ErrorKind::UnexpectedEof,
+            "encoded string length exceeds the addressable input",
+        )
+    })?;
+    let Some(bytes) = data.get_ref().get(start..end) else {
+        return Err(Error::new(
+            ErrorKind::UnexpectedEof,
+            "encoded string is truncated",
+        ));
+    };
+
+    let decoded = decode_java_utf8_lossy(bytes);
+    let end = u64::try_from(end).map_err(|_| {
+        Error::new(
+            ErrorKind::InvalidData,
+            "encoded string end exceeds the cursor position range",
+        )
+    })?;
+    data.set_position(end);
     if decoded.encode_utf16().count() > max_utf16_units {
         return Err(Error::new(
             ErrorKind::InvalidData,
@@ -257,5 +281,99 @@ impl<T: PrefixedRead> PrefixedRead for Option<T> {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, ErrorKind};
+
+    use crate::{
+        codec::VarInt,
+        serial::{WriteTo as _, prefixed_read::read_utf},
+    };
+
+    fn encoded_string(bytes: &[u8]) -> Vec<u8> {
+        let mut encoded = Vec::with_capacity(VarInt::MAX_SIZE + bytes.len());
+        VarInt(i32::try_from(bytes.len()).expect("test string length should fit in a VarInt"))
+            .write(&mut encoded)
+            .expect("test string length should encode");
+        encoded.extend_from_slice(bytes);
+        encoded
+    }
+
+    #[test]
+    fn truncated_string_leaves_cursor_after_prefix() {
+        let bytes = [3, b'a'];
+        let mut cursor = Cursor::new(bytes.as_slice());
+
+        let error = read_utf(&mut cursor, 3).expect_err("the declared body is incomplete");
+
+        assert_eq!(error.kind(), ErrorKind::UnexpectedEof);
+        assert_eq!(cursor.position(), 1);
+    }
+
+    #[test]
+    fn length_failures_match_vanilla_cursor_consumption() {
+        let encoded_too_long = encoded_string(b"abcd");
+        let mut cursor = Cursor::new(encoded_too_long.as_slice());
+        let error = read_utf(&mut cursor, 1).expect_err("four encoded bytes exceed the bound");
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert_eq!(cursor.position(), 1);
+
+        let decoded_too_long = encoded_string(b"ab");
+        let mut cursor = Cursor::new(decoded_too_long.as_slice());
+        let error = read_utf(&mut cursor, 1).expect_err("two UTF-16 units exceed the bound");
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert_eq!(cursor.position(), decoded_too_long.len() as u64);
+    }
+
+    #[test]
+    fn accepts_maximum_encoded_length() {
+        const MAX_UTF16_UNITS: usize = 32_767;
+        let bytes = [0xE0, 0xA0, 0x80].repeat(MAX_UTF16_UNITS);
+        let encoded = encoded_string(&bytes);
+        let mut cursor = Cursor::new(encoded.as_slice());
+
+        let decoded =
+            read_utf(&mut cursor, MAX_UTF16_UNITS).expect("the exact encoded bound is valid");
+
+        assert_eq!(decoded.encode_utf16().count(), MAX_UTF16_UNITS);
+        assert_eq!(cursor.position(), encoded.len() as u64);
+    }
+
+    #[test]
+    fn malformed_sequences_match_java_replacement_grouping() {
+        let cases: &[(&[u8], &str)] = &[
+            (&[0xC0, 0x80], "\u{FFFD}\u{FFFD}"),
+            (&[0xE0, 0x80, 0x80], "\u{FFFD}\u{FFFD}\u{FFFD}"),
+            (&[0xED, 0xA0, 0x80], "\u{FFFD}"),
+            (&[0xE1, 0x80], "\u{FFFD}"),
+            (&[0xE1, 0x80, b'A'], "\u{FFFD}A"),
+            (&[0xF0, 0x90, 0x80], "\u{FFFD}"),
+            (
+                &[0xF4, 0x90, 0x80, 0x80],
+                "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}",
+            ),
+        ];
+
+        for &(bytes, expected) in cases {
+            let encoded = encoded_string(bytes);
+            let decoded = read_utf(&mut Cursor::new(encoded.as_slice()), 16)
+                .expect("malformed UTF-8 is decoded lossily");
+            assert_eq!(decoded, expected, "unexpected decoding for {bytes:X?}");
+        }
+    }
+
+    #[test]
+    fn rejects_impossible_maximum_without_reading_the_body() {
+        let encoded = encoded_string(b"");
+        let mut cursor = Cursor::new(encoded.as_slice());
+
+        let error =
+            read_utf(&mut cursor, usize::MAX).expect_err("the encoded bound should overflow");
+
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+        assert_eq!(cursor.position(), 1);
     }
 }
