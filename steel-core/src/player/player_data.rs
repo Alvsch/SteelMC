@@ -12,7 +12,9 @@ use crate::{
     inventory::container::Container,
 };
 
-use super::{Player, abilities::Abilities, experience::Experience};
+use super::{
+    Player, abilities::Abilities, experience::Experience, player_inventory::PlayerInventory,
+};
 
 /// Current data version for player saves.
 /// Increment when making breaking changes to the format.
@@ -178,7 +180,7 @@ impl PersistentPlayerData {
         // Collect non-empty inventory slots
         let mut slots = Vec::new();
         // Main inventory (0-35) and equipment (36-42)
-        for slot in 0..43 {
+        for slot in 0..PlayerInventory::CONTAINER_SIZE {
             let item = inventory.get_item(slot);
             if !item.is_empty() {
                 slots.push(PersistentSlot {
@@ -382,13 +384,13 @@ impl PersistentPlayerData {
         {
             let mut inventory = player.inventory.lock();
             // Clear existing inventory first
-            for slot in 0..43 {
+            for slot in 0..PlayerInventory::CONTAINER_SIZE {
                 inventory.set_item(slot, ItemStack::empty());
             }
             // Restore saved items
             for slot_data in &self.inventory {
                 let slot_index = slot_data.slot as usize;
-                if slot_index < 43 {
+                if slot_index < PlayerInventory::CONTAINER_SIZE {
                     inventory.set_item(slot_index, slot_data.item.clone());
                 }
             }

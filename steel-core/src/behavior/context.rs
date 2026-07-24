@@ -587,7 +587,7 @@ impl InventoryAccess {
     /// Runs `f` with mutable access to the item in the player's hand.
     pub fn with_item<R>(&self, f: impl FnOnce(&mut ItemStack) -> R) -> R {
         let mut inventory = self.inventory.lock();
-        f(inventory.get_item_in_hand_mut(self.hand))
+        inventory.mutate_item_in_hand(self.hand, f)
     }
 
     /// Runs `f` with mutable access to the player's inventory.
@@ -690,7 +690,7 @@ impl<'a> UseItemContext<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Weak};
+    use std::sync::Arc;
 
     use steel_registry::data_components::vanilla_components::BLOCK_STATE;
     use steel_registry::test_support::init_test_registry;
@@ -717,7 +717,7 @@ mod tests {
     fn player_hand_source_reads_current_components_and_mutates_the_hand() {
         init_test_registry();
 
-        let inventory = Arc::new(SyncMutex::new(PlayerInventory::new(Weak::new())));
+        let inventory = Arc::new(SyncMutex::new(PlayerInventory::new()));
         inventory
             .lock()
             .set_item(0, ItemStack::with_count(&vanilla_items::LIGHT, 2));
@@ -749,7 +749,7 @@ mod tests {
         init_test_registry();
         init_behaviors();
 
-        let inventory = Arc::new(SyncMutex::new(PlayerInventory::new(Weak::new())));
+        let inventory = Arc::new(SyncMutex::new(PlayerInventory::new()));
         inventory
             .lock()
             .set_item(0, ItemStack::new(&vanilla_items::STONE));

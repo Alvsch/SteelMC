@@ -1,4 +1,4 @@
-//! Entity equipment storage.
+//! Entity equipment access and owned storage.
 
 use std::mem;
 
@@ -6,19 +6,51 @@ use steel_registry::item_stack::ItemStack;
 
 use super::EquipmentSlot;
 
-/// Equipment storage for entities (armor, hands, etc.)
-pub struct EntityEquipment {
+/// Equipment access shared by player inventories and owned entity storage.
+pub trait EntityEquipment {
+    /// Gets a reference to the item in a slot.
+    fn get_ref(&self, slot: EquipmentSlot) -> &ItemStack;
+
+    /// Gets a mutable reference to the item in a slot.
+    fn get_mut(&mut self, slot: EquipmentSlot) -> &mut ItemStack;
+
+    /// Sets the item in a slot, returning the old item.
+    fn set(&mut self, slot: EquipmentSlot, stack: ItemStack) -> ItemStack;
+
+    /// Takes the item from a slot, leaving an empty stack in its place.
+    fn take(&mut self, slot: EquipmentSlot) -> ItemStack;
+
+    /// Clears all equipment slots.
+    fn clear(&mut self);
+
+    /// Drains equipment slots that changed since the last sync.
+    fn drain_dirty_items(&mut self) -> Vec<(EquipmentSlot, ItemStack)>;
+
+    /// Returns non-empty equipment slots for initial spawn synchronization.
+    fn non_empty_items(&self) -> Vec<(EquipmentSlot, ItemStack)> {
+        EquipmentSlot::ALL
+            .into_iter()
+            .filter_map(|slot| {
+                let item = self.get_ref(slot);
+                (!item.is_empty()).then(|| (slot, item.clone()))
+            })
+            .collect()
+    }
+}
+
+/// Owned equipment storage used by non-player living entities.
+pub struct OwnedEntityEquipment {
     slots: [ItemStack; 8],
     dirty_slots: [bool; 8],
 }
 
-impl Default for EntityEquipment {
+impl Default for OwnedEntityEquipment {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl EntityEquipment {
+impl OwnedEntityEquipment {
     /// Creates a new empty equipment storage.
     #[must_use]
     pub fn new() -> Self {
@@ -37,29 +69,28 @@ impl EntityEquipment {
         }
     }
 
-    /// Gets a reference to the item in a slot.
+    /// Checks if all slots are empty.
     #[must_use]
-    pub const fn get_ref(&self, slot: EquipmentSlot) -> &ItemStack {
+    pub fn is_empty(&self) -> bool {
+        self.slots.iter().all(ItemStack::is_empty)
+    }
+
+    const fn mark_dirty(&mut self, slot: EquipmentSlot) {
+        self.dirty_slots[slot.index()] = true;
+    }
+}
+
+impl EntityEquipment for OwnedEntityEquipment {
+    fn get_ref(&self, slot: EquipmentSlot) -> &ItemStack {
         &self.slots[slot.index()]
     }
 
-    /// Gets a mutable reference to the item in a slot.
-    pub const fn get_mut(&mut self, slot: EquipmentSlot) -> &mut ItemStack {
+    fn get_mut(&mut self, slot: EquipmentSlot) -> &mut ItemStack {
         self.mark_dirty(slot);
         &mut self.slots[slot.index()]
     }
 
-    /// Takes the item from a slot, leaving an empty stack in its place.
-    pub fn take(&mut self, slot: EquipmentSlot) -> ItemStack {
-        let old = mem::take(&mut self.slots[slot.index()]);
-        if !old.is_empty() {
-            self.mark_dirty(slot);
-        }
-        old
-    }
-
-    /// Sets the item in a slot, returning the old item.
-    pub fn set(&mut self, slot: EquipmentSlot, stack: ItemStack) -> ItemStack {
+    fn set(&mut self, slot: EquipmentSlot, stack: ItemStack) -> ItemStack {
         let old = mem::replace(&mut self.slots[slot.index()], stack);
         if old != self.slots[slot.index()] {
             self.mark_dirty(slot);
@@ -67,20 +98,15 @@ impl EntityEquipment {
         old
     }
 
-    /// Checks if a specific slot is empty.
-    #[must_use]
-    pub fn is_slot_empty(&self, slot: EquipmentSlot) -> bool {
-        self.slots[slot.index()].is_empty()
+    fn take(&mut self, slot: EquipmentSlot) -> ItemStack {
+        let old = mem::take(&mut self.slots[slot.index()]);
+        if !old.is_empty() {
+            self.mark_dirty(slot);
+        }
+        old
     }
 
-    /// Checks if all slots are empty.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.slots.iter().all(ItemStack::is_empty)
-    }
-
-    /// Clears all slots, replacing them with empty stacks.
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         for slot in EquipmentSlot::ALL {
             if !self.slots[slot.index()].is_empty() {
                 self.slots[slot.index()] = ItemStack::empty();
@@ -89,42 +115,7 @@ impl EntityEquipment {
         }
     }
 
-    /// Returns an Iterator to the `&ItemStacks` in the Slots
-    pub fn iter(&self) -> impl Iterator<Item = &ItemStack> {
-        self.slots.iter()
-    }
-
-    /// Returns an Iterator to the `&mut ItemStacks` in the Slots
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut ItemStack> {
-        self.slots.iter_mut()
-    }
-
-    /// The underlying slice containing the `ItemStacks`
-    #[must_use]
-    pub const fn slots(&self) -> &[ItemStack; 8] {
-        &self.slots
-    }
-
-    /// A mutable borrow to the underlying slice containing the `ItemStacks`
-    #[must_use]
-    pub const fn slots_mut(&mut self) -> &mut [ItemStack; 8] {
-        &mut self.slots
-    }
-
-    /// Returns non-empty equipment slots for initial spawn synchronization.
-    #[must_use]
-    pub fn non_empty_items(&self) -> Vec<(EquipmentSlot, ItemStack)> {
-        EquipmentSlot::ALL
-            .into_iter()
-            .filter_map(|slot| {
-                let item = self.get_ref(slot);
-                (!item.is_empty()).then(|| (slot, item.clone()))
-            })
-            .collect()
-    }
-
-    /// Drains equipment slots that changed since the last sync.
-    pub fn drain_dirty_items(&mut self) -> Vec<(EquipmentSlot, ItemStack)> {
+    fn drain_dirty_items(&mut self) -> Vec<(EquipmentSlot, ItemStack)> {
         let mut dirty_items = Vec::new();
         for slot in EquipmentSlot::ALL {
             let index = slot.index();
@@ -135,9 +126,5 @@ impl EntityEquipment {
             dirty_items.push((slot, self.slots[index].clone()));
         }
         dirty_items
-    }
-
-    const fn mark_dirty(&mut self, slot: EquipmentSlot) {
-        self.dirty_slots[slot.index()] = true;
     }
 }

@@ -33,7 +33,7 @@ use crate::chunk_saver::ChunkStorage;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::{ChestMinecartEntity, PigEntity};
 use crate::entity::mob::Mob;
-use crate::inventory::equipment::EquipmentSlot;
+use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
 use crate::portal::PortalKind;
 use crate::test_support::{
     cross_world_damage_test_world, fresh_test_world, insert_ready_full_chunk, test_world,

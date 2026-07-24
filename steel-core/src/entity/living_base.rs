@@ -28,7 +28,7 @@ use uuid::Uuid;
 use crate::entity::attribute::{AttributeMap, AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
 use crate::entity::{LivingEntity, SharedEntity, WeakEntity};
-use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
+use crate::inventory::equipment::{EquipmentSlot, OwnedEntityEquipment};
 use crate::world::World;
 
 /// Duration in ticks of the death animation before entity removal.
@@ -662,7 +662,7 @@ pub struct LivingEntityBase {
     attributes: SyncMutex<AttributeMap>,
     active_mob_effects: SyncMutex<FxHashMap<MobEffectRef, ActiveMobEffect>>,
     dirty_mob_effects: SyncMutex<Vec<MobEffectSyncChange>>,
-    equipment: SyncMutex<EntityEquipment>,
+    equipment: SyncMutex<OwnedEntityEquipment>,
     equipment_attribute_modifiers:
         SyncMutex<[Vec<EquipmentAttributeModifierKey>; EquipmentSlot::ALL.len()]>,
 }
@@ -690,7 +690,7 @@ impl LivingEntityBase {
             attributes: SyncMutex::new(attributes),
             active_mob_effects: SyncMutex::new(FxHashMap::default()),
             dirty_mob_effects: SyncMutex::new(Vec::new()),
-            equipment: SyncMutex::new(EntityEquipment::new()),
+            equipment: SyncMutex::new(OwnedEntityEquipment::new()),
             equipment_attribute_modifiers: SyncMutex::new(array::from_fn(|_| Vec::new())),
         }
     }
@@ -715,7 +715,7 @@ impl LivingEntityBase {
 
     /// Returns vanilla `LivingEntity.equipment` storage.
     #[inline]
-    pub const fn equipment(&self) -> &SyncMutex<EntityEquipment> {
+    pub const fn equipment(&self) -> &SyncMutex<OwnedEntityEquipment> {
         &self.equipment
     }
 
@@ -1580,7 +1580,7 @@ mod tests {
     use steel_utils::{BlockPos, types::InteractionHand};
 
     use crate::entity::damage::DamageSource;
-    use crate::inventory::equipment::EquipmentSlot;
+    use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
 
     use super::{
         ActiveMobEffect, DEFAULT_SWING_DURATION, LivingEntityBase, LivingTravelInput,

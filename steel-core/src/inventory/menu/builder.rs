@@ -801,8 +801,6 @@ impl MenuBuilder {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
-
     use steel_registry::vanilla_menu_types;
     use steel_utils::locks::IntoShared;
 
@@ -831,7 +829,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "shift-click route source 0..27 overlaps an existing route source")]
     fn route_rejects_overlapping_source_sections() {
-        let inventory = PlayerInventory::new(Weak::new()).into_shared();
+        let inventory = PlayerInventory::new().into_shared();
         let mut builder = MenuBuilder::new(None, 0);
         let player = builder.player_inventory(&inventory);
         let target = builder.section(SimpleContainer::new(1).into_shared(), 1);

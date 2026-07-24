@@ -89,7 +89,7 @@ use uuid::Uuid;
 
 use arc_swap::ArcSwap;
 use steel_utils::locks::SyncMutex;
-use steel_utils::types::{Difficulty, GameType};
+use steel_utils::types::{Difficulty, GameType, InteractionHand};
 use text_components::resolving::TextResolutor;
 use text_components::translation::TranslatedMessage;
 use text_components::{
@@ -98,6 +98,7 @@ use text_components::{
 };
 use text_components::{content::Resolvable, custom::CustomData};
 
+use crate::behavior::InteractionResult;
 use crate::chunk::chunk_request::{ChunkRequestHandle, ChunkRequestState};
 use crate::enchantment_helper;
 use crate::entity::damage::DamageSource;
@@ -108,7 +109,8 @@ use crate::entity::{
     start_riding_entities,
 };
 use crate::fluid::get_fluid_state;
-use crate::inventory::equipment::EquipmentSlot;
+use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
+use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::inventory::menu::Menu;
 use crate::level_data::RespawnData;
 use crate::permission::{
@@ -533,7 +535,6 @@ impl Player {
     }
 
     /// Creates a new player.
-    #[expect(clippy::too_many_arguments, reason = "Player::new is complex")]
     pub fn new(
         gameprofile: GameProfile,
         connection: Arc<PlayerConnection>,
@@ -541,11 +542,10 @@ impl Player {
         server: Weak<Server>,
         config: Arc<RuntimeConfig>,
         entity_id: i32,
-        player: &Weak<Player>,
         client_information: ClientInformation,
     ) -> Self {
         // Create a single shared inventory container used by both the player and inventory menu
-        let inventory = Arc::new(SyncMutex::new(PlayerInventory::new(player.clone())));
+        let inventory = Arc::new(SyncMutex::new(PlayerInventory::new()));
 
         let pos = DVec3::new(0.0, 0.0, 0.0);
 
@@ -635,6 +635,7 @@ impl Player {
         self.reset_vehicle_movement_for_tick();
 
         self.default_tick();
+        self.apply_pending_equipment_attribute_updates();
         self.ai_step();
 
         // Vanilla snaps the player back to firstGood after ServerPlayer.doTick().
@@ -736,6 +737,16 @@ impl Player {
     ) {
         self.living_base
             .refresh_equipment_attribute_modifiers(slot, item_stack);
+    }
+
+    fn apply_pending_equipment_attribute_updates(&self) {
+        let updates = self
+            .inventory
+            .lock()
+            .drain_pending_equipment_attribute_updates();
+        for (slot, item_stack) in updates {
+            self.refresh_equipment_attribute_modifiers_from_stack(slot, &item_stack);
+        }
     }
 
     /// Ticks the death animation timer.
@@ -2508,6 +2519,7 @@ impl Entity for Player {
     }
 
     fn update_data_before_sync(&self) {
+        self.apply_pending_equipment_attribute_updates();
         self.update_dirty_mob_effect_entity_data();
     }
 
@@ -2524,11 +2536,11 @@ impl Entity for Player {
     }
 
     fn pack_all_equipment(&self) -> Vec<EquipmentSlotItem> {
-        equipment_items_to_packet_items(self.inventory.lock().non_empty_equipment_items())
+        equipment_items_to_packet_items(self.inventory.lock().non_empty_items())
     }
 
     fn drain_dirty_equipment(&self) -> Vec<EquipmentSlotItem> {
-        equipment_items_to_packet_items(self.inventory.lock().drain_dirty_equipment_items())
+        equipment_items_to_packet_items(self.inventory.lock().drain_dirty_items())
     }
 
     fn max_up_step(&self) -> f32 {
@@ -2699,11 +2711,7 @@ impl LivingEntity for Player {
 
     fn with_equipment_slot(&self, slot: EquipmentSlot, visitor: &mut dyn FnMut(&ItemStack)) {
         let inventory = self.inventory.lock();
-        if slot == EquipmentSlot::MainHand {
-            visitor(inventory.get_selected_item());
-        } else {
-            visitor(inventory.equipment().get_ref(slot));
-        }
+        visitor(inventory.get_ref(slot));
     }
 
     fn with_equipment_slot_mut(
@@ -2712,11 +2720,95 @@ impl LivingEntity for Player {
         visitor: &mut dyn FnMut(&mut ItemStack),
     ) {
         let mut inventory = self.inventory.lock();
-        if slot == EquipmentSlot::MainHand {
-            inventory.with_selected_item_mut(visitor);
-        } else {
-            visitor(inventory.equipment_mut().get_mut(slot));
+        inventory.with_equipment_item_mut(slot, visitor);
+    }
+
+    fn interact_living_entity_with_equippable(
+        &self,
+        player: &Player,
+        hand: InteractionHand,
+    ) -> InteractionResult {
+        let item_stack = {
+            let inventory = player.inventory.lock();
+            let item_stack = inventory.get_item_in_hand(hand);
+            item_stack.copy_with_count(item_stack.count())
+        };
+        let Some(equippable) = item_stack.get_equippable() else {
+            return InteractionResult::Pass;
+        };
+        if !equippable.equip_on_interact {
+            return InteractionResult::Pass;
         }
+
+        let slot = equippable.slot;
+        let can_equip = |stack: &ItemStack| {
+            stack.get_equippable().is_some_and(|equippable| {
+                equippable.equip_on_interact
+                    && equippable.slot == slot
+                    && self.is_equippable_in_slot(stack, slot)
+            })
+        };
+        if !can_equip(&item_stack) || !Entity::is_alive(self) {
+            return InteractionResult::Pass;
+        }
+
+        let source_ref = ContainerRef::from(player.inventory.clone());
+        let target_ref = ContainerRef::from(self.inventory.clone());
+        let source_id = source_ref.container_id();
+        let target_id = target_ref.container_id();
+        let mut guard = ContainerLockGuard::lock_all(&[source_ref, target_ref]);
+        let source_slot = match hand {
+            InteractionHand::MainHand => EquipmentSlot::MainHand,
+            InteractionHand::OffHand => EquipmentSlot::OffHand,
+        };
+
+        let equipped = if source_id == target_id {
+            let Some(inventory) = guard.get_typed_mut::<PlayerInventory>(source_id) else {
+                unreachable!("player inventory container retains its concrete type");
+            };
+            if !can_equip(inventory.get_item_in_hand(hand)) || !inventory.get_ref(slot).is_empty() {
+                return InteractionResult::Pass;
+            }
+
+            let equipped = inventory.get_mut(source_slot).split(1);
+            if equipped.is_empty() {
+                return InteractionResult::Pass;
+            }
+            let equipped_for_effects = equipped.copy_with_count(1);
+            *inventory.get_mut(slot) = equipped;
+            equipped_for_effects
+        } else {
+            let Some((source_inventory, target_inventory)) =
+                guard.get_two_typed_mut::<PlayerInventory, PlayerInventory>(source_id, target_id)
+            else {
+                unreachable!("player inventory containers retain their concrete type");
+            };
+            if !can_equip(source_inventory.get_item_in_hand(hand))
+                || !target_inventory.get_ref(slot).is_empty()
+            {
+                return InteractionResult::Pass;
+            }
+
+            let equipped = source_inventory.get_mut(source_slot).split(1);
+            if equipped.is_empty() {
+                return InteractionResult::Pass;
+            }
+            let equipped_for_effects = equipped.copy_with_count(1);
+            *target_inventory.get_mut(slot) = equipped;
+            equipped_for_effects
+        };
+        drop(guard);
+
+        player.inventory.lock().set_changed();
+        if source_id != target_id {
+            self.inventory.lock().set_changed();
+        }
+
+        if let Some(sound) = self.equip_sound(slot, &equipped) {
+            self.play_sound(sound, 1.0, 1.0);
+        }
+        // TODO: Emit EQUIP game event once game-event dispatch is implemented.
+        InteractionResult::Success
     }
 
     fn has_infinite_materials(&self) -> bool {
@@ -2847,13 +2939,14 @@ mod tests {
     use glam::DVec3;
     use rustc_hash::FxHashMap;
     use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
+    use steel_protocol::packets::game::EquipmentSlotItem;
     use steel_protocol::packets::game::{
         ClickType, HashedStack, SContainerClick, SSetCreativeModeSlot,
     };
     use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::blocks::properties::{BlockStateProperties, Direction};
     use steel_registry::data_component_predicate::DataComponentMatchers;
-    use steel_registry::data_components::vanilla_components::CAN_BREAK;
+    use steel_registry::data_components::vanilla_components::{CAN_BREAK, EQUIPPABLE};
     use steel_registry::data_components::{AdventureModePredicate, BlockPredicate};
     use steel_registry::{
         RegistryHolderSet, item_stack::ItemStack, test_support::init_test_registry,
@@ -2861,12 +2954,12 @@ mod tests {
         vanilla_game_rules, vanilla_items, vanilla_menu_types,
     };
     use steel_utils::locks::{IntoShared as _, Shared};
-    use steel_utils::types::{Difficulty, GameType, UpdateFlags};
+    use steel_utils::types::{Difficulty, GameType, InteractionHand, UpdateFlags};
     use steel_utils::{BlockPos, ChunkPos, Downcast as _, WorldAabb};
     use text_components::TextComponent;
     use uuid::Uuid;
 
-    use crate::behavior::init_behaviors;
+    use crate::behavior::{InteractionResult, init_behaviors};
     use crate::entity::{
         Entity, EntitySyncedData, LivingEntity, RemovalReason, damage::DamageSource,
         entities::ItemEntity, next_entity_id,
@@ -2874,7 +2967,7 @@ mod tests {
     use crate::inventory::{
         click::{Click, ClickOutcome, MouseButton},
         container::{Container as _, SimpleContainer},
-        equipment::EquipmentSlot,
+        equipment::{EntityEquipment, EquipmentSlot},
         lock::ContainerLockGuard,
         menu::{Menu, MenuBehavior, MenuBuilder, MenuKind, MenuKindType, kinds::BasicKind},
     };
@@ -3960,7 +4053,7 @@ mod tests {
         init_test_registry();
         let world = Arc::clone(test_world());
         let player = test_player(Arc::clone(&world));
-        player.inventory.lock().equipment_mut().set(
+        player.inventory.lock().set(
             EquipmentSlot::Chest,
             ItemStack::new(&vanilla_items::DIAMOND_CHESTPLATE),
         );
@@ -3970,11 +4063,95 @@ mod tests {
 
         let inventory = player.inventory.lock();
         assert_eq!(
-            inventory
-                .equipment()
-                .get_ref(EquipmentSlot::Chest)
-                .get_damage_value(),
+            inventory.get_ref(EquipmentSlot::Chest).get_damage_value(),
             2,
+        );
+    }
+
+    #[test]
+    fn equipping_player_target_uses_inventory_equipment_storage() {
+        init_test_registry();
+        let world = Arc::clone(test_world());
+        let source = test_player(Arc::clone(&world));
+        let target =
+            TestPlayerBuilder::new(world, Uuid::from_u128(2), "Target", next_entity_id()).build();
+        let mut helmet = ItemStack::new(&vanilla_items::DIAMOND_HELMET);
+        let Some(mut equippable) = helmet.get_equippable().cloned() else {
+            panic!("diamond helmet should have equippable data");
+        };
+        equippable.equip_on_interact = true;
+        helmet.set(EQUIPPABLE, equippable);
+        source.inventory.lock().set_selected_item(helmet.clone());
+
+        let result = LivingEntity::interact_living_entity_with_equippable(
+            target.as_ref(),
+            source.as_ref(),
+            InteractionHand::MainHand,
+        );
+
+        assert_eq!(result, InteractionResult::Success);
+        assert!(source.inventory.lock().get_selected_item().is_empty());
+        assert_eq!(
+            target.inventory.lock().get_ref(EquipmentSlot::Head),
+            &helmet
+        );
+        assert!(
+            target
+                .living_base()
+                .equipment()
+                .lock()
+                .get_ref(EquipmentSlot::Head)
+                .is_empty()
+        );
+        assert_eq!(
+            Entity::drain_dirty_equipment(target.as_ref()),
+            vec![EquipmentSlotItem {
+                slot: EquipmentSlot::Head,
+                item_stack: helmet,
+            }]
+        );
+    }
+
+    #[test]
+    fn raw_inventory_equipment_mutation_reconciles_before_sync() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let (base_armor, base_toughness) = {
+            let attributes = player.attributes().lock();
+            (
+                attributes.required_value(vanilla_attributes::ARMOR),
+                attributes.required_value(vanilla_attributes::ARMOR_TOUGHNESS),
+            )
+        };
+
+        {
+            let mut inventory = player.inventory.lock();
+            inventory.items_mut()[39] = ItemStack::new(&vanilla_items::DIAMOND_HELMET);
+        }
+
+        Entity::update_data_before_sync(player.as_ref());
+
+        {
+            let attributes = player.attributes().lock();
+            assert_eq!(
+                attributes
+                    .required_value(vanilla_attributes::ARMOR)
+                    .to_bits(),
+                (base_armor + 3.0).to_bits()
+            );
+            assert_eq!(
+                attributes
+                    .required_value(vanilla_attributes::ARMOR_TOUGHNESS)
+                    .to_bits(),
+                (base_toughness + 2.0).to_bits()
+            );
+        }
+        assert_eq!(
+            Entity::drain_dirty_equipment(player.as_ref()),
+            vec![EquipmentSlotItem {
+                slot: EquipmentSlot::Head,
+                item_stack: ItemStack::new(&vanilla_items::DIAMOND_HELMET),
+            }]
         );
     }
 
@@ -4089,6 +4266,30 @@ mod tests {
         assert_eq!(experience.total_points(), 32);
         drop(experience);
         assert_eq!(player.score(), 19);
+    }
+
+    #[test]
+    fn persistent_player_data_restores_equipment_inventory_slots() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let helmet = ItemStack::new(&vanilla_items::DIAMOND_HELMET);
+        let saddle = ItemStack::new(&vanilla_items::SADDLE);
+        {
+            let mut inventory = player.inventory.lock();
+            inventory.set(EquipmentSlot::Head, helmet.clone());
+            inventory.set(EquipmentSlot::Saddle, saddle.clone());
+        }
+        let persistent = PersistentPlayerData::from_player(&player);
+
+        {
+            let mut inventory = player.inventory.lock();
+            inventory.clear();
+        }
+        persistent.apply_to_player_without_location(&player);
+
+        let inventory = player.inventory.lock();
+        assert_eq!(inventory.get_ref(EquipmentSlot::Head), &helmet);
+        assert_eq!(inventory.get_ref(EquipmentSlot::Saddle), &saddle);
     }
 
     #[test]

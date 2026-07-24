@@ -44,7 +44,7 @@ use crate::entity::{
     Entity, EntitySpawnReason, LivingEntity, LivingTravelInput, RemovalReason, SharedEntity,
     SpawnGroupData, WeakEntity,
 };
-use crate::inventory::equipment::EquipmentSlot;
+use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
 use crate::physics::WorldCollisionProvider;
 use crate::player::Player;
 use crate::world::game_event_context::GameEventContext;

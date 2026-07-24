@@ -93,17 +93,14 @@ impl TestPlayerBuilder {
             TestPlayerContext::Detached(config) => (Weak::new(), config),
             TestPlayerContext::Server { server, config } => (server, config),
         };
-        Arc::new_cyclic(|weak_player| {
-            Player::new(
-                self.profile,
-                self.connection,
-                self.world,
-                server,
-                config,
-                self.entity_id,
-                weak_player,
-                ClientInformation::default(),
-            )
-        })
+        Arc::new(Player::new(
+            self.profile,
+            self.connection,
+            self.world,
+            server,
+            config,
+            self.entity_id,
+            ClientInformation::default(),
+        ))
     }
 }
