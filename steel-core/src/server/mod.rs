@@ -306,7 +306,7 @@ mod tests {
 
     use crate::command::execution::{CommandPermissionSource, CommandSource};
     use crate::command::sender::CommandSender;
-    use crate::config::{ResolvedDomainConfig, RuntimeConfig, StorageSelection};
+    use crate::config::{ResolvedDomainConfig, StorageSelection};
     use crate::entity::{Entity, EntityBase};
     use crate::permission::{
         OP_GROUP, PermissionEntry, PermissionExpr, PermissionGroupConfig, PermissionGroupManager,
@@ -314,8 +314,10 @@ mod tests {
         PermissionSubjectIndex, PermissionSubjectState,
     };
     use crate::player::connection::NetworkConnection;
-    use crate::player::{ClientInformation, GameProfile, Player, PlayerConnection, ResetReason};
-    use crate::test_support::{fresh_test_world, test_world};
+    use crate::player::{Player, PlayerConnection, ResetReason};
+    use crate::test_support::{
+        TestPlayerBuilder, fresh_test_world, test_runtime_config, test_world,
+    };
     use crate::world::World;
 
     use super::{
@@ -331,11 +333,11 @@ mod tests {
         packet_workers_for_available, validate_player_permission_group_update,
     };
 
-    struct TestConnection {
+    struct PacketRecordingConnection {
         sent_packets: Arc<SyncMutex<Vec<EncodedPacket>>>,
     }
 
-    impl NetworkConnection for TestConnection {
+    impl NetworkConnection for PacketRecordingConnection {
         fn compression(&self) -> Option<CompressionInfo> {
             None
         }
@@ -396,31 +398,6 @@ mod tests {
         }
     }
 
-    fn test_runtime_config() -> Arc<RuntimeConfig> {
-        Arc::new(RuntimeConfig {
-            max_players: 1,
-            view_distance: 2,
-            simulation_distance: 2,
-            max_chained_neighbor_updates: 1_000_000,
-            online_mode: false,
-            auth_server: None,
-            profile_server: None,
-            encryption: false,
-            allow_flight: false,
-            motd: String::new(),
-            use_favicon: false,
-            favicon: String::new(),
-            enforce_secure_chat: false,
-            chat_spam_threshold_seconds: 10,
-            command_spam_threshold_seconds: 10,
-            compression: None,
-            server_links: None,
-            packet_workers: Some(1),
-            chunk_generation_threads: Some(1),
-            chunk_encoding_threads: Some(1),
-        })
-    }
-
     fn test_storage_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -463,7 +440,7 @@ mod tests {
         let permission_groups =
             PermissionGroupManager::transient(PermissionGroupsConfig::default())
                 .map_err(|error| format!("test permission groups should resolve: {error}"))?;
-        let config = test_runtime_config();
+        let config = test_runtime_config(1);
         let registry_cache = RegistryCache::new(config.compression);
 
         Ok(Arc::new(Server {
@@ -512,23 +489,10 @@ mod tests {
         entity_id: i32,
         connection: Arc<PlayerConnection>,
     ) -> Arc<Player> {
-        Arc::new_cyclic(|weak_player| {
-            Player::new(
-                GameProfile {
-                    id: uuid,
-                    name: name.to_owned(),
-                    properties: Vec::new(),
-                    profile_actions: None,
-                },
-                Arc::clone(&connection),
-                world,
-                Arc::downgrade(server),
-                Arc::clone(&server.config),
-                entity_id,
-                weak_player,
-                ClientInformation::default(),
-            )
-        })
+        TestPlayerBuilder::new(world, uuid, name, entity_id)
+            .connection(connection)
+            .server(server)
+            .build()
     }
 
     fn test_player_with_packets(
@@ -539,9 +503,11 @@ mod tests {
         entity_id: i32,
     ) -> (Arc<Player>, Arc<SyncMutex<Vec<EncodedPacket>>>) {
         let sent_packets = Arc::new(SyncMutex::new(Vec::new()));
-        let connection = Arc::new(PlayerConnection::Other(Box::new(TestConnection {
-            sent_packets: Arc::clone(&sent_packets),
-        })));
+        let connection = Arc::new(PlayerConnection::Other(Box::new(
+            PacketRecordingConnection {
+                sent_packets: Arc::clone(&sent_packets),
+            },
+        )));
         let player = test_player_with_connection(server, world, uuid, name, entity_id, connection);
         (player, sent_packets)
     }

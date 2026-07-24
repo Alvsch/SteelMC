@@ -1,25 +1,19 @@
-use std::sync::{
-    Arc, Weak,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
-use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
 use steel_registry::{item_stack::ItemStack, test_support::init_test_registry, vanilla_items};
 use steel_utils::types::GameType;
-use text_components::TextComponent;
 use uuid::Uuid;
 
 use super::*;
 use crate::{
-    config::RuntimeConfig,
     inventory::{
         container::Container as _,
         prelude::{Click, MouseButton},
     },
     permission::{PermissionEntry, PermissionMetadataSet, PermissionSet},
-    player::{ClientInformation, GameProfile, PlayerConnection, connection::NetworkConnection},
-    server::Server,
-    test_support::{fresh_test_world_in_domain, test_world},
+    test_support::{
+        TestPlayerBuilder, fresh_test_world_in_domain, test_runtime_config, test_world,
+    },
 };
 
 const TARGET_HOTBAR_START: usize = 27;
@@ -27,87 +21,16 @@ const TARGET_ARMOR_START: usize = 36;
 const TARGET_CRAFTING_START: usize = 41;
 const VIEWER_INVENTORY_START: usize = 45;
 
-struct TestConnection {
-    closed: AtomicBool,
-}
-
-impl NetworkConnection for TestConnection {
-    fn compression(&self) -> Option<CompressionInfo> {
-        None
-    }
-
-    fn send_encoded(&self, _packet: EncodedPacket) {}
-
-    fn send_encoded_bundle(&self, _packets: Vec<EncodedPacket>) {}
-
-    fn disconnect_with_reason(&self, _reason: TextComponent) {
-        self.closed.store(true, Ordering::Release);
-    }
-
-    fn tick(&self) {}
-
-    fn latency(&self) -> i32 {
-        0
-    }
-
-    fn close(&self) {
-        self.closed.store(true, Ordering::Release);
-    }
-
-    fn closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
-    }
-}
-
-fn test_config() -> Arc<RuntimeConfig> {
-    Arc::new(RuntimeConfig {
-        max_players: 2,
-        view_distance: 2,
-        simulation_distance: 2,
-        max_chained_neighbor_updates: 1_000_000,
-        online_mode: false,
-        auth_server: None,
-        profile_server: None,
-        encryption: false,
-        allow_flight: false,
-        motd: String::new(),
-        use_favicon: false,
-        favicon: String::new(),
-        enforce_secure_chat: false,
-        chat_spam_threshold_seconds: 10,
-        command_spam_threshold_seconds: 10,
-        compression: None,
-        server_links: None,
-        packet_workers: Some(1),
-        chunk_generation_threads: Some(1),
-        chunk_encoding_threads: Some(1),
-    })
-}
-
 fn test_player(uuid: u128, name: &str, entity_id: i32) -> Arc<Player> {
     init_test_registry();
-    let connection = Arc::new(PlayerConnection::Other(Box::new(TestConnection {
-        closed: AtomicBool::new(false),
-    })));
-    let world = Arc::clone(test_world());
-    let config = test_config();
-    Arc::new_cyclic(|weak_player| {
-        Player::new(
-            GameProfile {
-                id: Uuid::from_u128(uuid),
-                name: name.to_owned(),
-                properties: Vec::new(),
-                profile_actions: None,
-            },
-            connection,
-            world,
-            Weak::<Server>::new(),
-            config,
-            entity_id,
-            weak_player,
-            ClientInformation::default(),
-        )
-    })
+    TestPlayerBuilder::new(
+        Arc::clone(test_world()),
+        Uuid::from_u128(uuid),
+        name,
+        entity_id,
+    )
+    .detached_config(test_runtime_config(2))
+    .build()
 }
 
 fn permission_key(value: &str) -> PermissionKey {

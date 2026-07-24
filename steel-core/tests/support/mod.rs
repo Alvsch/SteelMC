@@ -29,6 +29,12 @@ use crate::world::{
 use crate::worldgen::{ChunkGeneratorType, EmptyChunkGenerator};
 use steel_utils::ChunkPos;
 
+mod connection;
+mod player;
+
+pub(crate) use connection::TestConnection;
+pub(crate) use player::{TestPlayerBuilder, test_runtime_config};
+
 pub(crate) fn test_world() -> &'static Arc<World> {
     static WORLD: OnceLock<Arc<World>> = OnceLock::new();
     WORLD.get_or_init(|| create_test_world("test"))
