@@ -1,17 +1,19 @@
 //! Anvil menu.
 use std::sync::{
     Arc,
-    atomic::{AtomicI32, Ordering},
+    atomic::{AtomicBool, AtomicI32, Ordering},
 };
 
 use steel_registry::{
-    REGISTRY, RegistryExt,
+    REGISTRY, RegistryExt, TaggedRegistryExt,
+    blocks::block_state_ext::BlockStateExt,
     data_components::{
         components::ItemEnchantments,
         vanilla_components::{CUSTOM_NAME, ENCHANTMENTS, REPAIR_COST, STORED_ENCHANTMENTS},
     },
     enchantment::Enchantment,
     item_stack::ItemStack,
+    vanilla_block_tags::BlockTag,
     vanilla_items, vanilla_menu_types,
 };
 use steel_utils::{
@@ -41,6 +43,7 @@ pub fn anvil(
     let input_container = SimpleContainer::new(2).into_shared();
     let repair_item_count = Arc::new(AtomicI32::new(0));
     let level_cost = Arc::new(AtomicI32::new(0));
+    let only_renaming = Arc::new(AtomicBool::new(false));
 
     let result_container = ResultContainer::new().into_shared();
 
@@ -53,6 +56,7 @@ pub fn anvil(
             result_container.clone(),
             repair_item_count.clone(),
             level_cost.clone(),
+            only_renaming.clone(),
             pos,
             world.clone(),
         ),
@@ -77,9 +81,11 @@ pub fn anvil(
         input_container,
         result_container,
         block_pos: pos,
+        world: Arc::clone(world),
         repair_item_count,
         level_cost: level_cost_data_slot,
         level_cost_value: level_cost,
+        only_renaming,
         item_name: SyncMutex::new(None),
     })
 }
@@ -90,13 +96,15 @@ pub struct AnvilKind {
     input_container: Shared<SimpleContainer>,
     /// Result container (single virtual slot).
     result_container: Shared<ResultContainer>,
-    #[expect(dead_code, reason = "not yet implemented")]
     block_pos: BlockPos,
+    world: Arc<World>,
     repair_item_count: Arc<AtomicI32>,
     /// Client-facing level cost data slot.
     level_cost: DataSlot,
     /// Level cost shared with [`AnvilResultHandler`], kept in sync with `level_cost`.
     level_cost_value: Arc<AtomicI32>,
+    /// Whether the current result changes only the first input's name.
+    only_renaming: Arc<AtomicBool>,
     item_name: SyncMutex<Option<String>>,
 }
 
@@ -134,6 +142,7 @@ impl AnvilKind {
 
         let mut additional_cost = 0_u32;
         let mut rename_cost = 0_i32;
+        self.only_renaming.store(false, Ordering::Relaxed);
         self.set_cost(behavior, 0);
 
         if first.is_empty() || !Self::can_store_enchantments(first) {
@@ -222,11 +231,7 @@ impl AnvilKind {
                         || first.is(&vanilla_items::ENCHANTED_BOOK)
                         || player.has_infinite_materials();
 
-                    for (existing_key, _) in first
-                        .get_enchantments_for_crafting()
-                        .unwrap_or(&ItemEnchantments::empty())
-                        .iter()
-                    {
+                    for (existing_key, _) in enchantments.iter() {
                         if *existing_key == enchantment.key {
                             continue;
                         }
@@ -294,6 +299,7 @@ impl AnvilKind {
         }
 
         let only_renaming = rename_cost == additional_cost as i32 && rename_cost > 0;
+        self.only_renaming.store(only_renaming, Ordering::Relaxed);
         if only_renaming && total_cost >= 40 {
             self.set_cost(behavior, 39);
         }
@@ -345,6 +351,15 @@ impl AnvilKind {
 }
 
 impl MenuKind for AnvilKind {
+    /// Returns true while the original anvil remains in range.
+    fn still_valid(&self, _behavior: &MenuBehavior, player: &Player) -> bool {
+        let state = self.world.get_block_state(self.block_pos);
+        REGISTRY
+            .blocks
+            .is_in_tag(state.get_block(), &BlockTag::ANVIL)
+            && player.is_within_block_interaction_range_with_buffer(self.block_pos, 4.0)
+    }
+
     fn slots_changed(
         &mut self,
         behavior: &mut MenuBehavior,
@@ -381,3 +396,6 @@ impl MenuKind for AnvilKind {
         behavior.broadcast_changes(&player.connection);
     }
 }
+
+#[cfg(test)]
+mod tests;

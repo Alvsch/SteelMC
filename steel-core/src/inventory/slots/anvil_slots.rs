@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicI32, Ordering},
+    atomic::{AtomicBool, AtomicI32, Ordering},
 };
 
 use steel_registry::{
@@ -27,6 +27,7 @@ pub struct AnvilResultHandler {
     result_container: Shared<ResultContainer>,
     repair_item_count: Arc<AtomicI32>,
     level_cost: Arc<AtomicI32>,
+    only_renaming: Arc<AtomicBool>,
     block_pos: BlockPos,
     world: Arc<World>,
 }
@@ -38,6 +39,7 @@ impl AnvilResultHandler {
         result_container: Shared<ResultContainer>,
         repair_item_count: Arc<AtomicI32>,
         level_cost: Arc<AtomicI32>,
+        only_renaming: Arc<AtomicBool>,
         block_pos: BlockPos,
         world: Arc<World>,
     ) -> Self {
@@ -46,6 +48,7 @@ impl AnvilResultHandler {
             result_container,
             repair_item_count,
             level_cost,
+            only_renaming,
             block_pos,
             world,
         }
@@ -79,7 +82,7 @@ impl ResultHandler for AnvilResultHandler {
             } else {
                 input.set_item(1, ItemStack::empty());
             }
-        } else {
+        } else if !self.only_renaming.load(Ordering::Relaxed) {
             input.set_item(1, ItemStack::empty());
         }
 
