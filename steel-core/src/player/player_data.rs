@@ -329,8 +329,8 @@ impl PersistentPlayerData {
 
     /// Applies saved gameplay state without restoring world-local location data.
     ///
-    /// Used when the saved world no longer exists and the player must spawn at
-    /// the target world's default spawn instead of stale coordinates.
+    /// Used when the saved world is unavailable or differs from an explicitly
+    /// selected world, which must use the target spawn instead.
     pub fn apply_to_player_without_location(&self, player: &Player) {
         self.apply_to_player_inner(player, false);
     }

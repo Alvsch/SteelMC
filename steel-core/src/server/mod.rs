@@ -307,7 +307,7 @@ mod tests {
     use crate::command::execution::{CommandPermissionSource, CommandSource};
     use crate::command::sender::CommandSender;
     use crate::config::{ResolvedDomainConfig, StorageSelection};
-    use crate::entity::{Entity, EntityBase};
+    use crate::entity::{Entity, EntityBase, LivingEntity as _};
     use crate::permission::{
         OP_GROUP, PermissionEntry, PermissionExpr, PermissionGroupConfig, PermissionGroupManager,
         PermissionGroupsConfig, PermissionKey, PermissionMetadataSet, PermissionSet,
@@ -316,7 +316,8 @@ mod tests {
     use crate::player::connection::NetworkConnection;
     use crate::player::{Player, PlayerConnection, ResetReason};
     use crate::test_support::{
-        TestPlayerBuilder, fresh_test_world, test_runtime_config, test_world,
+        TestPlayerBuilder, fresh_test_world, fresh_test_world_in_domain, test_runtime_config,
+        test_world,
     };
     use crate::world::World;
 
@@ -324,9 +325,10 @@ mod tests {
         AsyncMutex, CancellationToken, CommandRegistry, CommandRequestQueue, DomainCommandStorage,
         DomainPlayerData, DomainPlayerState, DomainScoreboards, FxHashMap, KeyStore,
         KnownPlayerCacheState, KnownPlayerSaveStep, KnownPlayers, Notify, PacketProcessor,
-        PendingPlayerJoin, PlayerDataStorage, PlayerDisconnectQueue, PlayerJoinQueue, PlayerMap,
-        PreparedSpawn, RegistryCache, Server, ServerJobQueue, SyncMutex, SyncRwLock,
-        TabListTickStats, TickRateManager, UncachedPlayerTarget, WorldMap,
+        PendingPlayerJoin, PersistentPlayerData, PlayerDataStorage, PlayerDisconnectQueue,
+        PlayerJoinQueue, PlayerMap, PreparedSpawn, RegistryCache, Server, ServerJobQueue,
+        SyncMutex, SyncRwLock, TabListTickStats, TickRateManager, UncachedPlayerTarget,
+        UnpreparedDomainPlayerData, UnpreparedDomainPlayerState, WorldMap,
         can_entity_return_from_end_to_overworld, cap_positive_thread_count,
         classify_uncached_player_target, create_registered_dispatcher, direct_uuid_profile,
         is_allowed_to_enter_portal_target, is_end_return_transition, offline_uuid,
@@ -415,9 +417,27 @@ mod tests {
             default_world: world.key.clone(),
             worlds: vec![world.key.clone()],
         };
-        let mut worlds = WorldMap::new(domain.name.clone(), slice::from_ref(&domain), &[]);
-        worlds.insert(world.key.clone(), world);
+        test_server_with_worlds(
+            domain.name.clone(),
+            slice::from_ref(&domain),
+            slice::from_ref(&world),
+            player_permission_states,
+            storage_root,
+        )
+        .await
+    }
 
+    async fn test_server_with_worlds(
+        default_domain: String,
+        domains: &[ResolvedDomainConfig],
+        loaded_worlds: &[Arc<World>],
+        player_permission_states: PermissionSubjectIndex,
+        storage_root: &Path,
+    ) -> Result<Arc<Server>, String> {
+        let mut worlds = WorldMap::new(default_domain, domains, &[]);
+        for world in loaded_worlds {
+            worlds.insert(world.key.clone(), Arc::clone(world));
+        }
         let scoreboards = DomainScoreboards::load(&worlds)
             .await
             .map_err(|error| format!("test scoreboards should load: {error}"))?;
@@ -475,6 +495,197 @@ mod tests {
             pending_world_changes: SyncMutex::new(Vec::new()),
             pending_domain_switches: SyncMutex::new(Vec::new()),
         }))
+    }
+
+    #[test]
+    fn saved_location_planning_honors_explicit_world_selection() {
+        let saved_world = fresh_test_world_in_domain("target", "saved");
+        let selected_world = fresh_test_world_in_domain("target", "selected");
+        let runtime = Builder::new_current_thread().enable_all().build();
+        let Ok(runtime) = runtime else {
+            panic!("test runtime should initialize");
+        };
+        runtime.block_on(async {
+            let domain = ResolvedDomainConfig {
+                name: "target".to_owned(),
+                default_world: saved_world.key.clone(),
+                worlds: vec![saved_world.key.clone(), selected_world.key.clone()],
+            };
+            let loaded_worlds = [Arc::clone(&saved_world), Arc::clone(&selected_world)];
+            let storage_root = test_storage_root("explicit-saved-location");
+            let server = test_server_with_worlds(
+                domain.name.clone(),
+                slice::from_ref(&domain),
+                &loaded_worlds,
+                PermissionSubjectIndex::new(),
+                &storage_root,
+            )
+            .await;
+            let Ok(server) = server else {
+                panic!("test server should initialize");
+            };
+
+            let uuid = Uuid::from_u128(1);
+            let saved_player = test_player(&server, Arc::clone(&saved_world), uuid);
+            let saved_position = DVec3::new(8.25, 70.0, 8.75);
+            let saved_velocity = DVec3::new(0.25, -0.5, 0.75);
+            saved_player.base().set_position_local(saved_position);
+            saved_player.set_velocity(saved_velocity);
+            saved_player.set_health(7.0);
+            let mut saved_data = PersistentPlayerData::from_player(&saved_player);
+            if let Err(error) = server
+                .player_data_storage
+                .save_domain_data("target", uuid, &saved_data)
+                .await
+            {
+                panic!("saved target-domain data should persist: {error}");
+            }
+
+            let mismatch_plan = server
+                .load_unprepared_domain_player_state(
+                    &saved_player,
+                    "target",
+                    Some(Arc::clone(&selected_world)),
+                )
+                .await;
+            let Ok(mismatch_plan) = mismatch_plan else {
+                panic!("explicit mismatch plan should load");
+            };
+            assert!(mismatch_plan.explicit_target);
+            assert!(Arc::ptr_eq(&mismatch_plan.world, &selected_world));
+            let UnpreparedDomainPlayerState {
+                world: mismatch_world,
+                data: mismatch_data,
+                ..
+            } = mismatch_plan;
+            let mismatch_data = match mismatch_data {
+                UnpreparedDomainPlayerData::SavedWithoutLocation { data } => {
+                    assert_eq!(data.health.to_bits(), 7.0_f32.to_bits());
+                    data
+                }
+                _ => panic!("explicit mismatch must use selected-world spawn"),
+            };
+            let mismatch_spawn = PreparedSpawn {
+                position: DVec3::new(-12.5, 65.0, 4.5),
+                rotation: (90.0, 0.0),
+            };
+            let mismatch_request =
+                mismatch_world.request_player_spawn_chunks(mismatch_spawn.position);
+            let mismatch_state = DomainPlayerState {
+                world: mismatch_world,
+                data: DomainPlayerData::SavedWithoutLocation {
+                    data: mismatch_data,
+                    spawn: mismatch_spawn,
+                },
+                _spawn_chunk_request: mismatch_request,
+            };
+            assert!(Server::root_vehicle_to_restore(&mismatch_state).is_none());
+            let mismatch_player = test_player(
+                &server,
+                Arc::clone(&mismatch_state.world),
+                Uuid::from_u128(2),
+            );
+            Server::apply_domain_player_state(&mismatch_player, &mismatch_state);
+            assert_eq!(mismatch_player.position(), mismatch_spawn.position);
+            assert_eq!(mismatch_player.velocity(), DVec3::ZERO);
+            assert_eq!(mismatch_player.get_health().to_bits(), 7.0_f32.to_bits());
+
+            let matching_plan = server
+                .load_unprepared_domain_player_state(
+                    &saved_player,
+                    "target",
+                    Some(Arc::clone(&saved_world)),
+                )
+                .await;
+            let Ok(matching_plan) = matching_plan else {
+                panic!("matching explicit plan should load");
+            };
+            assert!(matching_plan.explicit_target);
+            assert!(Arc::ptr_eq(&matching_plan.world, &saved_world));
+            let UnpreparedDomainPlayerState {
+                world: matching_world,
+                data: matching_data,
+                ..
+            } = matching_plan;
+            let matching_data = match matching_data {
+                UnpreparedDomainPlayerData::SavedRestored { data } => data,
+                _ => panic!("matching explicit world should restore saved location"),
+            };
+            let matching_request = matching_world.request_player_spawn_chunks(saved_position);
+            let matching_state = DomainPlayerState {
+                world: matching_world,
+                data: DomainPlayerData::SavedRestored {
+                    data: matching_data,
+                },
+                _spawn_chunk_request: matching_request,
+            };
+            let matching_player = test_player(
+                &server,
+                Arc::clone(&matching_state.world),
+                Uuid::from_u128(3),
+            );
+            Server::apply_domain_player_state(&matching_player, &matching_state);
+            assert_eq!(matching_player.position(), saved_position);
+            assert_eq!(matching_player.velocity(), saved_velocity);
+            assert_eq!(matching_player.get_health().to_bits(), 7.0_f32.to_bits());
+
+            let implicit_plan = server
+                .load_unprepared_domain_player_state(&saved_player, "target", None)
+                .await;
+            let Ok(implicit_plan) = implicit_plan else {
+                panic!("ordinary domain-switch plan should load");
+            };
+            assert!(!implicit_plan.explicit_target);
+            assert!(Arc::ptr_eq(&implicit_plan.world, &saved_world));
+            assert!(matches!(
+                &implicit_plan.data,
+                UnpreparedDomainPlayerData::SavedRestored { .. }
+            ));
+
+            saved_data.world = "target:missing".to_owned();
+            if let Err(error) = server
+                .player_data_storage
+                .save_domain_data("target", uuid, &saved_data)
+                .await
+            {
+                panic!("unavailable saved-world data should persist: {error}");
+            }
+
+            let missing_explicit_plan = server
+                .load_unprepared_domain_player_state(
+                    &saved_player,
+                    "target",
+                    Some(Arc::clone(&selected_world)),
+                )
+                .await;
+            let Ok(missing_explicit_plan) = missing_explicit_plan else {
+                panic!("unavailable saved world should fall back to explicit target");
+            };
+            assert!(missing_explicit_plan.explicit_target);
+            assert!(Arc::ptr_eq(&missing_explicit_plan.world, &selected_world));
+            assert!(matches!(
+                &missing_explicit_plan.data,
+                UnpreparedDomainPlayerData::SavedWithoutLocation { .. }
+            ));
+
+            let missing_implicit_plan = server
+                .load_unprepared_domain_player_state(&saved_player, "target", None)
+                .await;
+            let Ok(missing_implicit_plan) = missing_implicit_plan else {
+                panic!("unavailable saved world should use domain spawn");
+            };
+            assert!(!missing_implicit_plan.explicit_target);
+            assert!(Arc::ptr_eq(&missing_implicit_plan.world, &saved_world));
+            assert!(matches!(
+                &missing_implicit_plan.data,
+                UnpreparedDomainPlayerData::SavedWithoutLocation { .. }
+            ));
+
+            drop(server);
+            if let Err(error) = fs::remove_dir_all(&storage_root).await {
+                panic!("test storage should be removed: {error}");
+            }
+        });
     }
 
     fn test_player(server: &Arc<Server>, world: Arc<World>, uuid: Uuid) -> Arc<Player> {
@@ -587,13 +798,13 @@ mod tests {
             )
             .0;
             assert!(server.reserve_player_join(&joining));
-            let default_spawn = PreparedSpawn {
+            let spawn = PreparedSpawn {
                 position: spawn_position,
                 rotation: (0.0, 0.0),
             };
             let state = DomainPlayerState {
                 world: Arc::clone(&world),
-                data: DomainPlayerData::FirstVisit { default_spawn },
+                data: DomainPlayerData::FirstVisit { spawn },
                 _spawn_chunk_request: world.request_player_spawn_chunks(spawn_position),
             };
 
@@ -1403,16 +1614,28 @@ struct DomainPlayerState {
     _spawn_chunk_request: ChunkRequestHandle,
 }
 
+struct UnpreparedDomainPlayerState {
+    world: Arc<World>,
+    explicit_target: bool,
+    data: UnpreparedDomainPlayerData,
+}
+
+enum UnpreparedDomainPlayerData {
+    SavedRestored { data: Box<PersistentPlayerData> },
+    SavedWithoutLocation { data: Box<PersistentPlayerData> },
+    FirstVisit,
+}
+
 enum DomainPlayerData {
     SavedRestored {
         data: Box<PersistentPlayerData>,
     },
     SavedWithoutLocation {
         data: Box<PersistentPlayerData>,
-        default_spawn: PreparedSpawn,
+        spawn: PreparedSpawn,
     },
     FirstVisit {
-        default_spawn: PreparedSpawn,
+        spawn: PreparedSpawn,
     },
 }
 
@@ -1420,7 +1643,6 @@ struct DomainSwitchRequest {
     player: Arc<Player>,
     target_domain: String,
     target_world: Option<Arc<World>>,
-    restore_saved_location: bool,
 }
 
 /// Failure while atomically editing one player's persisted permission state.
@@ -2732,7 +2954,7 @@ impl Server {
 
     async fn prepare_player_join(&self, player: &Player) -> Result<DomainPlayerState, String> {
         let target_domain = self.load_join_domain(player).await?;
-        self.load_domain_player_state(player, &target_domain, None, true)
+        self.load_domain_player_state(player, &target_domain, None)
             .await
     }
 
@@ -3410,18 +3632,26 @@ impl Server {
         &self,
         player: &Player,
         target_domain: &str,
-        fallback_world: Option<Arc<World>>,
-        restore_saved_location: bool,
+        explicit_target_world: Option<Arc<World>>,
     ) -> Result<DomainPlayerState, String> {
-        let explicit_target_world = fallback_world.is_some();
-        let mut world = self
+        let state = self
+            .load_unprepared_domain_player_state(player, target_domain, explicit_target_world)
+            .await?;
+        self.prepare_domain_player_state(target_domain, state).await
+    }
+
+    async fn load_unprepared_domain_player_state(
+        &self,
+        player: &Player,
+        target_domain: &str,
+        explicit_target_world: Option<Arc<World>>,
+    ) -> Result<UnpreparedDomainPlayerState, String> {
+        let has_explicit_target = explicit_target_world.is_some();
+        let default_world = self
             .worlds
             .default_world(target_domain)
             .cloned()
             .ok_or_else(|| format!("domain {target_domain} has no default world"))?;
-        if let Some(fallback_world) = fallback_world {
-            world = fallback_world;
-        }
 
         match self
             .player_data_storage
@@ -3429,41 +3659,32 @@ impl Server {
             .await
         {
             Ok(Some(saved_data)) => {
-                let restore_location = restore_saved_location
-                    && self.resolve_saved_world(
-                        &saved_data.world,
-                        target_domain,
-                        &mut world,
-                        &player.gameprofile.name,
-                    );
-                let (data, spawn_position) = if restore_location {
-                    let spawn_position =
-                        DVec3::new(saved_data.pos[0], saved_data.pos[1], saved_data.pos[2]);
+                let saved_world = self.resolve_saved_world(
+                    &saved_data.world,
+                    target_domain,
+                    explicit_target_world.as_ref().map(|world| &world.key),
+                    &player.gameprofile.name,
+                );
+                let (world, data) = if let Some(saved_world) = saved_world {
                     (
-                        DomainPlayerData::SavedRestored {
+                        saved_world,
+                        UnpreparedDomainPlayerData::SavedRestored {
                             data: Box::new(saved_data),
                         },
-                        spawn_position,
                     )
                 } else {
-                    let (default_world, default_spawn) = self
-                        .prepare_domain_default_spawn(target_domain, explicit_target_world, &world)
-                        .await?;
-                    world = default_world;
                     (
-                        DomainPlayerData::SavedWithoutLocation {
+                        explicit_target_world.unwrap_or(default_world),
+                        UnpreparedDomainPlayerData::SavedWithoutLocation {
                             data: Box::new(saved_data),
-                            default_spawn,
                         },
-                        default_spawn.position,
                     )
                 };
-                let spawn_chunk_request = world.prepare_player_spawn_chunks(spawn_position).await?;
                 log::info!("Loaded saved data for player {}", player.gameprofile.name);
-                Ok(DomainPlayerState {
+                Ok(UnpreparedDomainPlayerState {
                     world,
                     data,
-                    _spawn_chunk_request: spawn_chunk_request,
+                    explicit_target: has_explicit_target,
                 })
             }
             Ok(None) => {
@@ -3472,17 +3693,10 @@ impl Server {
                     player.gameprofile.name,
                     target_domain
                 );
-                let (default_world, default_spawn) = self
-                    .prepare_domain_default_spawn(target_domain, explicit_target_world, &world)
-                    .await?;
-                world = default_world;
-                let spawn_chunk_request = world
-                    .prepare_player_spawn_chunks(default_spawn.position)
-                    .await?;
-                Ok(DomainPlayerState {
-                    world,
-                    data: DomainPlayerData::FirstVisit { default_spawn },
-                    _spawn_chunk_request: spawn_chunk_request,
+                Ok(UnpreparedDomainPlayerState {
+                    world: explicit_target_world.unwrap_or(default_world),
+                    data: UnpreparedDomainPlayerData::FirstVisit,
+                    explicit_target: has_explicit_target,
                 })
             }
             Err(e) => Err(format!(
@@ -3492,7 +3706,48 @@ impl Server {
         }
     }
 
-    async fn prepare_domain_default_spawn(
+    async fn prepare_domain_player_state(
+        &self,
+        target_domain: &str,
+        state: UnpreparedDomainPlayerState,
+    ) -> Result<DomainPlayerState, String> {
+        let UnpreparedDomainPlayerState {
+            mut world,
+            explicit_target,
+            data,
+        } = state;
+        let (data, spawn_position) = match data {
+            UnpreparedDomainPlayerData::SavedRestored { data } => {
+                let spawn_position = DVec3::new(data.pos[0], data.pos[1], data.pos[2]);
+                (DomainPlayerData::SavedRestored { data }, spawn_position)
+            }
+            UnpreparedDomainPlayerData::SavedWithoutLocation { data } => {
+                let (spawn_world, spawn) = self
+                    .prepare_target_spawn(target_domain, explicit_target, &world)
+                    .await?;
+                world = spawn_world;
+                (
+                    DomainPlayerData::SavedWithoutLocation { data, spawn },
+                    spawn.position,
+                )
+            }
+            UnpreparedDomainPlayerData::FirstVisit => {
+                let (spawn_world, spawn) = self
+                    .prepare_target_spawn(target_domain, explicit_target, &world)
+                    .await?;
+                world = spawn_world;
+                (DomainPlayerData::FirstVisit { spawn }, spawn.position)
+            }
+        };
+        let spawn_chunk_request = world.prepare_player_spawn_chunks(spawn_position).await?;
+        Ok(DomainPlayerState {
+            world,
+            data,
+            _spawn_chunk_request: spawn_chunk_request,
+        })
+    }
+
+    async fn prepare_target_spawn(
         &self,
         target_domain: &str,
         explicit_target_world: bool,
@@ -3541,29 +3796,33 @@ impl Server {
         &self,
         saved_world: &str,
         target_domain: &str,
-        world: &mut Arc<World>,
+        explicit_target_world: Option<&Identifier>,
         player_name: &str,
-    ) -> bool {
+    ) -> Option<Arc<World>> {
         let Ok(saved_world_key) = saved_world.parse::<Identifier>() else {
             log::warn!(
-                "Saved world {saved_world} for player {player_name} is invalid, using domain default spawn"
+                "Saved world {saved_world} for player {player_name} is invalid, using target spawn"
             );
-            return false;
+            return None;
         };
         if saved_world_key.namespace.as_ref() != target_domain {
             log::warn!(
-                "Saved world {saved_world_key} for player {player_name} is outside target domain {target_domain}, using domain default spawn"
+                "Saved world {saved_world_key} for player {player_name} is outside target domain {target_domain}, using target spawn"
             );
-            return false;
+            return None;
+        }
+        if let Some(explicit_target_world) = explicit_target_world
+            && explicit_target_world != &saved_world_key
+        {
+            return None;
         }
         let Some(saved_world) = self.worlds.get(&saved_world_key) else {
             log::warn!(
-                "Saved world {saved_world_key} for player {player_name} is missing, using domain default spawn"
+                "Saved world {saved_world_key} for player {player_name} is missing, using target spawn"
             );
-            return false;
+            return None;
         };
-        *world = saved_world.clone();
-        true
+        Some(Arc::clone(saved_world))
     }
 
     fn apply_domain_player_state(player: &Arc<Player>, state: &DomainPlayerState) {
@@ -3571,15 +3830,12 @@ impl Server {
             DomainPlayerData::SavedRestored { data } => {
                 data.apply_to_player(player);
             }
-            DomainPlayerData::SavedWithoutLocation {
-                data,
-                default_spawn,
-            } => {
-                apply_default_spawn(player, &state.world, *default_spawn);
+            DomainPlayerData::SavedWithoutLocation { data, spawn } => {
+                apply_default_spawn(player, &state.world, *spawn);
                 data.apply_to_player_without_location(player);
             }
-            DomainPlayerData::FirstVisit { default_spawn } => {
-                apply_default_spawn(player, &state.world, *default_spawn);
+            DomainPlayerData::FirstVisit { spawn } => {
+                apply_default_spawn(player, &state.world, *spawn);
             }
         }
     }
@@ -4701,12 +4957,14 @@ impl Server {
                 player,
                 target_domain,
                 target_world: None,
-                restore_saved_location: true,
             });
         Ok(())
     }
 
-    /// Queues a cross-domain teleport using saved target-domain location or target-world spawn.
+    /// Queues a cross-domain world selection.
+    ///
+    /// A matching saved world resumes its saved location. A different selected
+    /// world uses that world's spawn while restoring non-location domain data.
     pub fn queue_domain_switch_to_world(
         &self,
         player: Arc<Player>,
@@ -4726,7 +4984,6 @@ impl Server {
                 player,
                 target_domain,
                 target_world: Some(target_world),
-                restore_saved_location: false, // FIXME: lets you switch domains to whatever world you want, but always resets your position to spawn
             });
         Ok(())
     }
@@ -4754,7 +5011,6 @@ impl Server {
             player,
             target_domain,
             target_world,
-            restore_saved_location,
         } = request;
         if player.connection.closed() {
             return Ok(());
@@ -4782,12 +5038,7 @@ impl Server {
         }
 
         let target_state = match self
-            .load_domain_player_state(
-                &player,
-                &target_domain,
-                target_world.clone(),
-                restore_saved_location,
-            )
+            .load_domain_player_state(&player, &target_domain, target_world)
             .await
         {
             Ok(state) => state,
