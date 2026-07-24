@@ -3295,6 +3295,25 @@ mod tests {
     }
 
     #[test]
+    fn drained_items_return_without_player_inventory_slots() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let transient = SimpleContainer::new(1).into_shared();
+        transient
+            .lock()
+            .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 3));
+        let mut builder = MenuBuilder::new(None, 1);
+        let transient_slots = builder.section(Arc::clone(&transient), 1);
+        builder.drain([transient_slots]);
+        let mut menu = builder.build(MenuKindType::Basic(BasicKind {}));
+
+        menu.removed(&player);
+
+        assert!(transient.lock().get_item(0).is_empty());
+        assert_eq!(player.inventory.lock().get_item(0).count(), 3);
+    }
+
+    #[test]
     fn menu_item_return_policy_preserves_world_changes_only() {
         init_test_registry();
         let connected = test_player(Arc::clone(test_world()));

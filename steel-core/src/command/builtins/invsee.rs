@@ -166,7 +166,6 @@ fn readonly_section(
             index,
             may_place.clone(),
             Some(may_pickup.clone()),
-            64,
         ))
     });
     builder.custom_section(slots, [container.clone()])

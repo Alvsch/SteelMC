@@ -16,12 +16,11 @@ pub type MayPlaceFn = Arc<dyn Fn(usize, &ItemStack) -> bool + Send + Sync>;
 pub type MayPickupFn =
     Arc<dyn Fn(usize, &ContainerLockGuard, &Player, &ItemStack) -> bool + Send + Sync>;
 
-/// A [`NormalSlot`] whose place/pickup rules and max stack size are closures.
+/// A [`NormalSlot`] with custom place and pickup rules.
 pub struct RestrictedSlot {
     base: NormalSlot,
     may_place_fn: MayPlaceFn,
     may_pickup_fn: Option<MayPickupFn>,
-    max_stack: i32,
 }
 
 impl RestrictedSlot {
@@ -31,13 +30,11 @@ impl RestrictedSlot {
         index: usize,
         may_place_fn: MayPlaceFn,
         may_pickup_fn: Option<MayPickupFn>,
-        max_stack: i32,
     ) -> Self {
         Self {
             base: NormalSlot::new(container, index),
             may_place_fn,
             may_pickup_fn,
-            max_stack,
         }
     }
 }
@@ -70,8 +67,8 @@ impl Slot for RestrictedSlot {
         })
     }
 
-    fn get_max_stack_size(&self, _guard: &ContainerLockGuard) -> i32 {
-        self.max_stack
+    fn get_max_stack_size(&self, guard: &ContainerLockGuard) -> i32 {
+        self.base.get_max_stack_size(guard)
     }
 
     fn set_changed(&self, guard: &mut ContainerLockGuard) {
@@ -84,5 +81,79 @@ impl Slot for RestrictedSlot {
 
     fn container_key(&self) -> Option<(ContainerId, usize)> {
         self.base.container_key()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::slice;
+    use std::sync::Arc;
+
+    use steel_registry::data_components::vanilla_components::MAX_STACK_SIZE;
+    use steel_registry::{item_stack::ItemStack, test_support::init_test_registry, vanilla_items};
+    use steel_utils::locks::{IntoShared as _, SyncMutex};
+    use steel_utils::{DowncastType, DowncastTypeKey};
+
+    use super::RestrictedSlot;
+    use crate::inventory::container::{Container, SimpleContainer};
+    use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
+    use crate::inventory::slots::Slot as _;
+
+    struct SingleItemContainer {
+        item: ItemStack,
+        max_stack_size: i32,
+    }
+
+    // SAFETY: This test-only key uniquely identifies `SingleItemContainer`.
+    unsafe impl DowncastType for SingleItemContainer {
+        const TYPE_KEY: DowncastTypeKey =
+            DowncastTypeKey::new("steel:test/container/restricted_slot_single_item");
+    }
+
+    impl Container for SingleItemContainer {
+        fn items(&self) -> &[ItemStack] {
+            slice::from_ref(&self.item)
+        }
+
+        fn items_mut(&mut self) -> &mut [ItemStack] {
+            slice::from_mut(&mut self.item)
+        }
+
+        fn get_max_stack_size(&self) -> i32 {
+            self.max_stack_size
+        }
+
+        fn set_changed(&mut self) {}
+    }
+
+    #[test]
+    fn max_stack_size_delegates_to_the_container_and_item() {
+        init_test_registry();
+        let capped = Arc::new(SyncMutex::new(SingleItemContainer {
+            item: ItemStack::empty(),
+            max_stack_size: 1,
+        }));
+        let capped_ref = ContainerRef::from(capped);
+        let capped_slot = RestrictedSlot::new(capped_ref.clone(), 0, Arc::new(|_, _| true), None);
+        let mut capped_guard = ContainerLockGuard::lock_all(&[capped_ref]);
+        let capped_remainder = capped_slot.safe_insert(
+            &mut capped_guard,
+            ItemStack::with_count(&vanilla_items::STONE, 64),
+            64,
+        );
+        assert_eq!(capped_slot.get_item(&capped_guard).count(), 1);
+        assert_eq!(capped_remainder.count(), 63);
+
+        let default = SimpleContainer::new(1).into_shared();
+        let default_ref = ContainerRef::from(default);
+        let default_slot = RestrictedSlot::new(default_ref.clone(), 0, Arc::new(|_, _| true), None);
+        let mut default_guard = ContainerLockGuard::lock_all(&[default_ref]);
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+        stack.set(MAX_STACK_SIZE, 99);
+        stack.set_count(99);
+        let default_remainder = default_slot.safe_insert(&mut default_guard, stack, 99);
+
+        assert!(default_remainder.is_empty());
+        assert_eq!(default_slot.get_item(&default_guard).count(), 99);
     }
 }

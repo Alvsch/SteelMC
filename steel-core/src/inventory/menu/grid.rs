@@ -991,7 +991,6 @@ impl MenuBuilder {
                         filler_next,
                         deny_place.clone(),
                         deny_pickup.clone(),
-                        64,
                     )));
                     filler_next += 1;
                 }
@@ -1015,7 +1014,6 @@ impl MenuBuilder {
                                 *offset + rect.local_index(x, y),
                                 may_place.clone(),
                                 may_pickup.clone(),
-                                64,
                             )));
                         }
                         PlacementKind::Result { handler, container } => {

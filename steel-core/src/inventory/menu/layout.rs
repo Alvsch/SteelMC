@@ -1,10 +1,10 @@
-use std::{mem, range::Range};
+use std::{mem, range::Range, sync::Arc};
 
 use steel_registry::item_stack::ItemStack;
 
 use crate::{
     inventory::{
-        lock::ContainerLockGuard,
+        lock::{ContainerLockGuard, ContainerRef},
         menu::{behavior::MenuBehavior, builder::Route},
         slots::Slot,
     },
@@ -31,7 +31,11 @@ impl MenuLayout {
             return;
         }
 
-        let mut guard = behavior.lock_all_containers();
+        let mut guard = if return_to_inventory {
+            behavior.lock_all_containers_with(ContainerRef::from(Arc::clone(&player.inventory)))
+        } else {
+            behavior.lock_all_containers()
+        };
         for range in &self.drain_sections {
             for slot_index in *range {
                 let item = mem::take(behavior.slots()[slot_index].get_item_mut(&mut guard));

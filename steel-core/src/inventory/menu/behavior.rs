@@ -105,6 +105,14 @@ impl MenuBehavior {
         ContainerLockGuard::lock_all(&self.container_refs)
     }
 
+    /// Locks the menu containers together with one additional container.
+    #[must_use]
+    pub(crate) fn lock_all_containers_with(&self, additional: ContainerRef) -> ContainerLockGuard {
+        let mut container_refs = self.container_refs.clone();
+        container_refs.push(additional);
+        ContainerLockGuard::lock_all(&container_refs)
+    }
+
     /// The slots of this menu, fixed at build time.
     #[must_use]
     pub fn slots(&self) -> &[SlotType] {
@@ -1133,7 +1141,6 @@ mod tests {
                     0,
                     Arc::new(|_, _| true),
                     None,
-                    64,
                 )),
                 SlotType::Normal(NormalSlot::new(container_ref.clone(), 1)),
             ],

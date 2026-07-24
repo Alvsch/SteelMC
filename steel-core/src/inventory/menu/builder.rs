@@ -493,7 +493,6 @@ impl MenuBuilder {
                 index,
                 may_place.clone(),
                 may_pickup.clone(),
-                64,
             )));
         }
         self.register_container(container);
