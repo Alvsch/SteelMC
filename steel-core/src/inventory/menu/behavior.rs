@@ -850,7 +850,7 @@ fn hashed_stack_matches(hash: &HashedStack, item: &ItemStack) -> bool {
     match hash {
         HashedStack::Empty => {
             if !item.is_empty() {
-                log::info!("HashedStack mismatch: client sent Empty, server has {item}");
+                log::debug!("HashedStack mismatch: client sent Empty, server has {item}");
                 return false;
             }
             true
@@ -861,7 +861,7 @@ fn hashed_stack_matches(hash: &HashedStack, item: &ItemStack) -> bool {
             components,
         } => {
             if item.is_empty() {
-                log::info!(
+                log::debug!(
                     "HashedStack mismatch: client sent item_id={item_id} count={count}, server has Empty"
                 );
                 return false;
@@ -869,14 +869,14 @@ fn hashed_stack_matches(hash: &HashedStack, item: &ItemStack) -> bool {
 
             let local_id = item.item.id() as i32;
             if local_id != *item_id {
-                log::info!(
+                log::debug!(
                     "HashedStack mismatch: item_id client={item_id} server={local_id} ({})",
                     item.item.key
                 );
                 return false;
             }
             if item.count != *count {
-                log::info!(
+                log::debug!(
                     "HashedStack mismatch: count client={count} server={} for {}",
                     item.count,
                     item.item.key
@@ -902,7 +902,7 @@ fn validate_component_hashes(hashed: &HashedPatchMap, patch: &DataComponentPatch
     let hashed_removed: FxHashSet<i32> = hashed.removed_components.iter().copied().collect();
 
     if local_removed != hashed_removed {
-        log::info!(
+        log::debug!(
             "HashedStack mismatch: removed components differ - client={hashed_removed:?} server={local_removed:?}"
         );
         return false;
@@ -917,23 +917,23 @@ fn validate_component_hashes(hashed: &HashedPatchMap, patch: &DataComponentPatch
             let id = id as i32;
 
             let Some(&expected_hash) = hashed.added_components.get(&id) else {
-                log::info!(
+                log::debug!(
                     "HashedStack mismatch: client missing hash for component {key} (id={id})"
                 );
                 return false;
             };
 
             let Some(component_type) = REGISTRY.data_components.by_id(id as usize) else {
-                log::info!("HashedStack mismatch: component {key} has no registry entry");
+                log::debug!("HashedStack mismatch: component {key} has no registry entry");
                 return false;
             };
             let Ok(actual_hash) = component_type.compute_hash(value) else {
-                log::info!("HashedStack mismatch: component {key} is not persistently hashable");
+                log::debug!("HashedStack mismatch: component {key} is not persistently hashable");
                 return false;
             };
 
             if actual_hash != expected_hash {
-                log::info!(
+                log::debug!(
                     "HashedStack mismatch: component {key} hash differs - client={expected_hash} server={actual_hash}"
                 );
                 return false;
@@ -944,11 +944,11 @@ fn validate_component_hashes(hashed: &HashedPatchMap, patch: &DataComponentPatch
     // The client must not send components we don't have.
     for &id in hashed.added_components.keys() {
         let Some(key) = REGISTRY.data_components.get_key_by_id(id as usize) else {
-            log::info!("HashedStack mismatch: client sent unknown component id={id}");
+            log::debug!("HashedStack mismatch: client sent unknown component id={id}");
             return false;
         };
         if !matches!(patch.get_entry(key), Some(ComponentPatchEntry::Set(_))) {
-            log::info!(
+            log::debug!(
                 "HashedStack mismatch: client claims component {key} exists but server doesn't have it"
             );
             return false;
