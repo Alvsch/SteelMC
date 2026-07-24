@@ -145,7 +145,10 @@ impl AnvilKind {
         self.repair_item_count.store(0, Ordering::Relaxed);
 
         let mut result = first.clone();
-        let mut enchantments = first.get_enchantments().cloned().unwrap_or_default();
+        let mut enchantments = first
+            .get_enchantments_for_crafting()
+            .cloned()
+            .unwrap_or_default();
         let prior_repair_cost: i64 = i64::from(*first.get(REPAIR_COST).unwrap_or(&0))
             + i64::from(*second.get(REPAIR_COST).unwrap_or(&0));
 
@@ -196,8 +199,10 @@ impl AnvilKind {
                 }
 
                 // Enchantment merging.
-                let sacrifice_enchantments: ItemEnchantments =
-                    second.get_enchantments().cloned().unwrap_or_default();
+                let sacrifice_enchantments: ItemEnchantments = second
+                    .get_enchantments_for_crafting()
+                    .cloned()
+                    .unwrap_or_default();
                 let mut any_compatible = false;
                 let mut any_incompatible = false;
 
@@ -218,7 +223,7 @@ impl AnvilKind {
                         || player.has_infinite_materials();
 
                     for (existing_key, _) in first
-                        .get_enchantments()
+                        .get_enchantments_for_crafting()
                         .unwrap_or(&ItemEnchantments::empty())
                         .iter()
                     {

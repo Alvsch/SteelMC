@@ -551,12 +551,18 @@ impl ItemStack {
 
     #[must_use]
     pub fn get_enchantments(&self) -> Option<&ItemEnchantments> {
+        self.get(ENCHANTMENTS)
+    }
+
+    /// Vanilla `EnchantmentHelper.getEnchantmentsForCrafting`: enchanted books
+    /// expose `STORED_ENCHANTMENTS` to crafting operations, while every other
+    /// item exposes `ENCHANTMENTS`.
+    #[must_use]
+    pub fn get_enchantments_for_crafting(&self) -> Option<&ItemEnchantments> {
         self.get(self.enchantment_component())
     }
 
-    /// Vanilla `EnchantmentHelper.getComponentType`: enchanted books keep their
-    /// enchantments in `STORED_ENCHANTMENTS`; every other item uses
-    /// `ENCHANTMENTS`.
+    /// Vanilla `EnchantmentHelper.getComponentType`.
     #[must_use]
     fn enchantment_component(&self) -> DataComponentType<ItemEnchantments> {
         if self.is(&vanilla_items::ENCHANTED_BOOK) {
@@ -1237,6 +1243,30 @@ fn decode_persistent_count(tag: Option<BorrowedNbtTag<'_, '_>>) -> Option<i32> {
         None => 1,
     };
     (1..=99).contains(&count).then_some(count)
+}
+
+#[cfg(test)]
+mod enchantment_tests {
+    use super::ItemStack;
+    use crate::{test_support::init_test_registry, vanilla_enchantments, vanilla_items};
+
+    #[test]
+    fn stored_book_enchantments_are_not_active_item_enchantments() {
+        init_test_registry();
+        let mut book = ItemStack::new(&vanilla_items::ENCHANTED_BOOK);
+        book.upgrade_enchantment(vanilla_enchantments::SHARPNESS.key.clone(), 3);
+
+        assert_eq!(
+            book.get_enchantment_level(&vanilla_enchantments::SHARPNESS.key),
+            0
+        );
+        assert_eq!(
+            book.get_enchantments_for_crafting().map(|enchantments| {
+                enchantments.get_level(&vanilla_enchantments::SHARPNESS.key)
+            }),
+            Some(3)
+        );
+    }
 }
 
 #[cfg(test)]
