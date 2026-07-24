@@ -370,11 +370,10 @@ impl MenuBuilder {
     ///
     /// # Example
     /// ```rust
-    /// use steel_registry::vanilla_menu_types;
     /// use steel_core::inventory::prelude::*;
     /// use steel_core::inventory::menu::kinds::BasicKind;
     ///
-    /// let mut b = MenuBuilder::new(&vanilla_menu_types::BREWING_STAND, 0);
+    /// let mut b = MenuBuilder::new(None, 0);
     ///
     /// let mut stand = b.split(SimpleContainer::new(5).into_shared());
     /// let bottles = b.section(&mut stand, 3); // slots 0..3
@@ -434,11 +433,11 @@ impl MenuBuilder {
     ///
     /// # Example
     /// ```rust
-    /// use steel_registry::{vanilla_items, vanilla_menu_types};
+    /// use steel_registry::vanilla_items;
     /// use steel_core::inventory::prelude::*;
     /// use steel_core::inventory::menu::kinds::BasicKind;
     ///
-    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, 0);
+    /// let mut b = MenuBuilder::new(None, 0);
     ///
     /// let container = SimpleContainer::new(9).into_shared();
     /// let fuel = b.restricted_section(container, 9, |_slot, stack| {
@@ -511,13 +510,12 @@ impl MenuBuilder {
     /// ```rust
     /// use steel_registry::vanilla_items;
     /// use steel_registry::item_stack::ItemStack;
-    /// use steel_registry::vanilla_menu_types;
     /// use steel_core::inventory::prelude::*;
     /// use steel_core::inventory::menu::kinds::BasicKind;
     ///
     /// let container_id = 0;
     ///
-    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+    /// let mut b = MenuBuilder::new(None, container_id);
     /// let items = vec![ItemStack::new(&vanilla_items::GRAY_STAINED_GLASS_PANE); 9];
     /// let container = SimpleContainer::from_items(items).into_shared();
     /// let display_section = b.display_section(container, 9);
@@ -635,7 +633,7 @@ impl MenuBuilder {
     /// ```rust
     /// use std::sync::Arc;
     ///
-    /// use steel_registry::{item_stack::ItemStack, vanilla_items, vanilla_menu_types};
+    /// use steel_registry::{item_stack::ItemStack, vanilla_items};
     /// use steel_utils::locks::SyncMutex;
     ///
     /// use steel_core::inventory::prelude::*;
@@ -644,7 +642,7 @@ impl MenuBuilder {
     ///
     /// let container_id = 0;
     ///
-    /// let mut b = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X2, container_id);
+    /// let mut b = MenuBuilder::new(None, container_id);
     ///
     /// let items = vec![ItemStack::empty(); 9];
     /// let upper_container = SimpleContainer::from_items(items).into_shared();
@@ -665,8 +663,23 @@ impl MenuBuilder {
     }
 
     /// Consumes the builder, creating the finished [`Menu`].
+    ///
+    /// # Panics
+    /// Panics if the number of slots does not match the client layout declared
+    /// by the menu type.
     #[must_use]
     pub fn build(self, kind: impl Into<MenuKindType>) -> Menu {
+        if let Some(menu_type) = self.menu_type {
+            assert_eq!(
+                self.slots.len(),
+                menu_type.slot_count,
+                "menu type {} expects {} slots, but the builder has {}",
+                menu_type.key,
+                menu_type.slot_count,
+                self.slots.len(),
+            );
+        }
+
         let mut behavior = MenuBehavior::new(
             self.instance,
             self.slots,
@@ -737,5 +750,22 @@ impl MenuBuilder {
     /// Returns a section spanning `start..self.slots.len()`.
     fn section_from(&self, start: usize) -> Section {
         Section::new(self.instance, start..self.slots.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::vanilla_menu_types;
+
+    use super::*;
+    use crate::inventory::menu::kinds::BasicKind;
+
+    #[test]
+    #[should_panic(
+        expected = "menu type minecraft:generic_9x6 expects 90 slots, but the builder has 0"
+    )]
+    fn build_rejects_a_slot_count_that_disagrees_with_the_menu_type() {
+        let _ = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X6, 1)
+            .build(MenuKindType::Basic(BasicKind {}));
     }
 }

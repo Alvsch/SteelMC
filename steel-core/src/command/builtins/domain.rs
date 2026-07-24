@@ -134,6 +134,7 @@ fn domain_menu(
             })
             .collect()
     });
+    b.player_inventory(&player.inventory);
 
     b.build(MenuKindType::custom(DomainMenuKind {
         map,
