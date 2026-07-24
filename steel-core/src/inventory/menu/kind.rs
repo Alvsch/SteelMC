@@ -14,6 +14,9 @@ use crate::inventory::click::{Click, ClickOutcome, QuickCraft};
 
 /// Per-menu behavior that isn't shared: recompute-on-change, validity, close
 /// cleanup, and the optional shift-click override.
+///
+/// Menu transitions requested while a hook owns mutable access to the current
+/// menu are applied after that hook returns.
 #[enum_dispatch]
 pub trait MenuKind: Send + Sync {
     /// Recompute recipe-driven slots after a click touched a real slot.

@@ -44,6 +44,40 @@ pub enum EquipmentSwapResult {
     Fail,
 }
 
+pub(super) struct OpenMenuState {
+    menu: Option<Menu>,
+    dispatch: Option<OpenMenuDispatch>,
+}
+
+struct OpenMenuDispatch {
+    container_id: u8,
+    actions: Vec<DeferredMenuAction>,
+}
+
+enum DeferredMenuAction {
+    Close { send_packet: bool },
+    Open(Box<PreparedMenu>),
+}
+
+struct PreparedMenu {
+    title: TextComponent,
+    menu: Menu,
+}
+
+enum OpenMenuUnavailable {
+    Closed,
+    Unavailable,
+}
+
+impl OpenMenuState {
+    pub(super) const fn new() -> Self {
+        Self {
+            menu: None,
+            dispatch: None,
+        }
+    }
+}
+
 /// Maps inventory slot indices (36+) to equipment slots.
 /// Slots 36-39: Armor (feet, legs, chest, head)
 /// Slot 40: Offhand
@@ -741,6 +775,78 @@ impl PlayerInventory {
 }
 
 impl Player {
+    fn take_open_menu_for_callback(
+        &self,
+        expected_container_id: Option<i32>,
+    ) -> Result<Menu, OpenMenuUnavailable> {
+        let mut open_menu = self.open_menu.lock();
+        if open_menu.dispatch.is_some() {
+            return Err(OpenMenuUnavailable::Unavailable);
+        }
+
+        let Some(menu) = open_menu.menu.as_ref() else {
+            return Err(OpenMenuUnavailable::Closed);
+        };
+        if expected_container_id.is_some_and(|expected| i32::from(menu.container_id()) != expected)
+        {
+            return Err(OpenMenuUnavailable::Unavailable);
+        }
+
+        let container_id = menu.container_id();
+        let Some(menu) = open_menu.menu.take() else {
+            return Err(OpenMenuUnavailable::Unavailable);
+        };
+        open_menu.dispatch = Some(OpenMenuDispatch {
+            container_id,
+            actions: Vec::new(),
+        });
+        Ok(menu)
+    }
+
+    fn finish_open_menu_callback(&self, menu: Menu) {
+        let actions = {
+            let mut open_menu = self.open_menu.lock();
+            let Some(dispatch) = open_menu.dispatch.take() else {
+                open_menu.menu = Some(menu);
+                return;
+            };
+            open_menu.menu = Some(menu);
+            dispatch.actions
+        };
+
+        self.run_deferred_menu_actions(actions);
+    }
+
+    fn finish_open_menu_removal(&self) {
+        let actions = {
+            let mut open_menu = self.open_menu.lock();
+            let Some(dispatch) = open_menu.dispatch.take() else {
+                return;
+            };
+            dispatch.actions
+        };
+
+        self.run_deferred_menu_actions(actions);
+    }
+
+    fn run_deferred_menu_actions(&self, actions: Vec<DeferredMenuAction>) {
+        for action in actions {
+            match action {
+                DeferredMenuAction::Close { send_packet } => {
+                    if send_packet {
+                        self.close_container();
+                    } else {
+                        self.do_close_container();
+                    }
+                }
+                DeferredMenuAction::Open(prepared) => {
+                    let PreparedMenu { title, menu } = *prepared;
+                    self.open_prepared_menu(title, menu);
+                }
+            }
+        }
+    }
+
     /// Attempts to pick up nearby item entities.
     ///
     /// Mirrors vanilla's `Player.aiStep()` item pickup logic:
@@ -786,23 +892,18 @@ impl Player {
 
     /// Handles a container click packet (slot interaction).
     pub fn handle_container_click(&self, packet: SContainerClick) {
-        let mut open_menu_guard = self.open_menu.lock();
-
-        if let Some(ref mut menu) = *open_menu_guard {
-            if i32::from(menu.container_id()) != packet.container_id {
-                return;
+        match self.take_open_menu_for_callback(Some(packet.container_id)) {
+            Ok(mut menu) => {
+                self.process_container_click(&mut menu, packet);
+                self.finish_open_menu_callback(menu);
             }
-
-            self.process_container_click(menu, packet);
-        } else {
-            drop(open_menu_guard);
-            let mut menu = self.inventory_menu.lock();
-
-            if i32::from(menu.behavior().container_id()) != packet.container_id {
-                return;
+            Err(OpenMenuUnavailable::Closed) => {
+                let mut menu = self.inventory_menu.lock();
+                if i32::from(menu.behavior().container_id()) == packet.container_id {
+                    self.process_container_click(&mut menu, packet);
+                }
             }
-
-            self.process_container_click(&mut menu, packet);
+            Err(OpenMenuUnavailable::Unavailable) => {}
         }
     }
 
@@ -889,14 +990,20 @@ impl Player {
         );
 
         let open_menu = self.open_menu.lock();
-        if let Some(ref menu) = *open_menu
-            && i32::from(menu.container_id()) == packet.container_id
-        {
-            drop(open_menu);
+        let closes_open_menu = open_menu
+            .menu
+            .as_ref()
+            .is_some_and(|menu| i32::from(menu.container_id()) == packet.container_id)
+            || open_menu
+                .dispatch
+                .as_ref()
+                .is_some_and(|dispatch| i32::from(dispatch.container_id) == packet.container_id);
+        drop(open_menu);
+
+        if closes_open_menu {
             self.do_close_container();
             return;
         }
-        drop(open_menu);
 
         if packet.container_id == i32::from(INVENTORY_MENU_CONTAINER_ID) {
             let mut menu = self.inventory_menu.lock();
@@ -906,13 +1013,17 @@ impl Player {
 
     /// Handles an anvil rename packet.
     pub fn handle_rename_item(self: &Arc<Self>, packet: SRenameItem) {
-        let mut open_menu = self.open_menu.lock();
-        let Some(menu) = open_menu.as_mut() else {
-            log::debug!("rename item without an open menu");
-            return;
-        };
-        if menu.still_valid(self) {
-            menu.set_item_name(packet.name, self);
+        match self.take_open_menu_for_callback(None) {
+            Ok(mut menu) => {
+                if menu.still_valid(self) {
+                    menu.set_item_name(packet.name, self);
+                }
+                self.finish_open_menu_callback(menu);
+            }
+            Err(OpenMenuUnavailable::Closed) => {
+                log::debug!("rename item without an open menu");
+            }
+            Err(OpenMenuUnavailable::Unavailable) => {}
         }
     }
 
@@ -1007,7 +1118,9 @@ impl Player {
     /// # Arguments
     /// * `title` - The display title shown in the open-screen packet.
     /// * `create` - Factory invoked with the allocated container id and the
-    ///   player's world; returns the menu to open.
+    ///   player's world; returns the menu to open. The factory runs
+    ///   synchronously and must only construct the menu; it must not lock
+    ///   containers used by the current menu.
     ///
     /// # Panics
     /// Panics if the created menu has no menu type (i.e. the player's own
@@ -1020,14 +1133,56 @@ impl Player {
         self.do_close_container();
 
         let container_id = self.next_container_counter();
-        let mut menu = create(container_id, &self.get_world());
+        let menu = create(container_id, &self.get_world());
+        let title = title.into();
+
+        let mut open_menu = self.open_menu.lock();
+        if let Some(dispatch) = open_menu.dispatch.as_mut() {
+            dispatch
+                .actions
+                .push(DeferredMenuAction::Open(Box::new(PreparedMenu {
+                    title,
+                    menu,
+                })));
+            return;
+        }
+        drop(open_menu);
+
+        self.open_prepared_menu(title, menu);
+    }
+
+    fn open_prepared_menu(&self, title: TextComponent, mut menu: Menu) {
+        loop {
+            // A removal hook may have opened another menu while the initiating
+            // open call was closing its predecessor.
+            self.do_close_container();
+
+            let mut open_menu = self.open_menu.lock();
+            if let Some(dispatch) = open_menu.dispatch.as_mut() {
+                dispatch
+                    .actions
+                    .push(DeferredMenuAction::Open(Box::new(PreparedMenu {
+                        title,
+                        menu,
+                    })));
+                return;
+            }
+            if open_menu.menu.is_some() {
+                continue;
+            }
+            open_menu.dispatch = Some(OpenMenuDispatch {
+                container_id: menu.container_id(),
+                actions: Vec::new(),
+            });
+            break;
+        }
 
         self.send_packet(COpenScreen {
             container_id: i32::from(menu.container_id()),
             menu_type: menu
                 .menu_type()
                 .expect("a menu opened via open_menu must declare a menu type"),
-            title: title.into(),
+            title,
         });
 
         // Fire on_open before the full sync so anything the menu populates here
@@ -1037,7 +1192,7 @@ impl Player {
         menu.behavior_mut()
             .send_all_data_to_remote(&self.connection);
 
-        *self.open_menu.lock() = Some(menu);
+        self.finish_open_menu_callback(menu);
     }
 
     /// A shared handle to the 2x2 crafting grid of the always-open inventory
@@ -1065,14 +1220,7 @@ impl Player {
     /// Based on Java's `ServerPlayer::closeContainer`.
     /// This sends a close packet to the client.
     pub fn close_container(&self) {
-        let open_menu = self.open_menu.lock();
-        if let Some(menu) = &*open_menu {
-            self.send_packet(CContainerClose {
-                container_id: i32::from(menu.container_id()),
-            });
-        }
-        drop(open_menu);
-        self.do_close_container();
+        self.close_open_menu(true);
     }
 
     /// Internal close container logic without sending a packet.
@@ -1080,21 +1228,51 @@ impl Player {
     /// Based on Java's `ServerPlayer::doCloseContainer`.
     /// Called when the client sends a close packet or when opening a new menu.
     pub fn do_close_container(&self) {
-        let mut open_menu = self.open_menu.lock();
-        if let Some(ref mut menu) = *open_menu {
-            menu.removed(self);
-            self.inventory_menu
-                .lock()
-                .behavior_mut()
-                .transfer_state(menu.behavior());
+        self.close_open_menu(false);
+    }
+
+    fn close_open_menu(&self, send_packet: bool) {
+        let menu = {
+            let mut open_menu = self.open_menu.lock();
+            if let Some(dispatch) = open_menu.dispatch.as_mut() {
+                dispatch
+                    .actions
+                    .push(DeferredMenuAction::Close { send_packet });
+                return;
+            }
+            let Some(menu) = open_menu.menu.take() else {
+                return;
+            };
+            open_menu.dispatch = Some(OpenMenuDispatch {
+                container_id: menu.container_id(),
+                actions: Vec::new(),
+            });
+            menu
+        };
+
+        let mut menu = menu;
+        if send_packet {
+            self.send_packet(CContainerClose {
+                container_id: i32::from(menu.container_id()),
+            });
         }
-        *open_menu = None;
+        self.remove_open_menu(&mut menu);
+        self.finish_open_menu_removal();
+    }
+
+    fn remove_open_menu(&self, menu: &mut Menu) {
+        menu.removed(self);
+        self.inventory_menu
+            .lock()
+            .behavior_mut()
+            .transfer_state(menu.behavior());
     }
 
     /// Returns true if the player has an external menu open (not the inventory).
     #[must_use]
     pub fn has_container_open(&self) -> bool {
-        self.open_menu.lock().is_some()
+        let open_menu = self.open_menu.lock();
+        open_menu.menu.is_some() || open_menu.dispatch.is_some()
     }
 
     /// Runs the open menu's per-tick hook, if an external menu is open.
@@ -1102,25 +1280,27 @@ impl Player {
     /// Scoped to the opened menu; the base inventory menu is not ticked. Called
     /// once per player tick, before syncing inventory changes to the client.
     pub fn tick_open_menu(&self) {
-        let mut open_menu = self.open_menu.lock();
-        let Some(menu) = open_menu.as_mut() else {
+        let Ok(mut menu) = self.take_open_menu_for_callback(None) else {
             return;
         };
         if !menu.still_valid(self) {
-            drop(open_menu);
             self.close_container();
+            self.finish_open_menu_callback(menu);
             return;
         }
         menu.on_tick(self);
+        self.finish_open_menu_callback(menu);
     }
 
     /// Broadcasts inventory changes to the client (incremental sync).
     /// This is called every tick to sync only changed slots.
     pub fn broadcast_inventory_changes(&self) {
         let mut open_menu = self.open_menu.lock();
-        if let Some(ref mut menu) = *open_menu {
+        if let Some(menu) = open_menu.menu.as_mut() {
             menu.behavior_mut().broadcast_changes(&self.connection);
-        } else {
+            return;
+        }
+        if open_menu.dispatch.is_none() {
             drop(open_menu);
             self.inventory_menu
                 .lock()
@@ -1150,7 +1330,7 @@ impl Player {
 
         let has_open_menu = {
             let mut open_menu = self.open_menu.lock();
-            if let Some(menu) = open_menu.as_mut() {
+            if let Some(menu) = open_menu.menu.as_mut() {
                 let behavior = menu.behavior_mut();
                 count += clear_or_count_matching_stack(
                     behavior.carried_mut(),
@@ -1163,7 +1343,7 @@ impl Player {
                 }
                 true
             } else {
-                false
+                open_menu.dispatch.is_some()
             }
         };
         if !has_open_menu {

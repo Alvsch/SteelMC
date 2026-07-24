@@ -98,6 +98,7 @@ use text_components::{
 };
 use text_components::{content::Resolvable, custom::CustomData};
 
+use crate::chunk::chunk_request::{ChunkRequestHandle, ChunkRequestState};
 use crate::enchantment_helper;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
@@ -108,6 +109,7 @@ use crate::entity::{
 };
 use crate::fluid::get_fluid_state;
 use crate::inventory::equipment::EquipmentSlot;
+use crate::inventory::menu::Menu;
 use crate::level_data::RespawnData;
 use crate::permission::{
     PermissionContext, PermissionExpr, PermissionMetadataSet, PermissionMetadataValue,
@@ -122,10 +124,6 @@ use crate::server::{
     jobs::{JobPoll, ServerJob, ServerJobContext},
 };
 use crate::world::player_spawn_finder::{PlayerSpawnSearch, PlayerSpawnSearchPoll};
-use crate::{
-    chunk::chunk_request::{ChunkRequestHandle, ChunkRequestState},
-    inventory::menu::Menu,
-};
 use crate::{config::RuntimeConfig, inventory::menu::kinds::inventory_menu};
 use steel_registry::vanilla_damage_types;
 
@@ -266,7 +264,7 @@ pub struct Player {
 
     /// The currently open menu (None if player inventory is open).
     /// This is separate from `inventory_menu` which is always present.
-    open_menu: SyncMutex<Option<Menu>>,
+    open_menu: SyncMutex<player_inventory::OpenMenuState>,
 
     /// Counter for generating container IDs (1-100, wraps around).
     container_counter: SyncMutex<ContainerCounter>,
@@ -590,7 +588,7 @@ impl Player {
             inventory: inventory.clone(),
             last_item_in_main_hand: SyncMutex::new(ItemStack::empty()),
             inventory_menu: SyncMutex::new(inventory_menu(inventory)),
-            open_menu: SyncMutex::new(None),
+            open_menu: SyncMutex::new(player_inventory::OpenMenuState::new()),
             container_counter: SyncMutex::new(ContainerCounter::new()),
             teleport_state: SyncMutex::new(TeleportState::new()),
             item_cooldowns: SyncMutex::new(ItemCooldowns::default()),
@@ -2829,10 +2827,14 @@ impl TextResolutor for Player {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Weak};
 
     use glam::DVec3;
+    use rustc_hash::FxHashMap;
     use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
+    use steel_protocol::packets::game::{ClickType, HashedStack, SContainerClick};
     use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::blocks::properties::{BlockStateProperties, Direction};
     use steel_registry::data_component_predicate::DataComponentMatchers;
@@ -2841,8 +2843,9 @@ mod tests {
     use steel_registry::{
         RegistryHolderSet, item_stack::ItemStack, test_support::init_test_registry,
         vanilla_attributes, vanilla_blocks, vanilla_damage_types, vanilla_game_rules,
-        vanilla_items,
+        vanilla_items, vanilla_menu_types,
     };
+    use steel_utils::locks::IntoShared as _;
     use steel_utils::types::{Difficulty, GameType, UpdateFlags};
     use steel_utils::{BlockPos, ChunkPos};
     use text_components::TextComponent;
@@ -2851,7 +2854,12 @@ mod tests {
     use crate::behavior::init_behaviors;
     use crate::config::RuntimeConfig;
     use crate::entity::{Entity, EntitySyncedData, LivingEntity, damage::DamageSource};
-    use crate::inventory::{container::Container as _, equipment::EquipmentSlot};
+    use crate::inventory::{
+        container::{Container as _, SimpleContainer},
+        equipment::EquipmentSlot,
+        lock::ContainerLockGuard,
+        menu::{Menu, MenuBehavior, MenuBuilder, MenuKind, MenuKindType, kinds::BasicKind},
+    };
     use crate::permission::{PermissionEntry, PermissionKey, PermissionMetadataSet, PermissionSet};
     use crate::player::connection::NetworkConnection;
     use crate::server::Server;
@@ -2941,6 +2949,112 @@ mod tests {
         player
     }
 
+    struct CloseOnTick;
+
+    impl MenuKind for CloseOnTick {
+        fn on_tick(
+            &mut self,
+            _behavior: &mut MenuBehavior,
+            _guard: &mut ContainerLockGuard,
+            player: &Player,
+        ) {
+            player.close_container();
+        }
+    }
+
+    struct CloseOnClick;
+
+    impl MenuKind for CloseOnClick {
+        fn on_slot_clicked(
+            &mut self,
+            _behavior: &mut MenuBehavior,
+            _guard: &mut ContainerLockGuard,
+            _click: crate::inventory::click::Click,
+            player: &Player,
+        ) -> crate::inventory::click::ClickOutcome {
+            player.close_container();
+            crate::inventory::click::ClickOutcome::Consume
+        }
+    }
+
+    struct CloseOnOpen;
+
+    impl MenuKind for CloseOnOpen {
+        fn on_open(
+            &mut self,
+            _behavior: &mut MenuBehavior,
+            _guard: &mut ContainerLockGuard,
+            player: &Player,
+        ) {
+            player.close_container();
+        }
+    }
+
+    struct OpenReplacementOnOpen {
+        own_removals: Arc<AtomicUsize>,
+        replacement_removals: Arc<AtomicUsize>,
+    }
+
+    impl MenuKind for OpenReplacementOnOpen {
+        fn on_open(
+            &mut self,
+            _behavior: &mut MenuBehavior,
+            _guard: &mut ContainerLockGuard,
+            player: &Player,
+        ) {
+            let replacement_removals = Arc::clone(&self.replacement_removals);
+            player.open_menu("Replacement", move |container_id, _world| {
+                empty_test_menu(
+                    player,
+                    container_id,
+                    MenuKindType::custom(CountRemovals {
+                        count: replacement_removals,
+                    }),
+                )
+            });
+        }
+
+        fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
+            self.own_removals.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    struct ReopenOnRemoved {
+        replacement_removals: Arc<AtomicUsize>,
+    }
+
+    impl MenuKind for ReopenOnRemoved {
+        fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
+            let replacement_removals = Arc::clone(&self.replacement_removals);
+            player.open_menu("Replacement", move |container_id, _world| {
+                empty_test_menu(
+                    player,
+                    container_id,
+                    MenuKindType::custom(CountRemovals {
+                        count: replacement_removals,
+                    }),
+                )
+            });
+        }
+    }
+
+    struct CountRemovals {
+        count: Arc<AtomicUsize>,
+    }
+
+    impl MenuKind for CountRemovals {
+        fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn empty_test_menu(player: &Player, container_id: u8, kind: MenuKindType) -> Menu {
+        let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+        builder.section(SimpleContainer::new(9).into_shared(), 9);
+        builder.player_inventory(&player.inventory);
+        builder.build(kind)
+    }
+
     fn permission_key(value: &str) -> PermissionKey {
         match PermissionKey::parse(value) {
             Ok(key) => key,
@@ -2976,6 +3090,123 @@ mod tests {
         assert_eq!(state.groups, ["moderator"]);
         assert!(!state.overrides.allows_key(&permission_key("steel.fly")));
         assert!(state.effective.allows_key(&permission_key("steel.build")));
+    }
+
+    #[test]
+    fn menu_tick_hook_can_close_the_current_menu() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        player.open_menu("Close on tick", |container_id, _world| {
+            empty_test_menu(&player, container_id, MenuKindType::custom(CloseOnTick))
+        });
+
+        player.tick_open_menu();
+
+        assert!(!player.has_container_open());
+    }
+
+    #[test]
+    fn menu_click_hook_can_close_the_current_menu() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let opened_container_id = Cell::new(0);
+        player.open_menu("Close on click", |container_id, _world| {
+            opened_container_id.set(container_id);
+            empty_test_menu(&player, container_id, MenuKindType::custom(CloseOnClick))
+        });
+
+        player.handle_container_click(SContainerClick {
+            container_id: i32::from(opened_container_id.get()),
+            state_id: 0,
+            slot_num: 0,
+            button_num: 0,
+            click_type: ClickType::Pickup,
+            changed_slots: FxHashMap::default(),
+            carried_item: HashedStack::Empty,
+        });
+
+        assert!(!player.has_container_open());
+    }
+
+    #[test]
+    fn menu_open_hook_can_close_the_new_menu() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        player.open_menu("Close on open", |container_id, _world| {
+            empty_test_menu(&player, container_id, MenuKindType::custom(CloseOnOpen))
+        });
+
+        assert!(!player.has_container_open());
+    }
+
+    #[test]
+    fn menu_open_hook_can_replace_the_new_menu() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let own_removals = Arc::new(AtomicUsize::new(0));
+        let replacement_removals = Arc::new(AtomicUsize::new(0));
+        player.open_menu("Replace on open", |container_id, _world| {
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(OpenReplacementOnOpen {
+                    own_removals: Arc::clone(&own_removals),
+                    replacement_removals: Arc::clone(&replacement_removals),
+                }),
+            )
+        });
+
+        assert!(player.has_container_open());
+        assert_eq!(own_removals.load(Ordering::Relaxed), 1);
+        assert_eq!(replacement_removals.load(Ordering::Relaxed), 0);
+
+        player.do_close_container();
+
+        assert_eq!(replacement_removals.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn menu_removed_hook_can_open_a_replacement() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let replacement_removals = Arc::new(AtomicUsize::new(0));
+        player.open_menu("Reopen on removal", |container_id, _world| {
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(ReopenOnRemoved {
+                    replacement_removals: Arc::clone(&replacement_removals),
+                }),
+            )
+        });
+
+        player.do_close_container();
+
+        assert!(player.has_container_open());
+        assert_eq!(replacement_removals.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn opening_a_menu_closes_a_replacement_created_during_removal() {
+        init_test_registry();
+        let player = test_player(Arc::clone(test_world()));
+        let replacement_removals = Arc::new(AtomicUsize::new(0));
+        player.open_menu("Reopen on removal", |container_id, _world| {
+            empty_test_menu(
+                &player,
+                container_id,
+                MenuKindType::custom(ReopenOnRemoved {
+                    replacement_removals: Arc::clone(&replacement_removals),
+                }),
+            )
+        });
+
+        player.open_menu("Final", |container_id, _world| {
+            empty_test_menu(&player, container_id, MenuKindType::Basic(BasicKind {}))
+        });
+
+        assert!(player.has_container_open());
+        assert_eq!(replacement_removals.load(Ordering::Relaxed), 1);
     }
 
     #[test]
