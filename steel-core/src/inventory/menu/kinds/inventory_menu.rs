@@ -280,7 +280,7 @@ impl MenuKind for InventoryKind {
         if self.result.contains(slot_index) {
             // Drop result output that didn't fit.
             if !stack_mut.is_empty() {
-                let _ = guard.run_unlocked(|| player.drop_item(stack_mut, false, true));
+                let _ = guard.run_unlocked(|| player.drop_item(stack_mut, false, false));
             }
         }
 
@@ -306,3 +306,6 @@ impl MenuKind for InventoryKind {
         self.handler.update_result(guard);
     }
 }
+
+#[cfg(test)]
+mod tests;

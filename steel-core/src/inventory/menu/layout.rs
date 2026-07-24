@@ -110,7 +110,7 @@ impl MenuLayout {
             && !remaining.is_empty()
             && route.fake_result_remainder == FakeResultRemainderPolicy::Drop
         {
-            let _ = guard.run_unlocked(|| player.drop_item(remaining.clone(), false, true));
+            let _ = guard.run_unlocked(|| player.drop_item(remaining.clone(), false, false));
         }
 
         clicked

@@ -2,14 +2,12 @@ use std::sync::Arc;
 
 use glam::DVec3;
 use steel_registry::{
-    item_stack::ItemStack, test_support::init_test_registry, vanilla_blocks, vanilla_entities,
-    vanilla_items,
+    item_stack::ItemStack, test_support::init_test_registry, vanilla_entities, vanilla_items,
 };
-use steel_utils::types::UpdateFlags;
-use steel_utils::{BlockPos, ChunkPos, Downcast as _, WorldAabb};
+use steel_utils::{ChunkPos, Downcast as _, WorldAabb};
 use uuid::Uuid;
 
-use super::crafting;
+use super::{InventoryKind, inventory_menu};
 use crate::{
     behavior::init_behaviors,
     entity::{Entity as _, entities::ItemEntity},
@@ -22,27 +20,20 @@ use crate::{
 };
 
 #[test]
-fn partial_result_overflow_uses_the_default_drop_policy() {
+fn partial_result_overflow_has_no_thrower() {
     init_test_registry();
     init_behaviors();
-    let world = fresh_test_world("crafting_menu_partial_result_overflow");
-    let pos = BlockPos::new(0, 64, 0);
-    insert_ready_full_chunk(&world, ChunkPos::from_block_pos(pos));
-    assert!(world.set_block(
-        pos,
-        vanilla_blocks::CRAFTING_TABLE.default_state(),
-        UpdateFlags::UPDATE_ALL,
-    ));
+    let world = fresh_test_world("inventory_menu_partial_result_overflow");
+    insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
     let player =
         TestPlayerBuilder::new(Arc::clone(&world), Uuid::from_u128(1), "Crafter", 1).build();
     player.base().set_position_local(DVec3::new(0.5, 64.0, 0.5));
-    let mut menu = crafting(Arc::clone(&player.inventory), 1, pos);
+    let mut menu = inventory_menu(Arc::clone(&player.inventory));
     let (crafting_container, result_container) = match menu.kind() {
-        MenuKindType::Crafting(kind) => (
-            kind.handler.crafting_container(),
-            kind.handler.result_container(),
-        ),
-        _ => panic!("crafting builder should create a crafting menu"),
+        MenuKindType::Inventory(InventoryKind { handler, .. }) => {
+            (handler.crafting_container(), handler.result_container())
+        }
+        _ => panic!("inventory_menu should create an inventory menu"),
     };
 
     *menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::OAK_LOG);

@@ -372,7 +372,7 @@ impl Menu {
                 let max_size = target_slot.get_max_stack_size_for_item(&guard, &source_item);
                 if source_item.count > max_size {
                     let Some(inv) = guard.get_mut(player_inv_id) else {
-                        return;
+                        unreachable!("the explicitly locked player inventory must be present");
                     };
                     let to_place = inv.get_item_mut(inventory_slot).split(max_size);
                     target_slot.set_by_player(&mut guard, to_place, &ItemStack::empty());
@@ -391,14 +391,21 @@ impl Menu {
                 if source_item.count > max_size {
                     // Source too big: place a partial stack, return target to inventory.
                     let Some(inv) = guard.get_mut(player_inv_id) else {
-                        return;
+                        unreachable!("the explicitly locked player inventory must be present");
                     };
                     let to_place = inv.get_item_mut(inventory_slot).split(max_size);
                     target_slot.set_by_player(&mut guard, to_place, &target_item);
                     if let Some(remainder) = target_slot.on_take(&mut guard, &target_item, player) {
                         player.add_item_or_drop_with_guard(&mut guard, remainder);
                     }
-                    player.add_item_or_drop_with_guard(&mut guard, target_item);
+                    let mut displaced = target_item;
+                    let Some(inventory) = guard.get_mut(player_inv_id) else {
+                        unreachable!("the explicitly locked player inventory must be present");
+                    };
+                    let added = inventory.add(&mut displaced);
+                    if !added && !player.has_infinite_materials() {
+                        let _ = guard.run_unlocked(|| player.drop_item(displaced, false, true));
+                    }
                 } else {
                     let Some(inventory) = guard.get_mut(player_inv_id) else {
                         unreachable!("the explicitly locked player inventory must be present");
