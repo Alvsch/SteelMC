@@ -1,16 +1,32 @@
-use std::sync::Arc;
+use std::{
+    io::Cursor,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
-use steel_registry::{item_stack::ItemStack, test_support::init_test_registry, vanilla_items};
+use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
+use steel_registry::packets::play::C_SET_PLAYER_INVENTORY;
+use steel_registry::{
+    item_stack::ItemStack, test_support::init_test_registry, vanilla_items, vanilla_menu_types,
+};
+use steel_utils::codec::VarInt;
+use steel_utils::locks::{IntoShared as _, Shared, SyncMutex};
+use steel_utils::serial::ReadFrom as _;
 use steel_utils::types::GameType;
+use text_components::TextComponent;
 use uuid::Uuid;
 
 use super::*;
 use crate::{
     inventory::{
-        container::Container as _,
-        prelude::{Click, MouseButton},
+        container::{Container as _, SimpleContainer},
+        menu::kinds::BasicKind,
+        prelude::{Click, DragKind, MenuBuilder, MenuKindType, MouseButton, QuickCraft},
     },
     permission::{PermissionEntry, PermissionMetadataSet, PermissionSet},
+    player::{PlayerConnection, player_inventory::PlayerInventory},
     test_support::{
         TestPlayerBuilder, fresh_test_world_in_domain, test_runtime_config, test_world,
     },
@@ -20,6 +36,110 @@ const TARGET_HOTBAR_START: usize = 27;
 const TARGET_ARMOR_START: usize = 36;
 const TARGET_CRAFTING_START: usize = 41;
 const VIEWER_INVENTORY_START: usize = 45;
+
+struct RecordingConnection {
+    packets: Arc<SyncMutex<Vec<EncodedPacket>>>,
+    inventories: Arc<SyncMutex<Vec<Shared<PlayerInventory>>>>,
+    callbacks_saw_unlocked_inventories: Arc<AtomicBool>,
+}
+
+impl NetworkConnection for RecordingConnection {
+    fn compression(&self) -> Option<CompressionInfo> {
+        None
+    }
+
+    fn send_encoded(&self, packet: EncodedPacket) {
+        let inventories = self.inventories.lock().clone();
+        if inventories
+            .iter()
+            .any(|inventory| inventory.try_lock().is_none())
+        {
+            self.callbacks_saw_unlocked_inventories
+                .store(false, Ordering::Release);
+        }
+        self.packets.lock().push(packet);
+    }
+
+    fn send_encoded_bundle(&self, packets: Vec<EncodedPacket>) {
+        self.packets.lock().extend(packets);
+    }
+
+    fn disconnect_with_reason(&self, _reason: TextComponent) {}
+
+    fn tick(&self) {}
+
+    fn latency(&self) -> i32 {
+        0
+    }
+
+    fn close(&self) {}
+
+    fn closed(&self) -> bool {
+        false
+    }
+}
+
+struct RecordingPlayer {
+    player: Arc<Player>,
+    packets: Arc<SyncMutex<Vec<EncodedPacket>>>,
+    inventories: Arc<SyncMutex<Vec<Shared<PlayerInventory>>>>,
+    callbacks_saw_unlocked_inventories: Arc<AtomicBool>,
+}
+
+fn recording_player(uuid: u128, name: &str, entity_id: i32) -> RecordingPlayer {
+    init_test_registry();
+    let packets = Arc::new(SyncMutex::new(Vec::new()));
+    let inventories = Arc::new(SyncMutex::new(Vec::new()));
+    let callbacks_saw_unlocked_inventories = Arc::new(AtomicBool::new(true));
+    let connection = Arc::new(PlayerConnection::Other(Box::new(RecordingConnection {
+        packets: Arc::clone(&packets),
+        inventories: Arc::clone(&inventories),
+        callbacks_saw_unlocked_inventories: Arc::clone(&callbacks_saw_unlocked_inventories),
+    })));
+    let player = TestPlayerBuilder::new(
+        Arc::clone(test_world()),
+        Uuid::from_u128(uuid),
+        name,
+        entity_id,
+    )
+    .detached_config(test_runtime_config(2))
+    .connection(connection)
+    .build();
+    RecordingPlayer {
+        player,
+        packets,
+        inventories,
+        callbacks_saw_unlocked_inventories,
+    }
+}
+
+fn player_inventory_updates(packets: &SyncMutex<Vec<EncodedPacket>>) -> Vec<(i32, ItemStack)> {
+    packets
+        .lock()
+        .iter()
+        .filter_map(|packet| {
+            let mut cursor = Cursor::new(packet.encoded_data.as_slice());
+            let length = VarInt::read(&mut cursor);
+            assert!(length.is_ok(), "packet length should decode");
+            let packet_id = match VarInt::read(&mut cursor) {
+                Ok(packet_id) => packet_id.0,
+                Err(error) => panic!("packet id should decode: {error}"),
+            };
+            if packet_id != C_SET_PLAYER_INVENTORY {
+                return None;
+            }
+            let slot = match VarInt::read(&mut cursor) {
+                Ok(slot) => slot.0,
+                Err(error) => panic!("logical inventory slot should decode: {error}"),
+            };
+            let item_stack = match ItemStack::read(&mut cursor) {
+                Ok(item_stack) => item_stack,
+                Err(error) => panic!("logical inventory item should decode: {error}"),
+            };
+            Some((slot, item_stack))
+        })
+        .collect()
+}
 
 fn test_player(uuid: u128, name: &str, entity_id: i32) -> Arc<Player> {
     init_test_registry();
@@ -128,6 +248,324 @@ fn modify_view_can_fully_edit_target_armor_slots() {
             .is(&vanilla_items::STONE)
     );
     assert!(menu.behavior().carried().is_empty());
+}
+
+#[test]
+fn modify_view_synchronizes_target_armor_without_inventory_locks() {
+    let source = test_player(10, "Viewer", 10);
+    let target = recording_player(11, "Target", 11);
+    target
+        .inventories
+        .lock()
+        .extend([source.inventory.clone(), target.player.inventory.clone()]);
+    let Ok((_, modify)) = invsee_permissions() else {
+        panic!("built-in invsee permissions should parse");
+    };
+    let mut menu = invsee(1, &source, &target.player, true, modify);
+    *menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::STONE);
+
+    menu.clicked(
+        Click::Pickup {
+            slot: TARGET_ARMOR_START,
+            button: MouseButton::Left,
+        },
+        &source,
+    );
+
+    assert!(
+        target
+            .player
+            .inventory
+            .lock()
+            .get_item(39)
+            .is(&vanilla_items::STONE)
+    );
+    target.player.tick();
+    assert_eq!(
+        player_inventory_updates(&target.packets),
+        vec![(39, ItemStack::new(&vanilla_items::STONE))]
+    );
+    assert!(
+        target
+            .callbacks_saw_unlocked_inventories
+            .load(Ordering::Acquire),
+        "direct inventory packets must be sent after releasing source and target inventories"
+    );
+}
+
+#[test]
+fn self_invsee_synchronizes_own_armor_slot() {
+    let recording = recording_player(12, "SelfViewer", 12);
+    recording
+        .inventories
+        .lock()
+        .push(recording.player.inventory.clone());
+    let Ok((_, modify)) = invsee_permissions() else {
+        panic!("built-in invsee permissions should parse");
+    };
+    let mut menu = invsee(1, &recording.player, &recording.player, true, modify);
+    *menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::STONE);
+
+    menu.clicked(
+        Click::Pickup {
+            slot: TARGET_ARMOR_START,
+            button: MouseButton::Left,
+        },
+        &recording.player,
+    );
+
+    recording.player.tick();
+    assert_eq!(
+        player_inventory_updates(&recording.packets),
+        vec![(39, ItemStack::new(&vanilla_items::STONE))]
+    );
+    assert!(
+        recording
+            .callbacks_saw_unlocked_inventories
+            .load(Ordering::Acquire)
+    );
+}
+
+#[test]
+fn modify_view_synchronizes_empty_offhand_after_removal() {
+    let source = test_player(13, "Viewer", 13);
+    let target = recording_player(14, "Target", 14);
+    target
+        .player
+        .inventory
+        .lock()
+        .set_item(40, ItemStack::new(&vanilla_items::SHIELD));
+    let Ok((_, modify)) = invsee_permissions() else {
+        panic!("built-in invsee permissions should parse");
+    };
+    let mut menu = invsee(1, &source, &target.player, true, modify);
+
+    menu.clicked(
+        Click::Pickup {
+            slot: TARGET_ARMOR_START + 4,
+            button: MouseButton::Left,
+        },
+        &source,
+    );
+
+    assert!(target.player.inventory.lock().get_item(40).is_empty());
+    target.player.tick();
+    assert_eq!(
+        player_inventory_updates(&target.packets),
+        vec![(40, ItemStack::empty())]
+    );
+}
+
+#[test]
+fn modify_view_synchronizes_target_hotbar_slot() {
+    let source = test_player(20, "Viewer", 20);
+    let target = recording_player(21, "Target", 21);
+    let Ok((_, modify)) = invsee_permissions() else {
+        panic!("built-in invsee permissions should parse");
+    };
+    let mut menu = invsee(1, &source, &target.player, true, modify);
+    *menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::STONE);
+
+    menu.clicked(
+        Click::Pickup {
+            slot: TARGET_HOTBAR_START,
+            button: MouseButton::Left,
+        },
+        &source,
+    );
+    target.player.tick();
+
+    assert_eq!(
+        player_inventory_updates(&target.packets),
+        vec![(0, ItemStack::new(&vanilla_items::STONE))]
+    );
+}
+
+#[test]
+fn modify_view_coalesces_to_latest_target_inventory_value() {
+    let source = test_player(15, "Viewer", 15);
+    let target = recording_player(16, "Target", 16);
+    let Ok((_, modify)) = invsee_permissions() else {
+        panic!("built-in invsee permissions should parse");
+    };
+    let mut menu = invsee(1, &source, &target.player, true, modify);
+
+    *menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::STONE);
+    menu.clicked(
+        Click::Pickup {
+            slot: TARGET_ARMOR_START,
+            button: MouseButton::Left,
+        },
+        &source,
+    );
+    *menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::DIAMOND);
+    menu.clicked(
+        Click::Pickup {
+            slot: TARGET_ARMOR_START,
+            button: MouseButton::Left,
+        },
+        &source,
+    );
+
+    target.player.tick();
+
+    assert_eq!(
+        player_inventory_updates(&target.packets),
+        vec![(39, ItemStack::new(&vanilla_items::DIAMOND))]
+    );
+}
+
+#[test]
+fn modify_view_drag_queues_each_changed_target_slot() {
+    let source = test_player(17, "Viewer", 17);
+    let target = recording_player(18, "Target", 18);
+    let Ok((_, modify)) = invsee_permissions() else {
+        panic!("built-in invsee permissions should parse");
+    };
+    let mut menu = invsee(1, &source, &target.player, true, modify);
+    *menu.behavior_mut().carried_mut() = ItemStack::with_count(&vanilla_items::STONE, 2);
+
+    for action in [
+        QuickCraft::Start {
+            kind: DragKind::Left,
+        },
+        QuickCraft::AddSlot {
+            slot: TARGET_ARMOR_START,
+            kind: DragKind::Left,
+        },
+        QuickCraft::AddSlot {
+            slot: TARGET_ARMOR_START + 1,
+            kind: DragKind::Left,
+        },
+        QuickCraft::End {
+            kind: DragKind::Left,
+        },
+    ] {
+        menu.clicked(Click::QuickCraft(action), &source);
+    }
+    target.player.tick();
+
+    assert_eq!(
+        player_inventory_updates(&target.packets),
+        vec![
+            (38, ItemStack::new(&vanilla_items::STONE)),
+            (39, ItemStack::new(&vanilla_items::STONE)),
+        ]
+    );
+}
+
+#[test]
+fn overriding_menu_defers_main_inventory_sync_until_close() {
+    let recording = recording_player(19, "OverlayViewer", 19);
+    recording
+        .inventories
+        .lock()
+        .push(recording.player.inventory.clone());
+    recording
+        .player
+        .inventory
+        .lock()
+        .set_item(0, ItemStack::new(&vanilla_items::STONE));
+    recording
+        .player
+        .inventory
+        .lock()
+        .set_item(39, ItemStack::new(&vanilla_items::DIAMOND_HELMET));
+
+    let fake_slots = SimpleContainer::new(72).into_shared();
+    recording
+        .player
+        .open_menu("Overlay", move |container_id, _world| {
+            let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X4, container_id);
+            builder.display_section(fake_slots, 72);
+            builder.overrides_player_slots();
+            builder.build(MenuKindType::Basic(BasicKind {}))
+        });
+    recording.packets.lock().clear();
+    recording.player.request_inventory_resync([0, 39]);
+
+    recording.player.tick();
+
+    assert_eq!(
+        player_inventory_updates(&recording.packets),
+        vec![(39, ItemStack::new(&vanilla_items::DIAMOND_HELMET))]
+    );
+
+    recording.packets.lock().clear();
+    recording.player.do_close_container();
+    recording.player.tick();
+
+    let updates = player_inventory_updates(&recording.packets);
+    assert_eq!(updates.len(), PlayerInventory::INVENTORY_SIZE);
+    assert_eq!(updates[0], (0, ItemStack::new(&vanilla_items::STONE)));
+    assert_eq!(
+        updates.iter().map(|(slot, _)| *slot).collect::<Vec<_>>(),
+        (0..PlayerInventory::INVENTORY_SIZE as i32).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn replacing_overriding_menu_keeps_main_inventory_sync_deferred() {
+    let recording = recording_player(23, "ReplacementOverlayViewer", 23);
+    recording
+        .player
+        .inventory
+        .lock()
+        .set_item(0, ItemStack::new(&vanilla_items::STONE));
+
+    for title in ["First overlay", "Second overlay"] {
+        let fake_slots = SimpleContainer::new(72).into_shared();
+        recording
+            .player
+            .open_menu(title, move |container_id, _world| {
+                let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X4, container_id);
+                builder.display_section(fake_slots, 72);
+                builder.overrides_player_slots();
+                builder.build(MenuKindType::Basic(BasicKind {}))
+            });
+        recording.player.request_inventory_resync([0]);
+    }
+    recording.packets.lock().clear();
+
+    recording.player.tick();
+    assert!(player_inventory_updates(&recording.packets).is_empty());
+
+    recording.player.do_close_container();
+    recording.player.tick();
+
+    let updates = player_inventory_updates(&recording.packets);
+    assert_eq!(updates.len(), PlayerInventory::INVENTORY_SIZE);
+    assert_eq!(updates[0], (0, ItemStack::new(&vanilla_items::STONE)));
+}
+
+#[test]
+fn normal_menu_does_not_defer_main_inventory_sync() {
+    let recording = recording_player(22, "NormalMenuViewer", 22);
+    recording
+        .player
+        .inventory
+        .lock()
+        .set_item(0, ItemStack::new(&vanilla_items::STONE));
+
+    let menu_slots = SimpleContainer::new(9).into_shared();
+    let inventory = recording.player.inventory.clone();
+    recording
+        .player
+        .open_menu("Normal", move |container_id, _world| {
+            let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
+            builder.display_section(menu_slots, 9);
+            builder.player_inventory(&inventory);
+            builder.build(MenuKindType::Basic(BasicKind {}))
+        });
+    recording.packets.lock().clear();
+    recording.player.request_inventory_resync([0]);
+
+    recording.player.tick();
+
+    assert_eq!(
+        player_inventory_updates(&recording.packets),
+        vec![(0, ItemStack::new(&vanilla_items::STONE))]
+    );
 }
 
 #[test]

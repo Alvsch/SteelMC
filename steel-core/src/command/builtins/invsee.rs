@@ -1,4 +1,5 @@
 use std::{
+    array,
     ops::Range,
     sync::{Arc, Weak},
 };
@@ -22,7 +23,7 @@ use crate::inventory::slots::{
     CraftingHandler, MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot,
 };
 use crate::permission::{PermissionExpr, PermissionKey, PermissionKeyError};
-use crate::player::{Player, connection::NetworkConnection};
+use crate::player::{Player, connection::NetworkConnection, player_inventory::PlayerInventory};
 
 const INVSEE_PERMISSION: &str = "steel.command.invsee";
 const MODIFY_PERMISSION: &str = "steel.command.invsee.modify";
@@ -144,12 +145,14 @@ fn invsee(
 
     b.build(MenuKindType::custom(InvseeMenuKind {
         target: Arc::downgrade(target),
+        target_inventory_id: ContainerId::from_arc(&target.inventory),
         target_domain: target.get_world().domain().into(),
         required_permission,
         modify,
         target_slots,
         crafting,
         crafting_handler,
+        inventory_before_click: None,
     }))
 }
 
@@ -173,15 +176,28 @@ fn readonly_section(
 
 struct InvseeMenuKind {
     target: Weak<Player>,
+    target_inventory_id: ContainerId,
     target_domain: Box<str>,
     required_permission: PermissionExpr,
     modify: bool,
     target_slots: Range<usize>,
     crafting: Section,
     crafting_handler: CraftingHandler,
+    inventory_before_click: Option<[ItemStack; PlayerInventory::SLOT_OFFHAND + 1]>,
 }
 
 impl MenuKind for InvseeMenuKind {
+    fn on_drag(
+        &mut self,
+        _behavior: &mut MenuBehavior,
+        guard: &mut ContainerLockGuard,
+        _action: QuickCraft,
+        _player: &Player,
+    ) -> ClickOutcome {
+        self.snapshot_inventory_before_click(guard);
+        ClickOutcome::Fallthrough
+    }
+
     fn on_open(
         &mut self,
         _behavior: &mut MenuBehavior,
@@ -198,18 +214,20 @@ impl MenuKind for InvseeMenuKind {
         _player: &Player,
     ) {
         self.crafting_handler.update_result(guard);
+        self.queue_changed_target_inventory(guard);
     }
 
     fn on_slot_clicked(
         &mut self,
         _behavior: &mut MenuBehavior,
-        _guard: &mut ContainerLockGuard,
+        guard: &mut ContainerLockGuard,
         click: Click,
         _player: &Player,
     ) -> ClickOutcome {
         let Some(slot) = click.slot() else {
             return ClickOutcome::Fallthrough;
         };
+        self.snapshot_inventory_before_click(guard);
         if (!self.modify && self.target_slots.contains(&slot))
             || (self.crafting.contains(slot) && matches!(click, Click::Clone { .. }))
         {
@@ -239,6 +257,42 @@ impl MenuKind for InvseeMenuKind {
             && !target.connection.closed()
             && !target.is_domain_switching()
             && target.get_world().domain() == self.target_domain.as_ref()
+    }
+}
+
+impl InvseeMenuKind {
+    fn snapshot_inventory_before_click(&mut self, guard: &ContainerLockGuard) {
+        if !self.modify {
+            return;
+        }
+        let Some(inventory) = guard.get(self.target_inventory_id) else {
+            unreachable!("invsee always locks the target inventory");
+        };
+        self.inventory_before_click = Some(array::from_fn(|slot| inventory.get_item(slot).clone()));
+    }
+
+    fn queue_changed_target_inventory(&mut self, guard: &ContainerLockGuard) {
+        let Some(previous) = self.inventory_before_click.take() else {
+            return;
+        };
+        let Some(inventory) = guard.get(self.target_inventory_id) else {
+            unreachable!("invsee always locks the target inventory");
+        };
+        let changed_slots = previous
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, previous)| {
+                let current = inventory.get_item(slot);
+                (!ItemStack::matches(previous, current)).then_some(slot)
+            })
+            .collect::<Vec<_>>();
+        if changed_slots.is_empty() {
+            return;
+        }
+        let Some(target) = self.target.upgrade() else {
+            return;
+        };
+        target.request_inventory_resync(changed_slots);
     }
 }
 

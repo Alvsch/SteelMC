@@ -10,8 +10,9 @@ use std::{
 use glam::DVec3;
 use simdnbt::owned::{NbtList, NbtTag};
 use steel_protocol::packets::game::{
-    CContainerClose, COpenScreen, SContainerButtonClick, SContainerClick, SContainerClose,
-    SContainerSlotStateChanged, SRenameItem, SSetCarriedItem, SSetCreativeModeSlot,
+    CContainerClose, COpenScreen, CSetPlayerInventory, SContainerButtonClick, SContainerClick,
+    SContainerClose, SContainerSlotStateChanged, SRenameItem, SSetCarriedItem,
+    SSetCreativeModeSlot,
 };
 use steel_registry::enchantment_effect::EnchantmentEffectComponent;
 use steel_registry::item_stack::ItemStack;
@@ -78,8 +79,45 @@ pub(super) struct OpenMenuState {
     active_open_operations: usize,
 }
 
+pub(super) struct PlayerInventorySyncState {
+    pending_slots: [bool; PlayerInventory::CONTAINER_SIZE],
+}
+
+impl PlayerInventorySyncState {
+    pub(super) const fn new() -> Self {
+        Self {
+            pending_slots: [false; PlayerInventory::CONTAINER_SIZE],
+        }
+    }
+
+    fn request(&mut self, slots: impl IntoIterator<Item = usize>) {
+        for slot in slots {
+            assert!(
+                slot < PlayerInventory::CONTAINER_SIZE,
+                "logical player inventory slot {slot} is out of bounds"
+            );
+            self.pending_slots[slot] = true;
+        }
+    }
+
+    fn take_ready(&mut self, overrides_player_slots: bool) -> Vec<usize> {
+        self.pending_slots
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(slot, pending)| {
+                if !*pending || (overrides_player_slots && slot < PlayerInventory::INVENTORY_SIZE) {
+                    return None;
+                }
+                *pending = false;
+                Some(slot)
+            })
+            .collect()
+    }
+}
+
 struct OpenMenuDispatch {
     container_id: u8,
+    overrides_player_slots: bool,
     actions: Vec<DeferredMenuAction>,
 }
 
@@ -678,11 +716,13 @@ impl Player {
         }
 
         let container_id = menu.container_id();
+        let overrides_player_slots = menu.overrides_player_slots();
         let Some(menu) = open_menu.menu.take() else {
             return Err(OpenMenuUnavailable::Unavailable);
         };
         open_menu.dispatch = Some(OpenMenuDispatch {
             container_id,
+            overrides_player_slots,
             actions: Vec::new(),
         });
         Ok(menu)
@@ -1141,6 +1181,7 @@ impl Player {
             }
             open_menu.dispatch = Some(OpenMenuDispatch {
                 container_id: menu.container_id(),
+                overrides_player_slots: menu.overrides_player_slots(),
                 actions: Vec::new(),
             });
             break;
@@ -1317,6 +1358,7 @@ impl Player {
             };
             open_menu.dispatch = Some(OpenMenuDispatch {
                 container_id: menu.container_id(),
+                overrides_player_slots: menu.overrides_player_slots(),
                 actions: Vec::new(),
             });
             menu
@@ -1333,11 +1375,16 @@ impl Player {
     }
 
     fn remove_open_menu(&self, menu: &mut Menu) {
+        let overrides_player_slots = menu.overrides_player_slots();
         menu.removed(self);
-        self.inventory_menu
-            .lock()
-            .behavior_mut()
-            .transfer_state(menu.behavior());
+        if overrides_player_slots {
+            self.request_inventory_resync(0..PlayerInventory::INVENTORY_SIZE);
+        } else {
+            self.inventory_menu
+                .lock()
+                .behavior_mut()
+                .transfer_state(menu.behavior());
+        }
     }
 
     /// Returns true if the player has an external menu open (not the inventory).
@@ -1378,6 +1425,47 @@ impl Player {
                 .lock()
                 .behavior_mut()
                 .broadcast_changes(&self.connection);
+        }
+    }
+
+    /// Requests direct synchronization of logical player-inventory slots.
+    pub(crate) fn request_inventory_resync(&self, slots: impl IntoIterator<Item = usize>) {
+        self.inventory_sync.lock().request(slots);
+    }
+
+    /// Sends the latest values for requested logical inventory slots.
+    pub(super) fn flush_inventory_resync(&self) {
+        let overrides_player_slots = {
+            let open_menu = self.open_menu.lock();
+            open_menu
+                .menu
+                .as_ref()
+                .is_some_and(Menu::overrides_player_slots)
+                || open_menu
+                    .dispatch
+                    .as_ref()
+                    .is_some_and(|dispatch| dispatch.overrides_player_slots)
+        };
+        let slots = self
+            .inventory_sync
+            .lock()
+            .take_ready(overrides_player_slots);
+        if slots.is_empty() {
+            return;
+        }
+
+        let packets = {
+            let inventory = self.inventory.lock();
+            slots
+                .into_iter()
+                .map(|slot| CSetPlayerInventory {
+                    slot: slot as i32,
+                    item_stack: inventory.get_item(slot).clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+        for packet in packets {
+            self.send_packet(packet);
         }
     }
 

@@ -119,7 +119,9 @@ use crate::permission::{
 use crate::physics::MoveResult;
 use crate::player::experience::Experience;
 use crate::player::player_data::{PersistentEnderPearl, PersistentRootVehicle};
-use crate::player::player_inventory::{MenuItemDisposition, MenuRemovalStatus, PlayerInventory};
+use crate::player::player_inventory::{
+    MenuItemDisposition, MenuRemovalStatus, PlayerInventory, PlayerInventorySyncState,
+};
 use crate::server::{
     Server,
     jobs::{JobPoll, ServerJob, ServerJobContext},
@@ -256,6 +258,9 @@ pub struct Player {
 
     /// The player's inventory container (shared with `inventory_menu`).
     pub inventory: Shared<PlayerInventory>,
+
+    /// Logical inventory slots that must be resent directly to this player's client.
+    inventory_sync: SyncMutex<PlayerInventorySyncState>,
 
     /// Last main-hand stack used for vanilla attack-strength reset checks.
     last_item_in_main_hand: SyncMutex<ItemStack>,
@@ -586,6 +591,7 @@ impl Player {
             )),
             game_modes: SyncMutex::new(PlayerGameModeState::new(GameType::Survival)),
             inventory: inventory.clone(),
+            inventory_sync: SyncMutex::new(PlayerInventorySyncState::new()),
             last_item_in_main_hand: SyncMutex::new(ItemStack::empty()),
             inventory_menu: SyncMutex::new(inventory_menu(inventory)),
             open_menu: SyncMutex::new(player_inventory::OpenMenuState::new()),
@@ -687,6 +693,7 @@ impl Player {
         self.tick_living_state();
 
         self.tick_open_menu();
+        self.flush_inventory_resync();
         self.broadcast_inventory_changes();
         self.update_pose();
 

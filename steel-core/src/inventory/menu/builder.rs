@@ -332,6 +332,7 @@ pub struct MenuBuilder {
     instance: MenuInstanceId,
     menu_type: Option<MenuTypeRef>,
     container_id: u8,
+    overrides_player_slots: bool,
     slots: Vec<SlotType>,
     container_refs: Vec<ContainerRef>,
     data_slots: Vec<i16>,
@@ -364,6 +365,7 @@ impl MenuBuilder {
             instance: MenuInstanceId::next(),
             menu_type: menu_type.into(),
             container_id,
+            overrides_player_slots: false,
             slots: Vec::new(),
             container_refs: Vec::new(),
             data_slots: Vec::new(),
@@ -695,6 +697,15 @@ impl MenuBuilder {
         self
     }
 
+    /// Declares that this menu paints over the client's standard 36 player slots.
+    ///
+    /// Pending logical inventory updates are deferred while the
+    /// menu is open and the slots are restored when it closes.
+    pub const fn overrides_player_slots(&mut self) -> &mut Self {
+        self.overrides_player_slots = true;
+        self
+    }
+
     /// Consumes the builder, creating the finished [`Menu`].
     ///
     /// # Panics
@@ -728,7 +739,7 @@ impl MenuBuilder {
             routes: self.routes,
             drain_sections: self.drain_sections,
         };
-        Menu::from_parts(behavior, layout, kind.into())
+        Menu::from_parts(behavior, layout, kind.into(), self.overrides_player_slots)
     }
 
     /// The identity of the menu being built.

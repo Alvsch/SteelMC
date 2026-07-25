@@ -43,6 +43,7 @@ pub struct Menu {
     behavior: MenuBehavior,
     layout: MenuLayout,
     kind: MenuKindType,
+    overrides_player_slots: bool,
 }
 
 impl fmt::Debug for Menu {
@@ -60,11 +61,13 @@ impl Menu {
         behavior: MenuBehavior,
         layout: MenuLayout,
         kind: MenuKindType,
+        overrides_player_slots: bool,
     ) -> Self {
         Self {
             behavior,
             layout,
             kind,
+            overrides_player_slots,
         }
     }
 
@@ -101,6 +104,12 @@ impl Menu {
     #[must_use]
     pub const fn menu_type(&self) -> Option<MenuTypeRef> {
         self.behavior.menu_type()
+    }
+
+    /// Returns whether this menu paints over the client's standard player slots.
+    #[must_use]
+    pub const fn overrides_player_slots(&self) -> bool {
+        self.overrides_player_slots
     }
 
     /// Returns true if this menu is still valid for the player.
@@ -218,6 +227,7 @@ impl Menu {
             behavior,
             layout,
             kind,
+            ..
         } = self;
         if let Some(result) = kind.quick_move(behavior, guard, slot_index, player) {
             result
