@@ -889,6 +889,9 @@ fn initial_player_info_precedes_entity_spawn_for_existing_players() {
             "player info must precede the entity spawn; packet ids: {packet_ids:?}"
         );
 
+        if let Err(error) = server.flush_known_players().await {
+            panic!("known player cache should flush before test teardown: {error}");
+        }
         drop(joining);
         drop(existing);
         drop(server);
