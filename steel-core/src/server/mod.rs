@@ -308,7 +308,7 @@ mod tests {
     use crate::command::execution::{CommandPermissionSource, CommandSource};
     use crate::command::sender::CommandSender;
     use crate::config::{ResolvedDomainConfig, StorageSelection};
-    use crate::entity::{Entity, EntityBase, LivingEntity as _};
+    use crate::entity::{Entity, EntityBase, LivingEntity as _, SharedEntity};
     use crate::permission::{
         OP_GROUP, PermissionEntry, PermissionExpr, PermissionGroupConfig, PermissionGroupManager,
         PermissionGroupsConfig, PermissionKey, PermissionMetadataSet, PermissionSet,
@@ -697,6 +697,81 @@ mod tests {
 
     fn test_player(server: &Arc<Server>, world: Arc<World>, uuid: Uuid) -> Arc<Player> {
         test_player_with_packets(server, world, uuid, "TestPlayer", 1).0
+    }
+
+    #[test]
+    fn command_world_scope_survives_entity_transforms() {
+        let alpha = fresh_test_world_in_domain("alpha", "spawn");
+        let beta = fresh_test_world_in_domain("beta", "spawn");
+        let domains = [
+            ResolvedDomainConfig {
+                name: "alpha".to_owned(),
+                default_world: alpha.key.clone(),
+                worlds: vec![alpha.key.clone()],
+            },
+            ResolvedDomainConfig {
+                name: "beta".to_owned(),
+                default_world: beta.key.clone(),
+                worlds: vec![beta.key.clone()],
+            },
+        ];
+        let loaded_worlds = [Arc::clone(&alpha), Arc::clone(&beta)];
+        let storage_root = test_storage_root("command-world-scope");
+        let runtime = Builder::new_current_thread().enable_all().build();
+        let Ok(runtime) = runtime else {
+            panic!("test runtime should initialize");
+        };
+        runtime.block_on(async {
+            let server = test_server_with_worlds(
+                "alpha".to_owned(),
+                &domains,
+                &loaded_worlds,
+                PermissionSubjectIndex::new(),
+                &storage_root,
+            )
+            .await;
+            let Ok(server) = server else {
+                panic!("test server should initialize");
+            };
+            let player = test_player(&server, Arc::clone(&alpha), Uuid::from_u128(30));
+            let player_source = CommandSource::new(
+                CommandSender::Player(Arc::clone(&player)),
+                Arc::clone(&server),
+            );
+
+            assert!(
+                player_source.with_world(Arc::clone(&alpha)).is_ok(),
+                "players may project within their initial domain"
+            );
+            assert!(
+                player_source.with_world(Arc::clone(&beta)).is_err(),
+                "players may not project outside their initial domain"
+            );
+
+            player.set_world(Arc::clone(&beta));
+            let transformed = player_source.with_entity(Arc::clone(&player) as SharedEntity);
+            assert!(
+                transformed.with_world(Arc::clone(&beta)).is_err(),
+                "changing the execution entity must not change the initiating domain"
+            );
+
+            let console_source = CommandSource::new(CommandSender::Console, Arc::clone(&server));
+            assert!(console_source.with_world(Arc::clone(&beta)).is_ok());
+            let rcon_source = CommandSource::new(CommandSender::Rcon, Arc::clone(&server));
+            assert!(rcon_source.with_world(Arc::clone(&beta)).is_ok());
+
+            drop((
+                transformed,
+                player_source,
+                player,
+                console_source,
+                rcon_source,
+            ));
+            drop(server);
+            if let Err(error) = fs::remove_dir_all(&storage_root).await {
+                panic!("test storage should be removed: {error}");
+            }
+        });
     }
 
     fn test_player_with_connection(

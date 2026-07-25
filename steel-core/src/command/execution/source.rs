@@ -187,13 +187,22 @@ pub(crate) trait CommandPermissionSource: ExecutionCommandSource {
 struct CommandAuthorizationContext {
     permission_context: PermissionContext,
     player_permissions: Option<PermissionSet>,
+    world_scope: CommandWorldScope,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CommandWorldScope {
+    Global,
+    Domain(Box<str>),
 }
 
 impl CommandAuthorizationContext {
     fn for_player(world: steel_utils::Identifier, permissions: PermissionSet) -> Self {
+        let domain = world.namespace.to_string().into_boxed_str();
         Self {
             permission_context: PermissionContext::for_world(world),
             player_permissions: Some(permissions),
+            world_scope: CommandWorldScope::Domain(domain),
         }
     }
 
@@ -201,6 +210,7 @@ impl CommandAuthorizationContext {
         Self {
             permission_context: PermissionContext::for_world(world),
             player_permissions: None,
+            world_scope: CommandWorldScope::Global,
         }
     }
 
@@ -213,6 +223,13 @@ impl CommandAuthorizationContext {
             return Some(PermissionState::Allow);
         };
         permissions.resolve_in(permission, self.permission_context())
+    }
+
+    fn allows_execution_domain(&self, domain: &str) -> bool {
+        match &self.world_scope {
+            CommandWorldScope::Global => true,
+            CommandWorldScope::Domain(execution_domain) => execution_domain.as_ref() == domain,
+        }
     }
 }
 
@@ -253,12 +270,14 @@ impl CommandSource {
         let rotation = entity
             .as_ref()
             .map_or((0.0, 0.0), |entity| entity.rotation());
-        let authorization = match &player {
-            Some(player) => CommandAuthorizationContext::for_player(
+        let authorization = match &sender {
+            CommandSender::Player(player) => CommandAuthorizationContext::for_player(
                 world.key.clone(),
                 server.command_permission_snapshot(player.gameprofile.id),
             ),
-            None => CommandAuthorizationContext::unrestricted(world.key.clone()),
+            CommandSender::Console | CommandSender::Rcon => {
+                CommandAuthorizationContext::unrestricted(world.key.clone())
+            }
         };
 
         Self {
@@ -300,6 +319,14 @@ impl CommandSource {
         &self.server
     }
 
+    /// Returns whether `/execute` may project this source into `domain`.
+    ///
+    /// Player-originated command chains remain confined to their initial
+    /// domain. Console and Rcon sources are unrestricted.
+    pub(crate) fn allows_execution_domain(&self, domain: &str) -> bool {
+        self.authorization.allows_execution_domain(domain)
+    }
+
     pub(crate) const fn position(&self) -> DVec3 {
         self.position
     }
@@ -324,7 +351,12 @@ impl CommandSource {
         source
     }
 
-    pub(crate) fn with_world(&self, world: Arc<World>) -> Self {
+    pub(crate) fn with_world(&self, world: Arc<World>) -> Result<Self, CommandSyntaxError> {
+        if !self.allows_execution_domain(world.domain()) {
+            return Err(CommandSyntaxError::dynamic(
+                "Players cannot execute commands across Steel domains",
+            ));
+        }
         let mut source = self.clone();
         if self.world.key != world.key {
             let scale =
@@ -333,7 +365,7 @@ impl CommandSource {
             source.position.z *= scale;
         }
         source.world = world;
-        source
+        Ok(source)
     }
 
     pub(crate) fn with_position(&self, position: DVec3) -> Self {
@@ -874,6 +906,8 @@ mod tests {
             authorization.permission_context(),
             &PermissionContext::for_world(world)
         );
+        assert!(authorization.allows_execution_domain("lobby"));
+        assert!(!authorization.allows_execution_domain("survival"));
     }
 
     #[test]
@@ -902,5 +936,7 @@ mod tests {
             authorization.permission_state(&permission),
             Some(PermissionState::Allow)
         );
+        assert!(authorization.allows_execution_domain("default"));
+        assert!(authorization.allows_execution_domain("survival"));
     }
 }

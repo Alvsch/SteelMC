@@ -191,6 +191,22 @@ fn base_and_modify_permissions_grant_the_expected_access() {
 }
 
 #[test]
+fn invsee_rejects_players_in_different_domains() {
+    let source = test_player(24, "Viewer", 24);
+    let target = test_player(25, "Target", 25);
+    assert!(ensure_same_domain(&source, &target).is_ok());
+
+    assert!(target.begin_domain_switch());
+    assert!(ensure_same_domain(&source, &target).is_err());
+    target.finish_domain_switch();
+    assert!(ensure_same_domain(&source, &target).is_ok());
+
+    target.set_world(fresh_test_world_in_domain("other", "invsee_target"));
+
+    assert!(ensure_same_domain(&source, &target).is_err());
+}
+
+#[test]
 fn readonly_target_slots_reject_pickup_and_creative_clone() {
     let source = test_player(1, "Viewer", 1);
     let target = test_player(2, "Target", 2);
@@ -700,6 +716,16 @@ fn open_menu_revalidates_permissions_and_target_lifecycle() {
 
     let readonly_menu = invsee(2, &source, &target, false, access);
     assert!(readonly_menu.still_valid(&source));
+    assert!(source.begin_domain_switch());
+    assert!(!readonly_menu.still_valid(&source));
+    source.finish_domain_switch();
+    assert!(readonly_menu.still_valid(&source));
+
+    source.set_world(fresh_test_world_in_domain("other", "invsee_viewer"));
+    assert!(!readonly_menu.still_valid(&source));
+    source.set_world(Arc::clone(test_world()));
+    assert!(readonly_menu.still_valid(&source));
+
     assert!(target.begin_domain_switch());
     assert!(!readonly_menu.still_valid(&source));
     target.finish_domain_switch();

@@ -63,6 +63,7 @@ fn command(
                     "you cannot use this command from the console",
                 )));
             };
+            ensure_same_domain(source, &target)?;
             let modify = ctx.source().has_permission(&modify_permission);
             let required_permission = if modify {
                 modify_permission.clone()
@@ -75,6 +76,22 @@ fn command(
             Ok(0)
         }),
     )
+}
+
+fn ensure_same_domain(source: &Player, target: &Player) -> Result<(), CommandSyntaxError> {
+    if source.is_domain_switching() || target.is_domain_switching() {
+        return Err(CommandSyntaxError::dynamic(
+            "Invsee is unavailable while a player is switching domains",
+        ));
+    }
+    let source_world = source.get_world();
+    let target_world = target.get_world();
+    if source_world.domain() == target_world.domain() {
+        return Ok(());
+    }
+    Err(CommandSyntaxError::dynamic(
+        "Invsee cannot open inventories across Steel domains",
+    ))
 }
 
 fn invsee(
@@ -146,7 +163,7 @@ fn invsee(
     b.build(MenuKindType::custom(InvseeMenuKind {
         target: Arc::downgrade(target),
         target_inventory_id: ContainerId::from_arc(&target.inventory),
-        target_domain: target.get_world().domain().into(),
+        domain: target.get_world().domain().into(),
         required_permission,
         modify,
         target_slots,
@@ -177,7 +194,7 @@ fn readonly_section(
 struct InvseeMenuKind {
     target: Weak<Player>,
     target_inventory_id: ContainerId,
-    target_domain: Box<str>,
+    domain: Box<str>,
     required_permission: PermissionExpr,
     modify: bool,
     target_slots: Range<usize>,
@@ -253,10 +270,14 @@ impl MenuKind for InvseeMenuKind {
         let Some(target) = self.target.upgrade() else {
             return false;
         };
+        let player_world = player.get_world();
+        let target_world = target.get_world();
         player.has_permission(&self.required_permission)
+            && !player.is_domain_switching()
             && !target.connection.closed()
             && !target.is_domain_switching()
-            && target.get_world().domain() == self.target_domain.as_ref()
+            && player_world.domain() == self.domain.as_ref()
+            && target_world.domain() == self.domain.as_ref()
     }
 }
 
