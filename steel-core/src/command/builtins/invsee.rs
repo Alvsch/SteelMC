@@ -73,7 +73,7 @@ fn command(
             source.open_menu(target.display_name(), |container_id, _world| {
                 invsee(container_id, source, &target, modify, required_permission)
             });
-            Ok(0)
+            Ok(1)
         }),
     )
 }

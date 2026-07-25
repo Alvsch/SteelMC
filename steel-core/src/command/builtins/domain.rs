@@ -101,6 +101,7 @@ fn domain_menu(
             ItemStack::new(&vanilla_items::GRAY_STAINED_GLASS_PANE),
         );
 
+        // TODO: Add pagination for domains and worlds instead of truncating to the grid capacity.
         domain_names
             .iter()
             .take(4)

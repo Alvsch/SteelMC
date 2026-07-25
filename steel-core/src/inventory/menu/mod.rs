@@ -413,6 +413,7 @@ impl Menu {
                         unreachable!("the explicitly locked player inventory must be present");
                     };
                     let added = inventory.add(&mut displaced);
+                    // Vanilla's Inventory::add consumes uninserted stacks in creative mode.
                     if !added && !player.has_infinite_materials() {
                         let _ = guard.run_unlocked(|| player.drop_item(displaced, false, true));
                     }
