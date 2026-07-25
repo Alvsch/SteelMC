@@ -527,6 +527,71 @@ fn domain_switch_job_progresses_across_chunk_scheduling_boundaries() {
     });
 }
 
+fn apply_non_default_domain_data(player: &Player) {
+    let mut source_data = PersistentPlayerData::from_player(player);
+    source_data.remaining_fire_ticks = 40;
+    source_data.ticks_frozen = 20;
+    source_data.is_in_powder_snow = true;
+    source_data.was_in_powder_snow = true;
+    source_data.has_visual_fire = true;
+    source_data.health = 7.0;
+    source_data.abilities.flying_speed = 0.2;
+    source_data.abilities.walking_speed = 0.3;
+    source_data.inventory = vec![PersistentSlot {
+        slot: 0,
+        item: ItemStack::new(&vanilla_items::STICK),
+    }];
+    source_data.selected_slot = 4;
+    source_data.food_level = 6;
+    source_data.food_saturation_level = 1.0;
+    source_data.food_exhaustion_level = 12.0;
+    source_data.food_tick_timer = 7;
+    source_data.experience_level = 12;
+    source_data.experience_progress = 0.5;
+    source_data.experience_total = 300;
+    source_data.score = 42;
+    source_data.seen_credits = true;
+    source_data.apply_to_player_without_location(player);
+}
+
+fn assert_default_domain_data(player: &Player) {
+    let target_data = PersistentPlayerData::from_player(player);
+    assert_eq!(target_data.remaining_fire_ticks, 0);
+    assert_eq!(target_data.ticks_frozen, 0);
+    assert!(!target_data.is_in_powder_snow);
+    assert!(!target_data.was_in_powder_snow);
+    assert!(!target_data.has_visual_fire);
+    assert_eq!(
+        target_data.health.to_bits(),
+        player.get_max_health().to_bits()
+    );
+    assert_eq!(
+        target_data.abilities.flying_speed.to_bits(),
+        0.05_f32.to_bits()
+    );
+    assert_eq!(
+        target_data.abilities.walking_speed.to_bits(),
+        0.1_f32.to_bits()
+    );
+    assert!(target_data.inventory.is_empty());
+    assert_eq!(target_data.selected_slot, 0);
+    assert_eq!(target_data.food_level, 20);
+    assert_eq!(
+        target_data.food_saturation_level.to_bits(),
+        5.0_f32.to_bits()
+    );
+    assert_eq!(
+        target_data.food_exhaustion_level.to_bits(),
+        0.0_f32.to_bits()
+    );
+    assert_eq!(target_data.food_tick_timer, 0);
+    assert_eq!(target_data.experience_level, 0);
+    assert_eq!(target_data.experience_progress.to_bits(), 0.0_f32.to_bits());
+    assert_eq!(target_data.experience_total, 0);
+    assert_eq!(target_data.score, 0);
+    assert!(!target_data.seen_credits);
+}
+
 #[test]
 fn first_domain_visit_resets_domain_scoped_player_data() {
     let source_world = fresh_test_world_in_domain("source", "spawn");
@@ -568,30 +633,7 @@ fn first_domain_visit_resets_domain_scoped_player_data() {
         assert!(source_world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
         let _ = player.mark_joined_world();
 
-        let mut source_data = PersistentPlayerData::from_player(&player);
-        source_data.remaining_fire_ticks = 40;
-        source_data.ticks_frozen = 20;
-        source_data.is_in_powder_snow = true;
-        source_data.was_in_powder_snow = true;
-        source_data.has_visual_fire = true;
-        source_data.health = 7.0;
-        source_data.abilities.flying_speed = 0.2;
-        source_data.abilities.walking_speed = 0.3;
-        source_data.inventory = vec![PersistentSlot {
-            slot: 0,
-            item: ItemStack::new(&vanilla_items::STICK),
-        }];
-        source_data.selected_slot = 4;
-        source_data.food_level = 6;
-        source_data.food_saturation_level = 1.0;
-        source_data.food_exhaustion_level = 12.0;
-        source_data.food_tick_timer = 7;
-        source_data.experience_level = 12;
-        source_data.experience_progress = 0.5;
-        source_data.experience_total = 300;
-        source_data.score = 42;
-        source_data.seen_credits = true;
-        source_data.apply_to_player_without_location(&player);
+        apply_non_default_domain_data(&player);
 
         let target_before_switch = server.player_data_storage.load_domain("target", uuid).await;
         assert!(matches!(target_before_switch, Ok(None)));
@@ -613,26 +655,7 @@ fn first_domain_visit_resets_domain_scoped_player_data() {
         assert!(server.jobs.is_empty(), "domain switch job should finish");
         assert!(Arc::ptr_eq(&player.get_world(), &target_world));
 
-        let target_data = PersistentPlayerData::from_player(&player);
-        assert_eq!(target_data.remaining_fire_ticks, 0);
-        assert_eq!(target_data.ticks_frozen, 0);
-        assert!(!target_data.is_in_powder_snow);
-        assert!(!target_data.was_in_powder_snow);
-        assert!(!target_data.has_visual_fire);
-        assert_eq!(target_data.health, player.get_max_health());
-        assert_eq!(target_data.abilities.flying_speed, 0.05);
-        assert_eq!(target_data.abilities.walking_speed, 0.1);
-        assert!(target_data.inventory.is_empty());
-        assert_eq!(target_data.selected_slot, 0);
-        assert_eq!(target_data.food_level, 20);
-        assert_eq!(target_data.food_saturation_level, 5.0);
-        assert_eq!(target_data.food_exhaustion_level, 0.0);
-        assert_eq!(target_data.food_tick_timer, 0);
-        assert_eq!(target_data.experience_level, 0);
-        assert_eq!(target_data.experience_progress, 0.0);
-        assert_eq!(target_data.experience_total, 0);
-        assert_eq!(target_data.score, 0);
-        assert!(!target_data.seen_credits);
+        assert_default_domain_data(&player);
 
         drop(player);
         drop(server);
