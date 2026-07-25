@@ -1796,9 +1796,8 @@ impl Player {
         self.reset_inner_after(new_world, reason, false, || {});
     }
 
-    /// Resets for a domain switch and restores target-domain state after the
-    /// player has been detached from the old world's live entity indexes.
-    pub(crate) fn reset_after_domain_save_and_restore<F>(
+    /// Resets a player already detached from its source domain and restores target-domain state.
+    pub(crate) fn reset_after_detached_domain_restore<F>(
         self: &Arc<Self>,
         new_world: Arc<World>,
         restore_state: F,
@@ -1812,7 +1811,7 @@ impl Player {
         self: &Arc<Self>,
         new_world: Arc<World>,
         reason: ResetReason,
-        store_root_vehicle: bool,
+        source_world_detached: bool,
         restore_state: F,
     ) where
         F: FnOnce(),
@@ -1837,9 +1836,7 @@ impl Player {
 
         if switching_worlds {
             self.send_packet(CContainerClose { container_id: 0 });
-            if store_root_vehicle {
-                old_world.remove_player_for_domain_switch(self);
-            } else {
+            if !source_world_detached {
                 old_world.remove_player_for_world_change(self);
             }
             self.set_world(new_world.clone());

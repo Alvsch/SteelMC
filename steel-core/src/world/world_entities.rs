@@ -156,13 +156,14 @@ impl World {
         self.chunk_map.remove_player(&player);
     }
 
-    /// Removes a player during a domain switch after the caller has saved
-    /// the player's current-domain data.
-    pub(crate) fn remove_player_for_domain_switch(self: &Arc<Self>, player: &Arc<Player>) {
-        let Some(player) = self.players.remove_player_sync(player) else {
-            return;
-        };
+    /// Detaches a player for a domain switch and returns its persistence snapshot.
+    pub(crate) fn detach_player_for_domain_switch(
+        self: &Arc<Self>,
+        player: &Arc<Player>,
+    ) -> Option<PersistentPlayerData> {
+        let player = self.players.remove_player_sync(player)?;
         let entity_id = player.id();
+        let player_data = PersistentPlayerData::from_player(&player);
 
         self.unride_player_for_removal(&player, true);
         player.store_ender_pearls_with_player();
@@ -170,6 +171,7 @@ impl World {
         self.entity_tracker().on_player_leave(entity_id);
         self.player_area_map.on_player_leave(&player);
         self.chunk_map.remove_player(&player);
+        Some(player_data)
     }
 
     /// Adds a player to the world.

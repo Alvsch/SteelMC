@@ -76,7 +76,7 @@ use std::{
     io, mem,
     num::NonZero,
     path::Path,
-    sync::{Arc, mpsc},
+    sync::{Arc, Weak, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -106,7 +106,7 @@ use tick_rate_manager::{SprintReport, TickRateManager};
 use tokio::{
     runtime::Runtime,
     sync::Notify,
-    task::{JoinSet, spawn_blocking},
+    task::{JoinHandle, JoinSet, spawn_blocking},
     time::sleep,
 };
 use tokio_util::sync::CancellationToken;
@@ -289,7 +289,7 @@ mod tests {
         path::{Path, PathBuf},
         slice,
         sync::{Arc, Weak},
-        time::{SystemTime, UNIX_EPOCH},
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use glam::DVec3;
@@ -302,7 +302,7 @@ mod tests {
     use steel_utils::ChunkPos;
     use steel_utils::{codec::VarInt, serial::ReadFrom, text::DisplayResolutor};
     use text_components::TextComponent;
-    use tokio::{fs, runtime::Builder};
+    use tokio::{fs, runtime::Builder, time::sleep};
     use uuid::Uuid;
 
     use crate::command::execution::{CommandPermissionSource, CommandSource};
@@ -582,7 +582,7 @@ mod tests {
                     data: mismatch_data,
                     spawn: mismatch_spawn,
                 },
-                _spawn_chunk_request: mismatch_request,
+                spawn_chunk_request: mismatch_request,
             };
             assert!(Server::root_vehicle_to_restore(&mismatch_state).is_none());
             let mismatch_player = test_player(
@@ -624,7 +624,7 @@ mod tests {
                 data: DomainPlayerData::SavedRestored {
                     data: matching_data,
                 },
-                _spawn_chunk_request: matching_request,
+                spawn_chunk_request: matching_request,
             };
             let matching_player = test_player(
                 &server,
@@ -688,6 +688,97 @@ mod tests {
                 UnpreparedDomainPlayerData::SavedWithoutLocation { .. }
             ));
 
+            drop(server);
+            if let Err(error) = fs::remove_dir_all(&storage_root).await {
+                panic!("test storage should be removed: {error}");
+            }
+        });
+    }
+
+    #[test]
+    fn domain_switch_job_progresses_across_chunk_scheduling_boundaries() {
+        let source_world = fresh_test_world_in_domain("source", "spawn");
+        let target_world = fresh_test_world_in_domain("target", "spawn");
+        let runtime = Builder::new_current_thread().enable_all().build();
+        let Ok(runtime) = runtime else {
+            panic!("test runtime should initialize");
+        };
+        runtime.block_on(async {
+            let domains = [
+                ResolvedDomainConfig {
+                    name: "source".to_owned(),
+                    default_world: source_world.key.clone(),
+                    worlds: vec![source_world.key.clone()],
+                },
+                ResolvedDomainConfig {
+                    name: "target".to_owned(),
+                    default_world: target_world.key.clone(),
+                    worlds: vec![target_world.key.clone()],
+                },
+            ];
+            let worlds = [Arc::clone(&source_world), Arc::clone(&target_world)];
+            let storage_root = test_storage_root("domain-switch-job");
+            let server = test_server_with_worlds(
+                "source".to_owned(),
+                &domains,
+                &worlds,
+                PermissionSubjectIndex::new(),
+                &storage_root,
+            )
+            .await;
+            let Ok(server) = server else {
+                panic!("test server should initialize");
+            };
+
+            let uuid = Uuid::from_u128(1);
+            let player = test_player(&server, Arc::clone(&source_world), uuid);
+            assert!(server.online_players.insert(Arc::clone(&player)));
+            assert!(source_world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+            let _ = player.mark_joined_world();
+
+            let target_position = DVec3::new(8.5, 70.0, 8.5);
+            let mut target_data = PersistentPlayerData::from_player(&player);
+            target_data.world = target_world.key.to_string();
+            target_data.pos = target_position.to_array();
+            let saved = server
+                .player_data_storage
+                .save_domain_data("target", uuid, &target_data)
+                .await;
+            if let Err(error) = saved {
+                panic!("target-domain data should save: {error}");
+            }
+
+            let queued = server.queue_domain_switch(Arc::clone(&player), "target".to_owned());
+            assert!(queued.is_ok());
+            server.process_domain_switches();
+
+            assert_eq!(server.jobs.len(), 1);
+            assert!(player.is_domain_switching());
+            assert!(source_world.players.get_by_uuid(&uuid).is_none());
+            assert!(target_world.players.get_by_uuid(&uuid).is_none());
+
+            for tick in 1..=10_000 {
+                source_world.chunk_map.advance_scheduling();
+                target_world.chunk_map.advance_scheduling();
+                server.tick_jobs(tick, true);
+                if server.jobs.is_empty() {
+                    break;
+                }
+                sleep(Duration::from_millis(1)).await;
+            }
+
+            assert!(server.jobs.is_empty(), "domain switch job should finish");
+            assert!(!player.is_domain_switching());
+            assert!(source_world.players.get_by_uuid(&uuid).is_none());
+            assert!(
+                target_world
+                    .players
+                    .get_by_uuid(&uuid)
+                    .is_some_and(|current| Arc::ptr_eq(&current, &player))
+            );
+            assert_eq!(player.position(), target_position);
+
+            drop(player);
             drop(server);
             if let Err(error) = fs::remove_dir_all(&storage_root).await {
                 panic!("test storage should be removed: {error}");
@@ -887,7 +978,7 @@ mod tests {
             let state = DomainPlayerState {
                 world: Arc::clone(&world),
                 data: DomainPlayerData::FirstVisit { spawn },
-                _spawn_chunk_request: world.request_player_spawn_chunks(spawn_position),
+                spawn_chunk_request: world.request_player_spawn_chunks(spawn_position),
             };
 
             server.finish_prepared_player_join(PendingPlayerJoin {
@@ -1693,7 +1784,7 @@ fn world_config_registries() -> Result<(WorldGeneratorRegistry, WorldStorageRegi
 struct DomainPlayerState {
     world: Arc<World>,
     data: DomainPlayerData,
-    _spawn_chunk_request: ChunkRequestHandle,
+    spawn_chunk_request: ChunkRequestHandle,
 }
 
 struct UnpreparedDomainPlayerState {
@@ -1725,6 +1816,38 @@ struct DomainSwitchRequest {
     player: Arc<Player>,
     target_domain: String,
     target_world: Option<Arc<World>>,
+}
+
+const DOMAIN_SPAWN_SEARCH_READY_CANDIDATE_BUDGET: usize = 8;
+
+struct DomainSwitchJob {
+    server: Weak<Server>,
+    player: Arc<Player>,
+    source_domain: String,
+    source_data: Option<Arc<PersistentPlayerData>>,
+    target_domain: String,
+    phase: DomainSwitchJobPhase,
+}
+
+enum DomainSwitchJobPhase {
+    WaitingForStorage {
+        receiver: mpsc::Receiver<Result<UnpreparedDomainPlayerState, String>>,
+        task: JoinHandle<()>,
+    },
+    SearchingSpawn {
+        world: Arc<World>,
+        data: UnpreparedDomainPlayerData,
+        rotation: (f32, f32),
+        search: PlayerSpawnSearch,
+    },
+    LoadingSpawn {
+        state: DomainPlayerState,
+    },
+    SavingGlobal {
+        receiver: mpsc::Receiver<Result<(), String>>,
+        task: JoinHandle<()>,
+    },
+    Transitioning,
 }
 
 /// Failure while atomically editing one player's persisted permission state.
@@ -1769,7 +1892,7 @@ struct PendingPlayerJoin {
 struct PendingPlayerDisconnect {
     player: Arc<Player>,
     domain: String,
-    player_data: PersistentPlayerData,
+    player_data: Arc<PersistentPlayerData>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1808,12 +1931,14 @@ impl PlayerJoinQueue {
 
 struct PlayerDisconnectQueue {
     queued: SegQueue<Arc<Player>>,
+    prepared: SegQueue<PendingPlayerDisconnect>,
 }
 
 impl PlayerDisconnectQueue {
     const fn new() -> Self {
         Self {
             queued: SegQueue::new(),
+            prepared: SegQueue::new(),
         }
     }
 
@@ -1825,8 +1950,366 @@ impl PlayerDisconnectQueue {
         self.queued.pop()
     }
 
+    fn send_prepared(&self, disconnect: PendingPlayerDisconnect) {
+        self.prepared.push(disconnect);
+    }
+
+    fn drain_prepared(&self) -> Vec<PendingPlayerDisconnect> {
+        let mut prepared = Vec::new();
+        while let Some(disconnect) = self.prepared.pop() {
+            prepared.push(disconnect);
+        }
+        prepared
+    }
+
     fn clear(&self) {
         while self.queued.pop().is_some() {}
+        while self.prepared.pop().is_some() {}
+    }
+}
+
+impl DomainSwitchJob {
+    fn new(
+        server: &Arc<Server>,
+        player: Arc<Player>,
+        source_domain: String,
+        source_data: PersistentPlayerData,
+        target_domain: String,
+        target_world: Option<Arc<World>>,
+    ) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let task_server = Arc::clone(server);
+        let task_player = Arc::clone(&player);
+        let task_source_domain = source_domain.clone();
+        let source_data = Arc::new(source_data);
+        let task_source_data = Arc::clone(&source_data);
+        let task_target_domain = target_domain.clone();
+        let task = tokio::spawn(async move {
+            let result = async {
+                task_server
+                    .player_data_storage
+                    .save_domain_data(
+                        &task_source_domain,
+                        task_player.gameprofile.id,
+                        task_source_data.as_ref(),
+                    )
+                    .await
+                    .map_err(|error| format!("failed to save current domain data: {error}"))?;
+                task_server
+                    .load_unprepared_domain_player_state(
+                        &task_player,
+                        &task_target_domain,
+                        target_world,
+                    )
+                    .await
+            }
+            .await;
+            let _ = sender.send(result);
+        });
+
+        Self {
+            server: Arc::downgrade(server),
+            player,
+            source_domain,
+            source_data: Some(source_data),
+            target_domain,
+            phase: DomainSwitchJobPhase::WaitingForStorage { receiver, task },
+        }
+    }
+
+    fn abort_async_task(&self) {
+        match &self.phase {
+            DomainSwitchJobPhase::WaitingForStorage { task, .. }
+            | DomainSwitchJobPhase::SavingGlobal { task, .. } => task.abort(),
+            DomainSwitchJobPhase::SearchingSpawn { .. }
+            | DomainSwitchJobPhase::LoadingSpawn { .. }
+            | DomainSwitchJobPhase::Transitioning => {}
+        }
+    }
+
+    fn finish_source_disconnect(&mut self, error: Option<&str>) -> JobPoll {
+        self.abort_async_task();
+        if let Some(error) = error {
+            log::error!(
+                "Failed to switch {} domain: {error}",
+                self.player.gameprofile.name
+            );
+            if !self.player.connection.closed() {
+                self.player.disconnect("Failed to switch domain");
+            }
+        }
+
+        let Some(source_data) = self.source_data.take() else {
+            self.player.finish_domain_switch();
+            return JobPoll::Finished;
+        };
+        let Some(server) = self.server.upgrade() else {
+            self.player.finish_domain_switch();
+            self.player.cleanup();
+            return JobPoll::Finished;
+        };
+        server.queue_detached_player_disconnect(
+            Arc::clone(&self.player),
+            self.source_domain.clone(),
+            source_data,
+        );
+        JobPoll::Finished
+    }
+
+    fn phase_after_storage(
+        server: &Server,
+        target_domain: &str,
+        state: UnpreparedDomainPlayerState,
+    ) -> Result<DomainSwitchJobPhase, String> {
+        let UnpreparedDomainPlayerState {
+            world,
+            explicit_target,
+            data,
+        } = state;
+        if let UnpreparedDomainPlayerData::SavedRestored { data } = data {
+            let spawn_position = DVec3::new(data.pos[0], data.pos[1], data.pos[2]);
+            let request = world.request_player_spawn_chunks(spawn_position);
+            return Ok(DomainSwitchJobPhase::LoadingSpawn {
+                state: DomainPlayerState {
+                    world,
+                    data: DomainPlayerData::SavedRestored { data },
+                    spawn_chunk_request: request,
+                },
+            });
+        }
+
+        let (world, spawn_suggestion, rotation) = if explicit_target {
+            let (spawn, spawn_pos) = {
+                let level_data = world.level_data.read();
+                (
+                    level_data.data().spawn.clone(),
+                    level_data.data().spawn_pos(),
+                )
+            };
+            (world, spawn_pos, (spawn.angle, 0.0))
+        } else {
+            let (world, respawn_data) = server.respawn_world_and_data_for_domain(target_domain)?;
+            (
+                world,
+                respawn_data.pos(),
+                (respawn_data.yaw, respawn_data.pitch),
+            )
+        };
+        let search = PlayerSpawnSearch::new(&world, spawn_suggestion, world.default_gamemode)?;
+        Ok(DomainSwitchJobPhase::SearchingSpawn {
+            world,
+            data,
+            rotation,
+            search,
+        })
+    }
+
+    fn state_after_spawn_search(
+        world: Arc<World>,
+        data: UnpreparedDomainPlayerData,
+        spawn: PreparedSpawn,
+    ) -> Result<DomainPlayerState, String> {
+        let data = match data {
+            UnpreparedDomainPlayerData::SavedWithoutLocation { data } => {
+                DomainPlayerData::SavedWithoutLocation { data, spawn }
+            }
+            UnpreparedDomainPlayerData::FirstVisit => DomainPlayerData::FirstVisit { spawn },
+            UnpreparedDomainPlayerData::SavedRestored { .. } => {
+                return Err("saved domain location unexpectedly entered spawn search".to_owned());
+            }
+        };
+        let request = world.request_player_spawn_chunks(spawn.position);
+        Ok(DomainPlayerState {
+            world,
+            data,
+            spawn_chunk_request: request,
+        })
+    }
+
+    fn commit_target_state(&mut self, server: &Arc<Server>, state: DomainPlayerState) -> JobPoll {
+        let restore_player = Arc::clone(&self.player);
+        self.player
+            .reset_after_detached_domain_restore(Arc::clone(&state.world), || {
+                Server::apply_domain_player_state(&restore_player, &state);
+            });
+        let pos = self.player.position();
+        let rotation = self.player.rotation();
+        if !self.player.spawn(pos, rotation, ResetReason::WorldChange) {
+            let target_data = PersistentPlayerData::from_player(&self.player);
+            self.source_data = None;
+            server.queue_detached_player_disconnect(
+                Arc::clone(&self.player),
+                self.target_domain.clone(),
+                Arc::new(target_data),
+            );
+            return JobPoll::Finished;
+        }
+        server.schedule_root_vehicle_restore(&self.player, &state);
+        server.schedule_ender_pearl_restores(&self.player, &state);
+        self.source_data = None;
+
+        let (sender, receiver) = mpsc::channel();
+        let task_server = Arc::clone(server);
+        let task_target_domain = self.target_domain.clone();
+        let uuid = self.player.gameprofile.id;
+        let task = tokio::spawn(async move {
+            let result = task_server
+                .player_data_storage
+                .save_global(
+                    uuid,
+                    &GlobalPlayerData {
+                        last_active_domain: task_target_domain,
+                    },
+                )
+                .await
+                .map_err(|error| format!("failed to save active domain: {error}"));
+            let _ = sender.send(result);
+        });
+        self.phase = DomainSwitchJobPhase::SavingGlobal { receiver, task };
+        JobPoll::Pending
+    }
+}
+
+impl ServerJob for DomainSwitchJob {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the domain transition phases stay together so every state transfer remains explicit"
+    )]
+    fn poll(&mut self, context: &mut ServerJobContext) -> JobPoll {
+        if self.player.connection.closed() {
+            return self.finish_source_disconnect(None);
+        }
+        let Some(server) = context.server() else {
+            return self.finish_source_disconnect(None);
+        };
+
+        loop {
+            let phase = mem::replace(&mut self.phase, DomainSwitchJobPhase::Transitioning);
+            match phase {
+                DomainSwitchJobPhase::WaitingForStorage { receiver, task } => {
+                    let result = match receiver.try_recv() {
+                        Ok(result) => result,
+                        Err(mpsc::TryRecvError::Empty) => {
+                            self.phase = DomainSwitchJobPhase::WaitingForStorage { receiver, task };
+                            return JobPoll::Pending;
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            return self.finish_source_disconnect(Some(
+                                "domain storage task ended without a result",
+                            ));
+                        }
+                    };
+                    drop(task);
+                    let state = match result {
+                        Ok(state) => state,
+                        Err(error) => return self.finish_source_disconnect(Some(&error)),
+                    };
+                    self.phase =
+                        match Self::phase_after_storage(&server, &self.target_domain, state) {
+                            Ok(phase) => phase,
+                            Err(error) => return self.finish_source_disconnect(Some(&error)),
+                        };
+                }
+                DomainSwitchJobPhase::SearchingSpawn {
+                    world,
+                    data,
+                    rotation,
+                    mut search,
+                } => match search.poll_with_ready_candidate_budget(
+                    &world,
+                    DOMAIN_SPAWN_SEARCH_READY_CANDIDATE_BUDGET,
+                ) {
+                    PlayerSpawnSearchPoll::Pending => {
+                        self.phase = DomainSwitchJobPhase::SearchingSpawn {
+                            world,
+                            data,
+                            rotation,
+                            search,
+                        };
+                        return JobPoll::Pending;
+                    }
+                    PlayerSpawnSearchPoll::Cancelled => {
+                        return self.finish_source_disconnect(Some(
+                            "spawn search chunk request was cancelled",
+                        ));
+                    }
+                    PlayerSpawnSearchPoll::Ready(position) => {
+                        let state = match Self::state_after_spawn_search(
+                            world,
+                            data,
+                            PreparedSpawn { position, rotation },
+                        ) {
+                            Ok(state) => state,
+                            Err(error) => return self.finish_source_disconnect(Some(&error)),
+                        };
+                        self.phase = DomainSwitchJobPhase::LoadingSpawn { state };
+                    }
+                },
+                DomainSwitchJobPhase::LoadingSpawn { state } => {
+                    match state.spawn_chunk_request.poll() {
+                        ChunkRequestState::Pending { .. } => {
+                            self.phase = DomainSwitchJobPhase::LoadingSpawn { state };
+                            return JobPoll::Pending;
+                        }
+                        ChunkRequestState::Cancelled => {
+                            return self.finish_source_disconnect(Some(
+                                "player spawn chunk request was cancelled",
+                            ));
+                        }
+                        ChunkRequestState::Ready => {
+                            if state.spawn_chunk_request.ready_chunks().is_none() {
+                                self.phase = DomainSwitchJobPhase::LoadingSpawn { state };
+                                return JobPoll::Pending;
+                            }
+                        }
+                    }
+                    return self.commit_target_state(&server, state);
+                }
+                DomainSwitchJobPhase::SavingGlobal { receiver, task } => {
+                    let result = match receiver.try_recv() {
+                        Ok(result) => result,
+                        Err(mpsc::TryRecvError::Empty) => {
+                            self.phase = DomainSwitchJobPhase::SavingGlobal { receiver, task };
+                            return JobPoll::Pending;
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            log::error!(
+                                "Active-domain save task for {} ended without a result",
+                                self.player.gameprofile.name
+                            );
+                            self.player.finish_domain_switch();
+                            return JobPoll::Finished;
+                        }
+                    };
+                    drop(task);
+                    if let Err(error) = result {
+                        log::error!(
+                            "Failed to save global player data for {} after domain switch: {error}",
+                            self.player.gameprofile.name
+                        );
+                    }
+                    self.player.finish_domain_switch();
+                    return JobPoll::Finished;
+                }
+                DomainSwitchJobPhase::Transitioning => {
+                    return self.finish_source_disconnect(Some(
+                        "domain switch entered an invalid transition state",
+                    ));
+                }
+            }
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.abort_async_task();
+        if self.source_data.is_some() {
+            if !self.player.connection.closed() {
+                self.player.connection.close();
+            }
+            let _ = self.finish_source_disconnect(None);
+        } else {
+            self.player.finish_domain_switch();
+        }
     }
 }
 
@@ -3165,6 +3648,29 @@ impl Server {
         self.pending_player_disconnects.send(player);
     }
 
+    fn queue_detached_player_disconnect(
+        &self,
+        player: Arc<Player>,
+        domain: String,
+        player_data: Arc<PersistentPlayerData>,
+    ) {
+        let uuid = player.gameprofile.id;
+        player.finish_domain_switch();
+        if !self.reserve_player_disconnect(&player) {
+            return;
+        }
+
+        self.broadcast_player_leave_message(&player);
+        self.remove_online_player_sync(&player);
+        self.broadcast_to_online(CRemovePlayerInfo { uuids: vec![uuid] });
+        self.pending_player_disconnects
+            .send_prepared(PendingPlayerDisconnect {
+                player,
+                domain,
+                player_data,
+            });
+    }
+
     fn process_player_disconnects(&self) -> Vec<PendingPlayerDisconnect> {
         let mut pending = Vec::new();
         while let Some(player) = self.pending_player_disconnects.pop() {
@@ -3211,7 +3717,7 @@ impl Server {
         Some(PendingPlayerDisconnect {
             player,
             domain,
-            player_data,
+            player_data: Arc::new(player_data),
         })
     }
 
@@ -3226,7 +3732,7 @@ impl Server {
 
         if let Err(e) = self
             .player_data_storage
-            .save_domain_data(&domain, uuid, &player_data)
+            .save_domain_data(&domain, uuid, player_data.as_ref())
             .await
         {
             log::error!("Failed to save player domain data for {uuid}: {e}");
@@ -3250,7 +3756,9 @@ impl Server {
     }
 
     fn start_player_disconnect_saves(self: &Arc<Self>, saves: &mut JoinSet<()>) {
-        for pending in self.process_player_disconnects() {
+        let mut pending = self.pending_player_disconnects.drain_prepared();
+        pending.extend(self.process_player_disconnects());
+        for pending in pending {
             let server = Arc::clone(self);
             saves.spawn(async move {
                 server.save_disconnected_player(pending).await;
@@ -3825,7 +4333,7 @@ impl Server {
         Ok(DomainPlayerState {
             world,
             data,
-            _spawn_chunk_request: spawn_chunk_request,
+            spawn_chunk_request,
         })
     }
 
@@ -4250,12 +4758,17 @@ impl Server {
     }
 
     /// The main game tick loop (20 TPS, governed by tick rate manager).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the ordered tick phases and their shutdown joins remain easier to audit together"
+    )]
     async fn run_game_tick(self: Arc<Self>, cancel_token: CancellationToken) {
         let mut next_tick_time = Instant::now();
         let mut next_command_data_autosave = Instant::now() + COMMAND_DATA_AUTOSAVE_INTERVAL;
         let mut player_info_ticks = 0_u64;
         let mut pending_command_executions = PendingCommandExecutionQueue::<CommandSource>::new();
         let mut player_disconnect_saves = JoinSet::new();
+        let mut command_data_autosaves = JoinSet::new();
 
         loop {
             if cancel_token.is_cancelled() {
@@ -4325,12 +4838,12 @@ impl Server {
                         .await;
             }
 
-            self.process_domain_switches().await;
+            self.process_domain_switches();
 
-            if Instant::now() >= next_command_data_autosave {
-                self.autosave_command_data().await;
-                next_command_data_autosave = Instant::now() + COMMAND_DATA_AUTOSAVE_INTERVAL;
-            }
+            self.tick_command_data_autosave(
+                &mut next_command_data_autosave,
+                &mut command_data_autosaves,
+            );
 
             let tab_list_tick_stats = self.record_tick_and_capture_tab_stats(
                 tick_count,
@@ -4356,10 +4869,16 @@ impl Server {
         pending_command_executions.cancel_all();
         self.command_requests.clear();
         self.packet_processor.stop();
+        self.start_player_disconnect_saves(&mut player_disconnect_saves);
         self.pending_player_disconnects.clear();
         while let Some(result) = player_disconnect_saves.join_next().await {
             if let Err(error) = result {
                 log::error!("Player disconnect save task failed during shutdown: {error}");
+            }
+        }
+        while let Some(result) = command_data_autosaves.join_next().await {
+            if let Err(error) = result {
+                log::error!("Command data autosave task failed during shutdown: {error}");
             }
         }
     }
@@ -4387,6 +4906,30 @@ impl Server {
             Ok(saved) => tracing::debug!(saved, "Domain command-storage autosave completed"),
             Err(error) => tracing::error!(%error, "Domain command-storage autosave failed"),
         }
+    }
+
+    fn tick_command_data_autosave(
+        self: &Arc<Self>,
+        next_autosave: &mut Instant,
+        saves: &mut JoinSet<()>,
+    ) {
+        while let Some(result) = saves.try_join_next() {
+            if let Err(error) = result {
+                log::error!("Command data autosave task failed: {error}");
+            }
+        }
+        if Instant::now() < *next_autosave {
+            return;
+        }
+        if saves.is_empty() {
+            let server = Arc::clone(self);
+            saves.spawn(async move {
+                server.autosave_command_data().await;
+            });
+        } else {
+            tracing::warn!("Skipping command data autosave while the previous save runs");
+        }
+        *next_autosave = Instant::now() + COMMAND_DATA_AUTOSAVE_INTERVAL;
     }
 
     fn tick_pending_command_executions(pending: &mut PendingCommandExecutionQueue<CommandSource>) {
@@ -5070,16 +5613,14 @@ impl Server {
         Ok(())
     }
 
-    async fn process_domain_switches(&self) {
+    fn process_domain_switches(self: &Arc<Self>) {
         let switches = mem::take(&mut *self.pending_domain_switches.lock());
 
         for request in switches {
-            let player = request.player.clone();
+            let player = Arc::clone(&request.player);
             let player_name = player.gameprofile.name.clone();
-            let result = self.process_domain_switch(request).await;
-            player.finish_domain_switch();
-
-            if let Err(error) = result {
+            if let Err(error) = self.start_domain_switch(request) {
+                player.finish_domain_switch();
                 log::error!("Failed to switch {player_name} domain: {error}");
                 if !player.connection.closed() {
                     player.disconnect("Failed to switch domain");
@@ -5088,13 +5629,14 @@ impl Server {
         }
     }
 
-    async fn process_domain_switch(&self, request: DomainSwitchRequest) -> Result<(), String> {
+    fn start_domain_switch(self: &Arc<Self>, request: DomainSwitchRequest) -> Result<(), String> {
         let DomainSwitchRequest {
             player,
             target_domain,
             target_world,
         } = request;
         if player.connection.closed() {
+            player.finish_domain_switch();
             return Ok(());
         }
         if !self.worlds.has_domain(&target_domain) {
@@ -5103,66 +5645,25 @@ impl Server {
 
         let current_domain = player.get_world().domain().to_owned();
         if current_domain == target_domain {
+            player.finish_domain_switch();
             return Ok(());
         }
 
         if player.remove_all_menus() != MenuRemovalStatus::Complete {
             return Err("cannot save domain data while a menu callback is active".to_owned());
         }
-        let current_data = PersistentPlayerData::from_player(&player);
-        if let Err(e) = self
-            .player_data_storage
-            .save_domain_data(&current_domain, player.gameprofile.id, &current_data)
-            .await
-        {
-            return Err(format!("failed to save current domain data: {e}"));
-        }
-
-        if player.connection.closed() {
-            return Ok(());
-        }
-
-        let target_state = match self
-            .load_domain_player_state(&player, &target_domain, target_world)
-            .await
-        {
-            Ok(state) => state,
-            Err(error) => {
-                return Err(error);
-            }
-        };
-
-        if player.connection.closed() {
-            return Ok(());
-        }
-
-        let restore_player = Arc::clone(&player);
-        player.reset_after_domain_save_and_restore(target_state.world.clone(), || {
-            Self::apply_domain_player_state(&restore_player, &target_state);
-        });
-        let pos = player.position();
-        let rotation = player.rotation();
-        if !player.spawn(pos, rotation, ResetReason::WorldChange) {
-            return Err("failed to add player to target world".to_owned());
-        }
-        self.schedule_root_vehicle_restore(&player, &target_state);
-        self.schedule_ender_pearl_restores(&player, &target_state);
-
-        if let Err(e) = self
-            .player_data_storage
-            .save_global(
-                player.gameprofile.id,
-                &GlobalPlayerData {
-                    last_active_domain: target_domain,
-                },
-            )
-            .await
-        {
-            log::error!(
-                "Failed to save global player data for {} after domain switch: {e}",
-                player.gameprofile.name
-            );
-        }
+        let current_world = player.get_world();
+        let current_data = current_world
+            .detach_player_for_domain_switch(&player)
+            .ok_or_else(|| "player is not present in the current world".to_owned())?;
+        self.jobs.spawn(DomainSwitchJob::new(
+            self,
+            player,
+            current_domain,
+            current_data,
+            target_domain,
+            target_world,
+        ));
 
         Ok(())
     }
