@@ -19,7 +19,7 @@ use steel_registry::{
     vanilla_menu_types,
 };
 use steel_utils::{
-    ChunkPos, Downcast as _, Identifier, WorldAabb,
+    ChunkPos, Downcast as _, DowncastType, DowncastTypeKey, Identifier, WorldAabb,
     locks::{IntoShared as _, Shared},
     types::{GameType, InteractionHand},
 };
@@ -33,7 +33,7 @@ use crate::{
         container::{Container, SimpleContainer},
         equipment::{EntityEquipment, EquipmentSlot},
         lock::ContainerLockGuard,
-        menu::{Menu, MenuBehavior, MenuBuilder, MenuKind, MenuKindType, kinds::BasicKind},
+        menu::{Menu, MenuBehavior, MenuBuilder, MenuKind, kinds::BasicKind},
     },
     player::{Player, PlayerConnection, ResetReason, connection::NetworkConnection},
     test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk, test_world},
@@ -777,6 +777,21 @@ impl NetworkConnection for LockProbeConnection {
 
 struct CloseOnTick;
 
+macro_rules! impl_test_menu_kind_downcast {
+    ($type:ty, $name:literal) => {
+        // SAFETY: This test-owned key uniquely identifies the concrete menu
+        // kind within the test process.
+        unsafe impl DowncastType for $type {
+            const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new($name);
+        }
+    };
+}
+
+impl_test_menu_kind_downcast!(
+    CloseOnTick,
+    "steel:test/menu/player_inventory/close_on_tick"
+);
+
 impl MenuKind for CloseOnTick {
     fn on_tick(
         &mut self,
@@ -789,6 +804,11 @@ impl MenuKind for CloseOnTick {
 }
 
 struct CloseOnClick;
+
+impl_test_menu_kind_downcast!(
+    CloseOnClick,
+    "steel:test/menu/player_inventory/close_on_click"
+);
 
 impl MenuKind for CloseOnClick {
     fn on_slot_clicked(
@@ -804,6 +824,11 @@ impl MenuKind for CloseOnClick {
 }
 
 struct CloseOnOpen;
+
+impl_test_menu_kind_downcast!(
+    CloseOnOpen,
+    "steel:test/menu/player_inventory/close_on_open"
+);
 
 impl MenuKind for CloseOnOpen {
     fn on_open(
@@ -821,6 +846,11 @@ struct OpenReplacementOnOpen {
     replacement_removals: Arc<AtomicUsize>,
 }
 
+impl_test_menu_kind_downcast!(
+    OpenReplacementOnOpen,
+    "steel:test/menu/player_inventory/open_replacement_on_open"
+);
+
 impl MenuKind for OpenReplacementOnOpen {
     fn on_open(
         &mut self,
@@ -833,9 +863,9 @@ impl MenuKind for OpenReplacementOnOpen {
             empty_test_menu(
                 player,
                 container_id,
-                MenuKindType::custom(CountRemovals {
+                CountRemovals {
                     count: replacement_removals,
-                }),
+                },
             )
         });
     }
@@ -849,6 +879,11 @@ struct ReopenOnRemoved {
     replacement_removals: Arc<AtomicUsize>,
 }
 
+impl_test_menu_kind_downcast!(
+    ReopenOnRemoved,
+    "steel:test/menu/player_inventory/reopen_on_removed"
+);
+
 impl MenuKind for ReopenOnRemoved {
     fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
         let replacement_removals = Arc::clone(&self.replacement_removals);
@@ -856,9 +891,9 @@ impl MenuKind for ReopenOnRemoved {
             empty_test_menu(
                 player,
                 container_id,
-                MenuKindType::custom(CountRemovals {
+                CountRemovals {
                     count: replacement_removals,
-                }),
+                },
             )
         });
     }
@@ -867,6 +902,11 @@ impl MenuKind for ReopenOnRemoved {
 struct QueueDrainedReplacementThenRemoveAllOnOpen {
     transient: Shared<SimpleContainer>,
 }
+
+impl_test_menu_kind_downcast!(
+    QueueDrainedReplacementThenRemoveAllOnOpen,
+    "steel:test/menu/player_inventory/queue_drained_replacement_then_remove_all_on_open"
+);
 
 impl MenuKind for QueueDrainedReplacementThenRemoveAllOnOpen {
     fn on_open(
@@ -882,7 +922,7 @@ impl MenuKind for QueueDrainedReplacementThenRemoveAllOnOpen {
             let transient = builder.section(transient, 9);
             builder.player_inventory(&inventory);
             builder.drain([transient]);
-            builder.build(MenuKindType::Basic(BasicKind {}))
+            builder.build(BasicKind {})
         });
 
         assert_eq!(
@@ -894,6 +934,11 @@ impl MenuKind for QueueDrainedReplacementThenRemoveAllOnOpen {
 }
 
 struct DropAllMenusOnOpen;
+
+impl_test_menu_kind_downcast!(
+    DropAllMenusOnOpen,
+    "steel:test/menu/player_inventory/drop_all_menus_on_open"
+);
 
 impl MenuKind for DropAllMenusOnOpen {
     fn on_open(
@@ -912,6 +957,11 @@ impl MenuKind for DropAllMenusOnOpen {
 
 struct RemoveAllOnRemoved;
 
+impl_test_menu_kind_downcast!(
+    RemoveAllOnRemoved,
+    "steel:test/menu/player_inventory/remove_all_on_removed"
+);
+
 impl MenuKind for RemoveAllOnRemoved {
     fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
         assert_eq!(
@@ -924,14 +974,15 @@ impl MenuKind for RemoveAllOnRemoved {
 
 struct OpenTerminalReplacementOnRemoved;
 
+impl_test_menu_kind_downcast!(
+    OpenTerminalReplacementOnRemoved,
+    "steel:test/menu/player_inventory/open_terminal_replacement_on_removed"
+);
+
 impl MenuKind for OpenTerminalReplacementOnRemoved {
     fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
         player.open_menu("Terminal replacement", |container_id, _world| {
-            empty_test_menu(
-                player,
-                container_id,
-                MenuKindType::custom(RemoveAllOnRemoved),
-            )
+            empty_test_menu(player, container_id, RemoveAllOnRemoved)
         });
     }
 }
@@ -939,6 +990,11 @@ impl MenuKind for OpenTerminalReplacementOnRemoved {
 struct QueueReplacementOnOpenAndRemoveAllOnRemoved {
     transient: Shared<SimpleContainer>,
 }
+
+impl_test_menu_kind_downcast!(
+    QueueReplacementOnOpenAndRemoveAllOnRemoved,
+    "steel:test/menu/player_inventory/queue_replacement_on_open_and_remove_all_on_removed"
+);
 
 impl MenuKind for QueueReplacementOnOpenAndRemoveAllOnRemoved {
     fn on_open(
@@ -954,7 +1010,7 @@ impl MenuKind for QueueReplacementOnOpenAndRemoveAllOnRemoved {
             let transient = builder.section(transient, 9);
             builder.player_inventory(&inventory);
             builder.drain([transient]);
-            builder.build(MenuKindType::Basic(BasicKind {}))
+            builder.build(BasicKind {})
         });
     }
 
@@ -971,6 +1027,11 @@ struct CountRemovals {
     count: Arc<AtomicUsize>,
 }
 
+impl_test_menu_kind_downcast!(
+    CountRemovals,
+    "steel:test/menu/player_inventory/count_removals"
+);
+
 impl MenuKind for CountRemovals {
     fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
         self.count.fetch_add(1, Ordering::Relaxed);
@@ -983,6 +1044,11 @@ struct BlockTerminalMenuRemoval {
     returned_to_inventory: Arc<AtomicBool>,
 }
 
+impl_test_menu_kind_downcast!(
+    BlockTerminalMenuRemoval,
+    "steel:test/menu/player_inventory/block_terminal_menu_removal"
+);
+
 impl MenuKind for BlockTerminalMenuRemoval {
     fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
         self.entered.wait();
@@ -992,7 +1058,7 @@ impl MenuKind for BlockTerminalMenuRemoval {
     }
 }
 
-fn empty_test_menu(player: &Player, container_id: u8, kind: MenuKindType) -> Menu {
+fn empty_test_menu(player: &Player, container_id: u8, kind: impl MenuKind + 'static) -> Menu {
     let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
     builder.section(SimpleContainer::new(9).into_shared(), 9);
     builder.player_inventory(&player.inventory);
@@ -1041,7 +1107,7 @@ fn disconnected_menu_removal_drops_transient_items() {
         let transient_slots = builder.section(menu_container, 9);
         builder.player_inventory(&inventory);
         builder.drain([transient_slots]);
-        builder.build(MenuKindType::Basic(BasicKind {}))
+        builder.build(BasicKind {})
     });
 
     probe_state.armed.store(true, Ordering::Release);
@@ -1089,7 +1155,7 @@ fn drained_items_return_without_player_inventory_slots() {
     let mut builder = MenuBuilder::new(None, 1);
     let transient_slots = builder.section(Arc::clone(&transient), 1);
     builder.drain([transient_slots]);
-    let mut menu = builder.build(MenuKindType::Basic(BasicKind {}));
+    let mut menu = builder.build(BasicKind {});
 
     menu.removed(&player);
 
@@ -1117,7 +1183,7 @@ fn menu_tick_hook_can_close_the_current_menu() {
     init_test_registry();
     let player = test_player(Arc::clone(test_world()));
     player.open_menu("Close on tick", |container_id, _world| {
-        empty_test_menu(&player, container_id, MenuKindType::custom(CloseOnTick))
+        empty_test_menu(&player, container_id, CloseOnTick)
     });
 
     player.tick_open_menu();
@@ -1132,7 +1198,7 @@ fn menu_click_hook_can_close_the_current_menu() {
     let opened_container_id = Cell::new(0);
     player.open_menu("Close on click", |container_id, _world| {
         opened_container_id.set(container_id);
-        empty_test_menu(&player, container_id, MenuKindType::custom(CloseOnClick))
+        empty_test_menu(&player, container_id, CloseOnClick)
     });
 
     player.handle_container_click(SContainerClick {
@@ -1152,7 +1218,7 @@ fn menu_click_hook_can_close_the_current_menu() {
 fn programmatic_out_of_range_menu_click_is_ignored() {
     init_test_registry();
     let player = test_player(Arc::clone(test_world()));
-    let mut menu = empty_test_menu(&player, 1, MenuKindType::Basic(BasicKind {}));
+    let mut menu = empty_test_menu(&player, 1, BasicKind {});
     let invalid_slot = menu.behavior().slot_count();
 
     menu.clicked(
@@ -1171,7 +1237,7 @@ fn menu_open_hook_can_close_the_new_menu() {
     init_test_registry();
     let player = test_player(Arc::clone(test_world()));
     player.open_menu("Close on open", |container_id, _world| {
-        empty_test_menu(&player, container_id, MenuKindType::custom(CloseOnOpen))
+        empty_test_menu(&player, container_id, CloseOnOpen)
     });
 
     assert!(!player.has_container_open());
@@ -1187,10 +1253,10 @@ fn menu_open_hook_can_replace_the_new_menu() {
         empty_test_menu(
             &player,
             container_id,
-            MenuKindType::custom(OpenReplacementOnOpen {
+            OpenReplacementOnOpen {
                 own_removals: Arc::clone(&own_removals),
                 replacement_removals: Arc::clone(&replacement_removals),
-            }),
+            },
         )
     });
 
@@ -1212,9 +1278,9 @@ fn menu_removed_hook_can_open_a_replacement() {
         empty_test_menu(
             &player,
             container_id,
-            MenuKindType::custom(ReopenOnRemoved {
+            ReopenOnRemoved {
                 replacement_removals: Arc::clone(&replacement_removals),
-            }),
+            },
         )
     });
 
@@ -1239,9 +1305,9 @@ fn terminal_menu_removal_returns_carried_item_and_rejects_replacement() {
         empty_test_menu(
             &player,
             container_id,
-            MenuKindType::custom(ReopenOnRemoved {
+            ReopenOnRemoved {
                 replacement_removals: Arc::clone(&replacement_removals),
-            }),
+            },
         )
     });
 
@@ -1289,9 +1355,9 @@ fn terminal_menu_removal_drains_base_and_queued_menus() {
         empty_test_menu(
             &player,
             container_id,
-            MenuKindType::custom(QueueDrainedReplacementThenRemoveAllOnOpen {
+            QueueDrainedReplacementThenRemoveAllOnOpen {
                 transient: Arc::clone(&transient),
-            }),
+            },
         )
     });
 
@@ -1326,11 +1392,7 @@ fn pending_terminal_removal_preserves_drop_disposition() {
         ItemStack::with_count(&vanilla_items::STONE, 2);
 
     player.open_menu("Terminal drop on open", |container_id, _world| {
-        empty_test_menu(
-            &player,
-            container_id,
-            MenuKindType::custom(DropAllMenusOnOpen),
-        )
+        empty_test_menu(&player, container_id, DropAllMenusOnOpen)
     });
 
     assert!(!player.has_container_open());
@@ -1359,17 +1421,13 @@ fn menu_open_stops_when_predecessor_removal_turns_terminal() {
     init_test_registry();
     let player = test_player(Arc::clone(test_world()));
     player.open_menu("Terminal on removal", |container_id, _world| {
-        empty_test_menu(
-            &player,
-            container_id,
-            MenuKindType::custom(RemoveAllOnRemoved),
-        )
+        empty_test_menu(&player, container_id, RemoveAllOnRemoved)
     });
     let factory_called = Cell::new(false);
 
     player.open_menu("Rejected", |container_id, _world| {
         factory_called.set(true);
-        empty_test_menu(&player, container_id, MenuKindType::Basic(BasicKind {}))
+        empty_test_menu(&player, container_id, BasicKind {})
     });
 
     assert!(!factory_called.get());
@@ -1383,11 +1441,7 @@ fn prepared_menu_is_cleaned_when_replacement_removal_turns_terminal() {
     insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
     let player = test_player(Arc::clone(&world));
     player.open_menu("Open terminal replacement", |container_id, _world| {
-        empty_test_menu(
-            &player,
-            container_id,
-            MenuKindType::custom(OpenTerminalReplacementOnRemoved),
-        )
+        empty_test_menu(&player, container_id, OpenTerminalReplacementOnRemoved)
     });
     let final_removals = Arc::new(AtomicUsize::new(0));
     let transient = SimpleContainer::new(9).into_shared();
@@ -1400,9 +1454,9 @@ fn prepared_menu_is_cleaned_when_replacement_removal_turns_terminal() {
         let transient = builder.section(Arc::clone(&transient), 9);
         builder.player_inventory(&player.inventory);
         builder.drain([transient]);
-        builder.build(MenuKindType::custom(CountRemovals {
+        builder.build(CountRemovals {
             count: Arc::clone(&final_removals),
-        }))
+        })
     });
 
     assert!(!player.has_container_open());
@@ -1443,9 +1497,9 @@ fn deferred_open_is_cleaned_when_earlier_close_turns_terminal() {
         empty_test_menu(
             &player,
             container_id,
-            MenuKindType::custom(QueueReplacementOnOpenAndRemoveAllOnRemoved {
+            QueueReplacementOnOpenAndRemoveAllOnRemoved {
                 transient: Arc::clone(&transient),
-            }),
+            },
         )
     });
 
@@ -1494,11 +1548,11 @@ fn terminal_removal_stays_active_while_pending_menu_cleanup_runs() {
             empty_test_menu(
                 &opener_player,
                 container_id,
-                MenuKindType::custom(BlockTerminalMenuRemoval {
+                BlockTerminalMenuRemoval {
                     entered: opener_removal_entered,
                     release: opener_removal_release,
                     returned_to_inventory: opener_returned_to_inventory,
-                }),
+                },
             )
         });
     });
@@ -1514,7 +1568,7 @@ fn terminal_removal_stays_active_while_pending_menu_cleanup_runs() {
     let replacement_factory_called = Cell::new(false);
     player.open_menu("Rejected during cleanup", |container_id, _world| {
         replacement_factory_called.set(true);
-        empty_test_menu(&player, container_id, MenuKindType::Basic(BasicKind {}))
+        empty_test_menu(&player, container_id, BasicKind {})
     });
     assert!(!replacement_factory_called.get());
 
@@ -1533,14 +1587,14 @@ fn opening_a_menu_closes_a_replacement_created_during_removal() {
         empty_test_menu(
             &player,
             container_id,
-            MenuKindType::custom(ReopenOnRemoved {
+            ReopenOnRemoved {
                 replacement_removals: Arc::clone(&replacement_removals),
-            }),
+            },
         )
     });
 
     player.open_menu("Final", |container_id, _world| {
-        empty_test_menu(&player, container_id, MenuKindType::Basic(BasicKind {}))
+        empty_test_menu(&player, container_id, BasicKind {})
     });
 
     assert!(player.has_container_open());

@@ -65,6 +65,13 @@ pub struct CraftingKind {
     handler: CraftingHandler,
 }
 
+// SAFETY: This Steel-owned key uniquely identifies the concrete menu kind
+// within the process.
+unsafe impl steel_utils::DowncastType for CraftingKind {
+    const TYPE_KEY: steel_utils::DowncastTypeKey =
+        steel_utils::DowncastTypeKey::new("steel:menu/crafting");
+}
+
 impl MenuKind for CraftingKind {
     /// Prevents taking from the result slot during pickup-all.
     fn can_take_item_for_pick_all(&self, _carried: &ItemStack, slot_index: usize) -> bool {

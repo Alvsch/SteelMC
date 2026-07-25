@@ -14,7 +14,7 @@ pub use builder::{
     PlayerInventorySections, Section, SectionSource,
 };
 pub use grid::{ColSpan, GridPlacer, Rect, Region, RowSpan, SpanBounds};
-pub use kind::{MenuKind, MenuKindType};
+pub use kind::MenuKind;
 pub(crate) use layout::MenuLayout;
 #[cfg(test)]
 use steel_utils::locks::Shared;
@@ -23,9 +23,10 @@ use std::fmt;
 use std::mem;
 
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef};
-use steel_utils::types::GameType;
+use steel_utils::{Downcast as _, types::GameType};
 
 use crate::inventory::container::CraftingContainer;
+use crate::inventory::menu::kinds::InventoryKind;
 use crate::inventory::slots::slot::Slot;
 use crate::{
     inventory::lock::{ContainerId, ContainerLockGuard, ContainerRef},
@@ -38,11 +39,11 @@ use crate::inventory::click::{Click, ClickOutcome, SwapTarget, can_item_quick_re
 /// [`MenuKind`].
 ///
 /// The single concrete menu type. It owns the [`MenuBehavior`], the
-/// `MenuLayout`, and a [`MenuKindType`]. Click handlers are inherent methods.
+/// `MenuLayout`, and a boxed [`MenuKind`]. Click handlers are inherent methods.
 pub struct Menu {
     behavior: MenuBehavior,
     layout: MenuLayout,
-    kind: MenuKindType,
+    kind: Box<dyn MenuKind>,
     overrides_player_slots: bool,
 }
 
@@ -50,17 +51,17 @@ impl fmt::Debug for Menu {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Menu")
             .field("behavior", &self.behavior)
-            .field("kind", &self.kind)
+            .field("kind", &self.kind.downcast_type_key())
             .finish_non_exhaustive()
     }
 }
 
 impl Menu {
     /// Assembles a menu from its parts.
-    pub(super) const fn from_parts(
+    pub(super) fn from_parts(
         behavior: MenuBehavior,
         layout: MenuLayout,
-        kind: MenuKindType,
+        kind: Box<dyn MenuKind>,
         overrides_player_slots: bool,
     ) -> Self {
         Self {
@@ -84,13 +85,13 @@ impl Menu {
 
     /// Returns a reference to this menu's kind.
     #[must_use]
-    pub const fn kind(&self) -> &MenuKindType {
-        &self.kind
+    pub fn kind(&self) -> &dyn MenuKind {
+        self.kind.as_ref()
     }
 
     /// Returns a mutable reference to this menu's kind.
-    pub const fn kind_mut(&mut self) -> &mut MenuKindType {
-        &mut self.kind
+    pub fn kind_mut(&mut self) -> &mut dyn MenuKind {
+        self.kind.as_mut()
     }
 
     /// The container ID for this menu (0 for the player inventory).
@@ -161,7 +162,7 @@ impl Menu {
         amount_to_remove: i32,
         counting_only: bool,
     ) -> i32 {
-        let MenuKindType::Inventory(kind) = &self.kind else {
+        let Some(kind) = self.kind.downcast_ref::<InventoryKind>() else {
             return 0;
         };
         let crafting_id = kind.crafting_id();
@@ -177,16 +178,14 @@ impl Menu {
     /// for any other menu.
     #[cfg(test)]
     pub(crate) fn crafting_container(&self) -> Option<Shared<CraftingContainer>> {
-        let MenuKindType::Inventory(kind) = &self.kind else {
-            return None;
-        };
+        let kind = self.kind.downcast_ref::<InventoryKind>()?;
         Some(kind.crafting_container())
     }
 
     /// Recomputes the base inventory menu's crafting result. A no-op for any
     /// other menu.
     pub(crate) fn update_crafting_result(&mut self) {
-        let MenuKindType::Inventory(kind) = &self.kind else {
+        let Some(kind) = self.kind.downcast_mut::<InventoryKind>() else {
             return;
         };
         let mut guard = self.behavior.lock_all_containers();

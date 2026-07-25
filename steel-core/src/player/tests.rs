@@ -15,7 +15,7 @@ use steel_registry::{
 };
 use steel_utils::locks::IntoShared as _;
 use steel_utils::types::{Difficulty, GameType, InteractionHand, UpdateFlags};
-use steel_utils::{BlockPos, ChunkPos, Downcast as _, WorldAabb};
+use steel_utils::{BlockPos, ChunkPos, Downcast as _, DowncastType, DowncastTypeKey, WorldAabb};
 use uuid::Uuid;
 
 use crate::behavior::{InteractionResult, init_behaviors};
@@ -27,7 +27,7 @@ use crate::inventory::{
     click::{Click, DragKind, QuickCraft},
     container::{Container as _, SimpleContainer},
     equipment::{EntityEquipment, EquipmentSlot},
-    menu::{Menu, MenuBehavior, MenuBuilder, MenuKind, MenuKindType, kinds::BasicKind},
+    menu::{Menu, MenuBehavior, MenuBuilder, MenuKind, kinds::BasicKind},
 };
 use crate::permission::{PermissionEntry, PermissionKey, PermissionMetadataSet, PermissionSet};
 use crate::test_support::{
@@ -48,9 +48,21 @@ fn test_player(world: Arc<World>) -> Arc<Player> {
     player
 }
 
+macro_rules! impl_test_menu_kind_downcast {
+    ($type:ty, $key:literal) => {
+        // SAFETY: This test-owned key uniquely identifies the concrete menu
+        // kind within the test process.
+        unsafe impl DowncastType for $type {
+            const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new($key);
+        }
+    };
+}
+
 struct CountRemovals {
     count: Arc<AtomicUsize>,
 }
+
+impl_test_menu_kind_downcast!(CountRemovals, "steel:test/menu/player/count_removals");
 
 impl MenuKind for CountRemovals {
     fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
@@ -62,6 +74,8 @@ struct ReopenOnRemoved {
     replacement_removals: Arc<AtomicUsize>,
 }
 
+impl_test_menu_kind_downcast!(ReopenOnRemoved, "steel:test/menu/player/reopen_on_removed");
+
 impl MenuKind for ReopenOnRemoved {
     fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
         let replacement_removals = Arc::clone(&self.replacement_removals);
@@ -69,15 +83,15 @@ impl MenuKind for ReopenOnRemoved {
             empty_test_menu(
                 player,
                 container_id,
-                MenuKindType::custom(CountRemovals {
+                CountRemovals {
                     count: replacement_removals,
-                }),
+                },
             )
         });
     }
 }
 
-fn empty_test_menu(player: &Player, container_id: u8, kind: MenuKindType) -> Menu {
+fn empty_test_menu(player: &Player, container_id: u8, kind: impl MenuKind + 'static) -> Menu {
     let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X1, container_id);
     builder.section(SimpleContainer::new(9).into_shared(), 9);
     builder.player_inventory(&player.inventory);
@@ -209,7 +223,7 @@ fn death_keeps_menu_items_until_entity_removal() {
         let transient_slots = builder.section(menu_container, 9);
         builder.player_inventory(&inventory);
         builder.drain([transient_slots]);
-        builder.build(MenuKindType::Basic(BasicKind {}))
+        builder.build(BasicKind {})
     });
 
     player.set_health(0.0);
@@ -313,7 +327,7 @@ fn death_respawn_drops_menu_items_exactly_once() {
         let transient_slots = builder.section(menu_container, 9);
         builder.player_inventory(&inventory);
         builder.drain([transient_slots]);
-        builder.build(MenuKindType::Basic(BasicKind {}))
+        builder.build(BasicKind {})
     });
 
     player.set_health(0.0);
@@ -373,9 +387,9 @@ fn end_credits_removes_all_menus_before_detaching() {
         empty_test_menu(
             &player,
             container_id,
-            MenuKindType::custom(ReopenOnRemoved {
+            ReopenOnRemoved {
                 replacement_removals: Arc::clone(&replacement_removals),
-            }),
+            },
         )
     });
 

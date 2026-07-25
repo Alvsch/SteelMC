@@ -9,14 +9,13 @@ use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, ChunkPos, Downcast as _, WorldAabb};
 use uuid::Uuid;
 
-use super::crafting;
+use super::{CraftingKind, crafting};
 use crate::{
     behavior::init_behaviors,
     entity::{Entity as _, entities::ItemEntity},
     inventory::{
         click::{Click, MouseButton},
         container::Container as _,
-        menu::MenuKindType,
     },
     test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk},
 };
@@ -37,13 +36,13 @@ fn partial_result_overflow_uses_the_default_drop_policy() {
         TestPlayerBuilder::new(Arc::clone(&world), Uuid::from_u128(1), "Crafter", 1).build();
     player.base().set_position_local(DVec3::new(0.5, 64.0, 0.5));
     let mut menu = crafting(Arc::clone(&player.inventory), 1, pos);
-    let (crafting_container, result_container) = match menu.kind() {
-        MenuKindType::Crafting(kind) => (
-            kind.handler.crafting_container(),
-            kind.handler.result_container(),
-        ),
-        _ => panic!("crafting builder should create a crafting menu"),
+    let Some(kind) = menu.kind().downcast_ref::<CraftingKind>() else {
+        panic!("crafting builder should create a crafting menu");
     };
+    let (crafting_container, result_container) = (
+        kind.handler.crafting_container(),
+        kind.handler.result_container(),
+    );
 
     *menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::OAK_LOG);
     menu.clicked(

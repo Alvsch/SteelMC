@@ -24,7 +24,7 @@
 //!     let player = b.player_inventory(&inventory);
 //!     b.route(&items, [player.all()], FillDirection::Backward);
 //!     b.route(player.all(), &items, FillDirection::Forward);
-//!     b.build(MenuKindType::Basic(BasicKind {}))
+//!     b.build(BasicKind {})
 //! }
 //! ```
 //!

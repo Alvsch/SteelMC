@@ -109,6 +109,13 @@ pub struct AnvilKind {
     item_name: SyncMutex<Option<String>>,
 }
 
+// SAFETY: This Steel-owned key uniquely identifies the concrete menu kind
+// within the process.
+unsafe impl steel_utils::DowncastType for AnvilKind {
+    const TYPE_KEY: steel_utils::DowncastTypeKey =
+        steel_utils::DowncastTypeKey::new("steel:menu/anvil");
+}
+
 impl AnvilKind {
     /// Sets the level cost. The client receives the packet's low 16 bits while
     /// the result handler retains the full server-side cost.

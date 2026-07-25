@@ -8,6 +8,7 @@ use steel_protocol::packets::game::{
 };
 use steel_registry::item_stack::ItemStack;
 use steel_utils::{
+    Downcast as _,
     locks::Shared,
     types::{GameType, InteractionHand},
 };
@@ -19,7 +20,10 @@ use crate::{
         click::Click,
         container::{Container, CraftingContainer, clear_or_count_matching_stack},
         lock::{ContainerId, ContainerLockGuard},
-        menu::{Menu, MenuKindType, kinds::INVENTORY_MENU_CONTAINER_ID},
+        menu::{
+            Menu,
+            kinds::{INVENTORY_MENU_CONTAINER_ID, InventoryKind},
+        },
         slots::{CraftingHandler, Slot},
     },
     player::{Player, connection::NetworkConnection as _},
@@ -543,7 +547,7 @@ impl Player {
     /// menu.
     pub fn crafting_container(&self) -> Shared<CraftingContainer> {
         let menu = self.inventory_menu.lock();
-        let MenuKindType::Inventory(kind) = menu.kind() else {
+        let Some(kind) = menu.kind().downcast_ref::<InventoryKind>() else {
             unreachable!("a player's inventory_menu is always the Inventory kind");
         };
         kind.crafting_container()
@@ -553,7 +557,7 @@ impl Player {
     /// menu and its result.
     pub(crate) fn inventory_crafting_handler(&self) -> CraftingHandler {
         let menu = self.inventory_menu.lock();
-        let MenuKindType::Inventory(kind) = menu.kind() else {
+        let Some(kind) = menu.kind().downcast_ref::<InventoryKind>() else {
             unreachable!("a player's inventory_menu is always the Inventory kind");
         };
         kind.crafting_handler()

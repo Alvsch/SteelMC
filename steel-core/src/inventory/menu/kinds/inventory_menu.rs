@@ -84,6 +84,13 @@ pub struct InventoryKind {
     offhand: Section,
 }
 
+// SAFETY: This Steel-owned key uniquely identifies the concrete menu kind
+// within the process.
+unsafe impl steel_utils::DowncastType for InventoryKind {
+    const TYPE_KEY: steel_utils::DowncastTypeKey =
+        steel_utils::DowncastTypeKey::new("steel:menu/inventory");
+}
+
 impl InventoryKind {
     /// `ContainerId` of the 2x2 grid.
     pub(crate) fn crafting_id(&self) -> ContainerId {

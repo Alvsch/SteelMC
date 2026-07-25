@@ -137,11 +137,11 @@ fn domain_menu(
     });
     b.player_inventory(&player.inventory);
 
-    b.build(MenuKindType::custom(DomainMenuKind {
+    b.build(DomainMenuKind {
         map,
         server: server.clone(),
         player,
-    }))
+    })
 }
 
 fn icon(world: &Arc<World>, current_world: &Arc<World>) -> ItemStack {
@@ -167,6 +167,13 @@ struct DomainMenuKind {
     map: Vec<(Section, Vec<Arc<World>>)>,
     server: Arc<Server>,
     player: Arc<Player>,
+}
+
+// SAFETY: This Steel-owned key uniquely identifies the concrete menu kind
+// within the process.
+unsafe impl steel_utils::DowncastType for DomainMenuKind {
+    const TYPE_KEY: steel_utils::DowncastTypeKey =
+        steel_utils::DowncastTypeKey::new("steel:menu/domain");
 }
 
 impl MenuKind for DomainMenuKind {

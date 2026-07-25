@@ -20,7 +20,7 @@
 //!     builder.route(section, [player.all()], FillDirection::Backward);
 //!     builder.route(player.all(), [section], FillDirection::Forward);
 //!
-//!     builder.build(MenuKindType::Basic(BasicKind {}))
+//!     builder.build(BasicKind {})
 //! }
 //! ```
 
@@ -38,7 +38,7 @@ use steel_utils::locks::Shared;
 
 use crate::inventory::menu::Menu;
 use crate::inventory::menu::behavior::MenuBehavior;
-use crate::inventory::menu::kind::MenuKindType;
+use crate::inventory::menu::kind::MenuKind;
 use crate::inventory::menu::layout::MenuLayout;
 use crate::inventory::{
     lock::{ContainerId, ContainerLockGuard, ContainerRef},
@@ -392,7 +392,7 @@ impl MenuBuilder {
     /// let ingredient = b.section(&mut stand, 1); // slot 3
     /// let fuel = b.section(&mut stand, 1); // slot 4
     ///
-    /// b.build(MenuKindType::Basic(BasicKind {}));
+    /// b.build(BasicKind {});
     /// ```
     ///
     /// # Panics
@@ -456,7 +456,7 @@ impl MenuBuilder {
     ///     stack.is(&vanilla_items::COAL)
     /// });
     ///
-    /// b.build(MenuKindType::Basic(BasicKind {}));
+    /// b.build(BasicKind {});
     /// ```
     pub fn restricted_section(
         &mut self,
@@ -531,7 +531,7 @@ impl MenuBuilder {
     /// let container = SimpleContainer::from_items(items).into_shared();
     /// let display_section = b.display_section(container, 9);
     ///
-    /// b.build(MenuKindType::Basic(BasicKind {}));
+    /// b.build(BasicKind {});
     /// ```
     pub fn display_section(&mut self, source: impl SectionSource, count: usize) -> Section {
         self.guarded_section_fns(
@@ -689,7 +689,7 @@ impl MenuBuilder {
     ///
     /// let section = b.section(upper_container, 9);
     /// b.drain([section]); // only 'section' gets drained when the menu is closed
-    /// b.build(MenuKindType::Basic(BasicKind {}));
+    /// b.build(BasicKind {});
     /// ```
     pub fn drain(&mut self, sections: impl IntoSections) -> &mut Self {
         let ranges: Vec<_> = sections.into_sections().map(|s| self.owned(s)).collect();
@@ -712,7 +712,20 @@ impl MenuBuilder {
     /// Panics if the number of slots does not match the client layout declared
     /// by the menu type.
     #[must_use]
-    pub fn build(self, kind: impl Into<MenuKindType>) -> Menu {
+    pub fn build(self, kind: impl MenuKind + 'static) -> Menu {
+        self.build_boxed(Box::new(kind))
+    }
+
+    /// Consumes the builder using menu behavior selected at runtime.
+    ///
+    /// This is the erased counterpart to [`Self::build`] for plugin factories
+    /// and other callers that already own a boxed menu kind.
+    ///
+    /// # Panics
+    /// Panics if the number of slots does not match the client layout declared
+    /// by the menu type.
+    #[must_use]
+    pub fn build_boxed(self, kind: Box<dyn MenuKind>) -> Menu {
         if let Some(menu_type) = self.menu_type {
             assert_eq!(
                 self.slots.len(),
@@ -739,7 +752,7 @@ impl MenuBuilder {
             routes: self.routes,
             drain_sections: self.drain_sections,
         };
-        Menu::from_parts(behavior, layout, kind.into(), self.overrides_player_slots)
+        Menu::from_parts(behavior, layout, kind, self.overrides_player_slots)
     }
 
     /// The identity of the menu being built.
@@ -813,7 +826,7 @@ impl MenuBuilder {
 #[cfg(test)]
 mod tests {
     use steel_registry::vanilla_menu_types;
-    use steel_utils::locks::IntoShared;
+    use steel_utils::{Downcast as _, locks::IntoShared};
 
     use super::*;
     use crate::inventory::container::SimpleContainer;
@@ -824,8 +837,15 @@ mod tests {
         expected = "menu type minecraft:generic_9x6 expects 90 slots, but the builder has 0"
     )]
     fn build_rejects_a_slot_count_that_disagrees_with_the_menu_type() {
-        let _ = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X6, 1)
-            .build(MenuKindType::Basic(BasicKind {}));
+        let _ = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X6, 1).build(BasicKind {});
+    }
+
+    #[test]
+    fn builds_with_an_erased_menu_kind() {
+        let kind: Box<dyn MenuKind> = Box::new(BasicKind {});
+        let menu = MenuBuilder::new(None, 0).build_boxed(kind);
+
+        assert!(menu.kind().downcast_ref::<BasicKind>().is_some());
     }
 
     #[test]

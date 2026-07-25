@@ -1,14 +1,10 @@
-//! The [`MenuKind`] hooks and their dispatch enum [`MenuKindType`].
-
-use std::fmt;
+//! Per-menu behavior hooks.
 
 use steel_registry::item_stack::ItemStack;
+use steel_utils::ErasedType;
 
 use crate::inventory::menu::behavior::MenuBehavior;
-use crate::inventory::menu::kinds::{AnvilKind, BasicKind, ChestKind, CraftingKind, InventoryKind};
 use crate::{inventory::lock::ContainerLockGuard, player::Player};
-
-use enum_dispatch::enum_dispatch;
 
 use crate::inventory::click::{Click, ClickOutcome, QuickCraft};
 
@@ -17,8 +13,10 @@ use crate::inventory::click::{Click, ClickOutcome, QuickCraft};
 ///
 /// Menu transitions requested while a hook owns mutable access to the current
 /// menu are applied after that hook returns.
-#[enum_dispatch]
-pub trait MenuKind: Send + Sync {
+///
+/// Concrete implementations must claim a unique
+/// [`steel_utils::DowncastTypeKey`] through [`steel_utils::DowncastType`].
+pub trait MenuKind: ErasedType + Send + Sync {
     /// Recompute recipe-driven slots after a click touched a real slot.
     fn slots_changed(
         &mut self,
@@ -104,124 +102,5 @@ pub trait MenuKind: Send + Sync {
         _player: &Player,
     ) -> Option<ItemStack> {
         None
-    }
-}
-
-/// Static dispatch over vanilla menu kinds, with a boxed escape hatch for plugins.
-#[enum_dispatch(MenuKind)]
-pub enum MenuKindType {
-    /// The always-open player inventory (2×2 grid, armor, offhand).
-    Inventory(InventoryKind),
-    /// A chest-like container (chest, barrel, ender chest, shulker box).
-    Chest(ChestKind),
-    /// A crafting table (3×3 grid + result).
-    Crafting(CraftingKind),
-    /// An anvil (two inputs + result + level-cost data slot).
-    Anvil(AnvilKind),
-    /// Plain vanilla menu with no per-kind behavior.
-    Basic(BasicKind),
-    /// Plugin-defined menu logic.
-    Custom(Box<dyn MenuKind>),
-}
-
-impl MenuKindType {
-    /// Wraps a plugin-defined [`MenuKind`] into [`MenuKindType::Custom`].
-    #[must_use]
-    pub fn custom(kind: impl MenuKind + 'static) -> Self {
-        Self::Custom(Box::new(kind))
-    }
-}
-
-impl fmt::Debug for MenuKindType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Self::Inventory(_) => "Inventory",
-            Self::Chest(_) => "Chest",
-            Self::Crafting(_) => "Crafting",
-            Self::Anvil(_) => "Anvil",
-            Self::Basic(_) => "Basic",
-            Self::Custom(_) => "Custom",
-        };
-        f.debug_struct(name).finish_non_exhaustive()
-    }
-}
-
-// `Box` not `Arc` because `MenuKind` methods take `&mut self`.
-impl MenuKind for Box<dyn MenuKind> {
-    fn slots_changed(
-        &mut self,
-        behavior: &mut MenuBehavior,
-        guard: &mut ContainerLockGuard,
-        player: &Player,
-    ) {
-        (**self).slots_changed(behavior, guard, player);
-    }
-
-    fn removed(&mut self, behavior: &mut MenuBehavior, player: &Player) {
-        (**self).removed(behavior, player);
-    }
-
-    fn on_rename(&mut self, behavior: &mut MenuBehavior, name: String, player: &Player) {
-        (**self).on_rename(behavior, name, player);
-    }
-
-    fn still_valid(&self, behavior: &MenuBehavior, player: &Player) -> bool {
-        (**self).still_valid(behavior, player)
-    }
-
-    fn can_take_item_for_pick_all(&self, carried: &ItemStack, slot_index: usize) -> bool {
-        (**self).can_take_item_for_pick_all(carried, slot_index)
-    }
-
-    fn quick_move(
-        &mut self,
-        behavior: &mut MenuBehavior,
-        guard: &mut ContainerLockGuard,
-        slot_index: usize,
-        player: &Player,
-    ) -> Option<ItemStack> {
-        (**self).quick_move(behavior, guard, slot_index, player)
-    }
-
-    fn on_open(
-        &mut self,
-        behavior: &mut MenuBehavior,
-        guard: &mut ContainerLockGuard,
-        player: &Player,
-    ) {
-        (**self).on_open(behavior, guard, player);
-    }
-
-    fn on_tick(
-        &mut self,
-        behavior: &mut MenuBehavior,
-        guard: &mut ContainerLockGuard,
-        player: &Player,
-    ) {
-        (**self).on_tick(behavior, guard, player);
-    }
-
-    fn on_slot_clicked(
-        &mut self,
-        behavior: &mut MenuBehavior,
-        guard: &mut ContainerLockGuard,
-        click: Click,
-        player: &Player,
-    ) -> ClickOutcome {
-        (**self).on_slot_clicked(behavior, guard, click, player)
-    }
-
-    fn on_drag(
-        &mut self,
-        behavior: &mut MenuBehavior,
-        guard: &mut ContainerLockGuard,
-        action: QuickCraft,
-        player: &Player,
-    ) -> ClickOutcome {
-        (**self).on_drag(behavior, guard, action, player)
-    }
-
-    fn can_drag_to(&self, slot_index: usize) -> bool {
-        (**self).can_drag_to(slot_index)
     }
 }

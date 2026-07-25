@@ -160,7 +160,7 @@ fn invsee(
         );
     }
 
-    b.build(MenuKindType::custom(InvseeMenuKind {
+    b.build(InvseeMenuKind {
         target: Arc::downgrade(target),
         target_inventory_id: ContainerId::from_arc(&target.inventory),
         domain: target.get_world().domain().into(),
@@ -170,7 +170,7 @@ fn invsee(
         crafting,
         crafting_handler,
         inventory_before_click: None,
-    }))
+    })
 }
 
 fn readonly_section(
@@ -201,6 +201,13 @@ struct InvseeMenuKind {
     crafting: Section,
     crafting_handler: CraftingHandler,
     inventory_before_click: Option<[ItemStack; PlayerInventory::SLOT_OFFHAND + 1]>,
+}
+
+// SAFETY: This Steel-owned key uniquely identifies the concrete menu kind
+// within the process.
+unsafe impl steel_utils::DowncastType for InvseeMenuKind {
+    const TYPE_KEY: steel_utils::DowncastTypeKey =
+        steel_utils::DowncastTypeKey::new("steel:menu/invsee");
 }
 
 impl MenuKind for InvseeMenuKind {

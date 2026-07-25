@@ -14,7 +14,6 @@ use crate::{
     inventory::{
         click::{Click, MouseButton},
         container::Container as _,
-        menu::MenuKindType,
     },
     test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk},
 };
@@ -29,12 +28,11 @@ fn partial_result_overflow_has_no_thrower() {
         TestPlayerBuilder::new(Arc::clone(&world), Uuid::from_u128(1), "Crafter", 1).build();
     player.base().set_position_local(DVec3::new(0.5, 64.0, 0.5));
     let mut menu = inventory_menu(Arc::clone(&player.inventory));
-    let (crafting_container, result_container) = match menu.kind() {
-        MenuKindType::Inventory(InventoryKind { handler, .. }) => {
-            (handler.crafting_container(), handler.result_container())
-        }
-        _ => panic!("inventory_menu should create an inventory menu"),
+    let Some(InventoryKind { handler, .. }) = menu.kind().downcast_ref::<InventoryKind>() else {
+        panic!("inventory_menu should create an inventory menu");
     };
+    let (crafting_container, result_container) =
+        (handler.crafting_container(), handler.result_container());
 
     *menu.behavior_mut().carried_mut() = ItemStack::new(&vanilla_items::OAK_LOG);
     menu.clicked(
