@@ -237,6 +237,7 @@ impl Server {
                 data.apply_to_player_without_location(player);
             }
             DomainPlayerData::FirstVisit { spawn } => {
+                player.reset_domain_data_for_first_visit();
                 apply_default_spawn(player, &state.world, *spawn);
             }
         }

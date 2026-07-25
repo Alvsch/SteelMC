@@ -12,8 +12,9 @@ use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
 use steel_protocol::packets::game::CRemovePlayerInfo;
 use steel_protocol::utils::ConnectionProtocol;
 use steel_registry::entity_type::EntityTypeRef;
+use steel_registry::item_stack::ItemStack;
 use steel_registry::packets::play::{C_ADD_ENTITY, C_PLAYER_INFO_UPDATE, C_SYSTEM_CHAT};
-use steel_registry::{vanilla_dimension_types, vanilla_entities};
+use steel_registry::{vanilla_dimension_types, vanilla_entities, vanilla_items};
 use steel_utils::ChunkPos;
 use steel_utils::{codec::VarInt, serial::ReadFrom, text::DisplayResolutor};
 use text_components::TextComponent;
@@ -30,6 +31,7 @@ use crate::permission::{
     PermissionSubjectIndex, PermissionSubjectState,
 };
 use crate::player::connection::NetworkConnection;
+use crate::player::player_data::PersistentSlot;
 use crate::player::{Player, PlayerConnection, ResetReason};
 use crate::test_support::{
     TestPlayerBuilder, fresh_test_world, fresh_test_world_in_domain, test_world,
@@ -516,6 +518,121 @@ fn domain_switch_job_progresses_across_chunk_scheduling_boundaries() {
                 .is_some_and(|current| Arc::ptr_eq(&current, &player))
         );
         assert_eq!(player.position(), target_position);
+
+        drop(player);
+        drop(server);
+        if let Err(error) = fs::remove_dir_all(&storage_root).await {
+            panic!("test storage should be removed: {error}");
+        }
+    });
+}
+
+#[test]
+fn first_domain_visit_resets_domain_scoped_player_data() {
+    let source_world = fresh_test_world_in_domain("source", "spawn");
+    let target_world = fresh_test_world_in_domain("target", "spawn");
+    let runtime = Builder::new_current_thread().enable_all().build();
+    let Ok(runtime) = runtime else {
+        panic!("test runtime should initialize");
+    };
+    runtime.block_on(async {
+        let domains = [
+            ResolvedDomainConfig {
+                name: "source".to_owned(),
+                default_world: source_world.key.clone(),
+                worlds: vec![source_world.key.clone()],
+            },
+            ResolvedDomainConfig {
+                name: "target".to_owned(),
+                default_world: target_world.key.clone(),
+                worlds: vec![target_world.key.clone()],
+            },
+        ];
+        let worlds = [Arc::clone(&source_world), Arc::clone(&target_world)];
+        let storage_root = test_storage_root("first-domain-visit");
+        let server = test_server_with_worlds(
+            "source".to_owned(),
+            &domains,
+            &worlds,
+            PermissionSubjectIndex::new(),
+            &storage_root,
+        )
+        .await;
+        let Ok(server) = server else {
+            panic!("test server should initialize");
+        };
+
+        let uuid = Uuid::from_u128(1);
+        let player = test_player(&server, Arc::clone(&source_world), uuid);
+        assert!(server.online_players.insert(Arc::clone(&player)));
+        assert!(source_world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+        let _ = player.mark_joined_world();
+
+        let mut source_data = PersistentPlayerData::from_player(&player);
+        source_data.remaining_fire_ticks = 40;
+        source_data.ticks_frozen = 20;
+        source_data.is_in_powder_snow = true;
+        source_data.was_in_powder_snow = true;
+        source_data.has_visual_fire = true;
+        source_data.health = 7.0;
+        source_data.abilities.flying_speed = 0.2;
+        source_data.abilities.walking_speed = 0.3;
+        source_data.inventory = vec![PersistentSlot {
+            slot: 0,
+            item: ItemStack::new(&vanilla_items::STICK),
+        }];
+        source_data.selected_slot = 4;
+        source_data.food_level = 6;
+        source_data.food_saturation_level = 1.0;
+        source_data.food_exhaustion_level = 12.0;
+        source_data.food_tick_timer = 7;
+        source_data.experience_level = 12;
+        source_data.experience_progress = 0.5;
+        source_data.experience_total = 300;
+        source_data.score = 42;
+        source_data.seen_credits = true;
+        source_data.apply_to_player_without_location(&player);
+
+        let target_before_switch = server.player_data_storage.load_domain("target", uuid).await;
+        assert!(matches!(target_before_switch, Ok(None)));
+
+        let queued = server.queue_domain_switch(Arc::clone(&player), "target".to_owned());
+        assert!(queued.is_ok());
+        server.process_domain_switches();
+
+        for tick in 1..=10_000 {
+            source_world.chunk_map.advance_scheduling();
+            target_world.chunk_map.advance_scheduling();
+            server.tick_jobs(tick, true);
+            if server.jobs.is_empty() {
+                break;
+            }
+            sleep(Duration::from_millis(1)).await;
+        }
+
+        assert!(server.jobs.is_empty(), "domain switch job should finish");
+        assert!(Arc::ptr_eq(&player.get_world(), &target_world));
+
+        let target_data = PersistentPlayerData::from_player(&player);
+        assert_eq!(target_data.remaining_fire_ticks, 0);
+        assert_eq!(target_data.ticks_frozen, 0);
+        assert!(!target_data.is_in_powder_snow);
+        assert!(!target_data.was_in_powder_snow);
+        assert!(!target_data.has_visual_fire);
+        assert_eq!(target_data.health, player.get_max_health());
+        assert_eq!(target_data.abilities.flying_speed, 0.05);
+        assert_eq!(target_data.abilities.walking_speed, 0.1);
+        assert!(target_data.inventory.is_empty());
+        assert_eq!(target_data.selected_slot, 0);
+        assert_eq!(target_data.food_level, 20);
+        assert_eq!(target_data.food_saturation_level, 5.0);
+        assert_eq!(target_data.food_exhaustion_level, 0.0);
+        assert_eq!(target_data.food_tick_timer, 0);
+        assert_eq!(target_data.experience_level, 0);
+        assert_eq!(target_data.experience_progress, 0.0);
+        assert_eq!(target_data.experience_total, 0);
+        assert_eq!(target_data.score, 0);
+        assert!(!target_data.seen_credits);
 
         drop(player);
         drop(server);

@@ -13,7 +13,8 @@ use crate::{
 };
 
 use super::{
-    Player, abilities::Abilities, experience::Experience, player_inventory::PlayerInventory,
+    Player, abilities::Abilities, experience::Experience, food_data::FoodData,
+    player_inventory::PlayerInventory,
 };
 
 /// Current data version for player saves.
@@ -276,6 +277,31 @@ impl PersistentPlayerData {
             attach: *vehicle.uuid().as_bytes(),
             entity,
         })
+    }
+}
+
+impl Player {
+    /// Resets domain-scoped gameplay data to the defaults used for a new player.
+    pub(crate) fn reset_domain_data_for_first_visit(&self) {
+        use glam::DVec3;
+
+        self.set_velocity(DVec3::ZERO);
+        self.set_on_ground(false);
+        self.set_fall_flying(false);
+        self.base()
+            .set_fire_freeze_state(EntityFireFreezeState::new());
+        self.sync_base_fire_freeze_entity_data();
+        self.set_health(self.get_max_health());
+        *self.abilities.lock() = Abilities::default();
+        *self.inventory.lock() = PlayerInventory::new();
+        *self.food_data.lock() = FoodData::new();
+
+        let mut experience = Experience::default();
+        experience.dirty = true;
+        *self.experience.lock() = experience;
+
+        self.set_score(0);
+        self.set_seen_credits(false);
     }
 }
 
