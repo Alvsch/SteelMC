@@ -43,7 +43,7 @@ use crate::inventory::menu::layout::MenuLayout;
 use crate::inventory::{
     lock::{ContainerId, ContainerLockGuard, ContainerRef},
     slots::{
-        MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot, ResultHandler, ResultSlot, SlotType,
+        MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot, ResultHandler, ResultSlot, Slot,
         add_standard_inventory_slots,
     },
 };
@@ -333,7 +333,7 @@ pub struct MenuBuilder {
     menu_type: Option<MenuTypeRef>,
     container_id: u8,
     overrides_player_slots: bool,
-    slots: Vec<SlotType>,
+    slots: Vec<Box<dyn Slot>>,
     container_refs: Vec<ContainerRef>,
     data_slots: Vec<i16>,
     routes: Vec<Route>,
@@ -430,7 +430,7 @@ impl MenuBuilder {
         let start = self.slots.len();
         for index in range {
             self.slots
-                .push(SlotType::Normal(NormalSlot::new(container.clone(), index)));
+                .push(Box::new(NormalSlot::new(container.clone(), index)));
         }
         self.register_container(container);
         self.section_from(start)
@@ -500,7 +500,7 @@ impl MenuBuilder {
         self.claim(&container, range);
         let start = self.slots.len();
         for index in range {
-            self.slots.push(SlotType::Restricted(RestrictedSlot::new(
+            self.slots.push(Box::new(RestrictedSlot::new(
                 container.clone(),
                 index,
                 may_place.clone(),
@@ -567,10 +567,8 @@ impl MenuBuilder {
     ) -> Section {
         let container = container.into();
         let start = self.slots.len();
-        self.slots.push(SlotType::Result(ResultSlot::new(
-            handler,
-            container.clone(),
-        )));
+        self.slots
+            .push(Box::new(ResultSlot::new(handler, container.clone())));
         self.register_container(container);
         self.section_from(start)
     }
@@ -578,7 +576,7 @@ impl MenuBuilder {
     /// Adds arbitrary or custom slots.
     pub fn custom_section(
         &mut self,
-        slots: impl IntoIterator<Item = SlotType>,
+        slots: impl IntoIterator<Item = Box<dyn Slot>>,
         containers: impl IntoIterator<Item = impl Into<ContainerRef>>,
     ) -> Section {
         let start = self.slots.len();
@@ -766,7 +764,7 @@ impl MenuBuilder {
     }
 
     /// Appends a single slot without creating a section.
-    pub(crate) fn push_slot(&mut self, slot: SlotType) {
+    pub(crate) fn push_slot(&mut self, slot: Box<dyn Slot>) {
         self.slots.push(slot);
     }
 

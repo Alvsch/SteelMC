@@ -21,7 +21,7 @@ use crate::{
         click::{DragKind, MouseButton, QuickCraft, can_item_quick_replace},
         lock::{ContainerId, ContainerLockGuard, ContainerRef},
         menu::builder::{FillDirection, MenuInstanceId},
-        slots::{Slot, SlotType},
+        slots::Slot,
     },
     player::{Player, PlayerConnection, connection::NetworkConnection},
 };
@@ -29,7 +29,7 @@ use crate::{
 /// Shared behavior and state for all menu types.
 pub struct MenuBehavior {
     /// The slots in this menu.
-    slots: Vec<SlotType>,
+    slots: Vec<Box<dyn Slot>>,
     /// The client's perception of the itemstacks.
     remote_slots: Vec<RemoteSlot>,
     /// The item being carried by the cursor.
@@ -75,7 +75,7 @@ impl MenuBehavior {
     #[must_use]
     pub(crate) fn new(
         instance: MenuInstanceId,
-        slots: Vec<SlotType>,
+        slots: Vec<Box<dyn Slot>>,
         container_id: u8,
         menu_type: Option<MenuTypeRef>,
         container_refs: Vec<ContainerRef>,
@@ -115,7 +115,7 @@ impl MenuBehavior {
 
     /// The slots of this menu, fixed at build time.
     #[must_use]
-    pub fn slots(&self) -> &[SlotType] {
+    pub fn slots(&self) -> &[Box<dyn Slot>] {
         &self.slots
     }
 
@@ -1020,7 +1020,7 @@ mod tests {
             builder::{FillDirection, MenuBuilder},
             kinds::BasicKind,
         },
-        slots::{NormalSlot, RestrictedSlot, Slot as _, SlotType},
+        slots::{NormalSlot, RestrictedSlot, Slot},
     };
 
     struct RecordingContainer {
@@ -1064,7 +1064,7 @@ mod tests {
         let container_ref = ContainerRef::from(container);
         let mut builder = MenuBuilder::new(None, 1);
         builder.custom_section(
-            [SlotType::Normal(NormalSlot::new(container_ref.clone(), 0))],
+            [Box::new(NormalSlot::new(container_ref.clone(), 0)) as Box<dyn Slot>],
             [container_ref.clone()],
         );
         (builder.build(BasicKind {}), container_ref)
@@ -1131,14 +1131,14 @@ mod tests {
         let mut builder = MenuBuilder::new(None, 1);
         builder.custom_section(
             [
-                SlotType::Normal(NormalSlot::new(container_ref.clone(), 0)),
-                SlotType::Restricted(RestrictedSlot::new(
+                Box::new(NormalSlot::new(container_ref.clone(), 0)) as Box<dyn Slot>,
+                Box::new(RestrictedSlot::new(
                     container_ref.clone(),
                     0,
                     Arc::new(|_, _| true),
                     None,
                 )),
-                SlotType::Normal(NormalSlot::new(container_ref.clone(), 1)),
+                Box::new(NormalSlot::new(container_ref.clone(), 1)),
             ],
             [container_ref.clone()],
         );

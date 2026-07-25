@@ -24,7 +24,7 @@ use crate::{
             Menu,
             kinds::{INVENTORY_MENU_CONTAINER_ID, InventoryKind},
         },
-        slots::{CraftingHandler, Slot},
+        slots::CraftingHandler,
     },
     player::{Player, connection::NetworkConnection as _},
     world::World,
@@ -270,7 +270,12 @@ impl Player {
             // our view of what it knows, or `broadcast_changes` will think the
             // client already has the freshly-crafted result and skip syncing it
             // — leaving the slot blank until the next click forces a resend.
-            if menu.behavior().slots().get(slot).is_some_and(Slot::is_fake) {
+            if menu
+                .behavior()
+                .slots()
+                .get(slot)
+                .is_some_and(|slot| slot.is_fake())
+            {
                 menu.behavior_mut().mark_remote_slot_unknown(slot);
                 continue;
             }

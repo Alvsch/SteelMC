@@ -14,7 +14,6 @@ pub use simple::SimpleContainer;
 use std::mem;
 use std::ptr;
 
-use enum_dispatch::enum_dispatch;
 use steel_registry::item_stack::ItemStack;
 use steel_utils::ErasedType;
 
@@ -38,7 +37,6 @@ pub const DEFAULT_DISTANCE_BUFFER: f32 = 4.0;
 /// belong to the owner supplied through
 /// [`crate::inventory::lock::ContainerRef::owned_by_block_entity`], which runs
 /// only after every container lock has been released.
-#[enum_dispatch]
 pub trait Container: ErasedType + Send + Sync {
     /// Returns the items in this container
     fn items(&self) -> &[ItemStack];

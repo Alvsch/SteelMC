@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use steel_registry::item_stack::ItemStack;
+use steel_utils::{DowncastType, DowncastTypeKey};
 
 use crate::{
     inventory::{
@@ -21,6 +22,11 @@ pub struct RestrictedSlot {
     base: NormalSlot,
     may_place_fn: MayPlaceFn,
     may_pickup_fn: Option<MayPickupFn>,
+}
+
+// SAFETY: This key uniquely identifies Steel's `RestrictedSlot`.
+unsafe impl DowncastType for RestrictedSlot {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:slot/restricted");
 }
 
 impl RestrictedSlot {
@@ -89,15 +95,14 @@ mod tests {
     use std::slice;
     use std::sync::Arc;
 
-    use steel_registry::data_components::vanilla_components::MAX_STACK_SIZE;
-    use steel_registry::{item_stack::ItemStack, test_support::init_test_registry, vanilla_items};
-    use steel_utils::locks::{IntoShared as _, SyncMutex};
-    use steel_utils::{DowncastType, DowncastTypeKey};
-
     use super::RestrictedSlot;
     use crate::inventory::container::{Container, SimpleContainer};
     use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
     use crate::inventory::slots::Slot as _;
+    use steel_registry::data_components::vanilla_components::MAX_STACK_SIZE;
+    use steel_registry::{item_stack::ItemStack, test_support::init_test_registry, vanilla_items};
+    use steel_utils::locks::{IntoShared as _, SyncMutex};
+    use steel_utils::{DowncastType, DowncastTypeKey};
 
     struct SingleItemContainer {
         item: ItemStack,

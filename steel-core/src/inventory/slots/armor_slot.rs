@@ -1,7 +1,7 @@
 use steel_registry::{
     enchantment_effect::EnchantmentEffectComponent, equipment::EquipmentSlot, item_stack::ItemStack,
 };
-use steel_utils::locks::Shared;
+use steel_utils::{DowncastType, DowncastTypeKey, locks::Shared};
 
 use crate::{
     inventory::{
@@ -16,6 +16,11 @@ use crate::{
 pub struct ArmorSlot {
     base: NormalSlot,
     slot: EquipmentSlot,
+}
+
+// SAFETY: This key uniquely identifies Steel's `ArmorSlot`.
+unsafe impl DowncastType for ArmorSlot {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:slot/armor");
 }
 
 impl ArmorSlot {

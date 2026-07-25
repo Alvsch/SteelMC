@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use enum_dispatch::enum_dispatch;
 use steel_registry::item_stack::ItemStack;
 
 use crate::{inventory::lock::ContainerLockGuard, player::Player};
 
 /// A trait for recipe handlers that update slots in containers according to recipes
-#[enum_dispatch]
 pub trait ResultHandler: Send + Sync {
     /// Recalculate the result based on current inputs.
     fn update_result(&self, guard: &mut ContainerLockGuard);

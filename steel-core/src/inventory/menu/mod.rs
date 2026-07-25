@@ -27,7 +27,6 @@ use steel_utils::{Downcast as _, types::GameType};
 
 use crate::inventory::container::CraftingContainer;
 use crate::inventory::menu::kinds::InventoryKind;
-use crate::inventory::slots::slot::Slot;
 use crate::{
     inventory::lock::{ContainerId, ContainerLockGuard, ContainerRef},
     player::Player,

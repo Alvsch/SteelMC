@@ -49,7 +49,7 @@ use crate::inventory::container::SimpleContainer;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::inventory::menu::builder::{IntoSections, MenuBuilder, MenuInstanceId, Section};
 use crate::inventory::slots::{
-    MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot, ResultHandler, ResultSlot, SlotType,
+    MayPickupFn, MayPlaceFn, NormalSlot, RestrictedSlot, ResultHandler, ResultSlot, Slot,
 };
 use crate::player::Player;
 
@@ -367,7 +367,7 @@ enum PlacementKind {
     },
     /// Cell `(x, y)` takes `slots[rect.local_index(x, y)]`, each `Some` until flushed.
     Slots {
-        slots: Vec<Option<SlotType>>,
+        slots: Vec<Option<Box<dyn Slot>>>,
         containers: Vec<ContainerRef>,
     },
 }
@@ -615,10 +615,10 @@ impl<'a> GridPlacer<'a> {
     pub fn place_slots(
         &mut self,
         rect: Rect,
-        slots: impl IntoIterator<Item = SlotType>,
+        slots: impl IntoIterator<Item = Box<dyn Slot>>,
         containers: impl IntoIterator<Item = ContainerRef>,
     ) -> Region {
-        let slots: Vec<Option<SlotType>> = slots.into_iter().map(Some).collect();
+        let slots: Vec<Option<Box<dyn Slot>>> = slots.into_iter().map(Some).collect();
         let abs = self.to_abs(rect);
         assert!(
             slots.len() == abs.area(),
@@ -986,7 +986,7 @@ impl MenuBuilder {
                     let container = filler
                         .clone()
                         .expect("filler exists when cells are painted");
-                    self.push_slot(SlotType::Restricted(RestrictedSlot::new(
+                    self.push_slot(Box::new(RestrictedSlot::new(
                         container,
                         filler_next,
                         deny_place.clone(),
@@ -998,7 +998,7 @@ impl MenuBuilder {
                     let Placement { rect, kind } = &mut placements[*placement];
                     match kind {
                         PlacementKind::Normal { container, offset } => {
-                            self.push_slot(SlotType::Normal(NormalSlot::new(
+                            self.push_slot(Box::new(NormalSlot::new(
                                 container.clone(),
                                 *offset + rect.local_index(x, y),
                             )));
@@ -1009,7 +1009,7 @@ impl MenuBuilder {
                             may_place,
                             may_pickup,
                         } => {
-                            self.push_slot(SlotType::Restricted(RestrictedSlot::new(
+                            self.push_slot(Box::new(RestrictedSlot::new(
                                 container.clone(),
                                 *offset + rect.local_index(x, y),
                                 may_place.clone(),
@@ -1017,7 +1017,7 @@ impl MenuBuilder {
                             )));
                         }
                         PlacementKind::Result { handler, container } => {
-                            self.push_slot(SlotType::Result(ResultSlot::new(
+                            self.push_slot(Box::new(ResultSlot::new(
                                 handler.clone(),
                                 container.clone(),
                             )));
@@ -1056,7 +1056,6 @@ impl MenuBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::slots::Slot as _;
     use steel_utils::locks::IntoShared;
 
     fn container(size: usize) -> ContainerRef {
@@ -1092,8 +1091,8 @@ mod tests {
         use crate::inventory::menu::kinds::BasicKind;
 
         let c = container(9);
-        let slots: Vec<SlotType> = (3..7)
-            .map(|i| SlotType::Normal(NormalSlot::new(c.clone(), i)))
+        let slots: Vec<Box<dyn Slot>> = (3..7)
+            .map(|i| Box::new(NormalSlot::new(c.clone(), i)) as Box<dyn Slot>)
             .collect();
 
         let mut b = MenuBuilder::new(None, 0);
@@ -1122,8 +1121,8 @@ mod tests {
     #[should_panic(expected = "place_slots got 3 slots")]
     fn place_slots_panics_on_count_mismatch() {
         let c = container(9);
-        let slots: Vec<SlotType> = (0..3)
-            .map(|i| SlotType::Normal(NormalSlot::new(c.clone(), i)))
+        let slots: Vec<Box<dyn Slot>> = (0..3)
+            .map(|i| Box::new(NormalSlot::new(c.clone(), i)) as Box<dyn Slot>)
             .collect();
 
         let mut b = MenuBuilder::new(None, 0);

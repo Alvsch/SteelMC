@@ -1,6 +1,7 @@
 use std::{mem, sync::Arc};
 
 use steel_registry::item_stack::ItemStack;
+use steel_utils::{DowncastType, DowncastTypeKey};
 
 use crate::{
     inventory::{
@@ -14,6 +15,11 @@ use crate::{
 pub struct ResultSlot {
     handler: Arc<dyn ResultHandler + Send + Sync>,
     result_container: ContainerRef,
+}
+
+// SAFETY: This key uniquely identifies Steel's `ResultSlot`.
+unsafe impl DowncastType for ResultSlot {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:slot/result");
 }
 
 impl ResultSlot {

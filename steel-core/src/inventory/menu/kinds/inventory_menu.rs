@@ -13,7 +13,7 @@ use steel_utils::locks::{IntoShared, Shared};
 
 use crate::inventory::container::{CraftingContainer, ResultContainer};
 use crate::inventory::prelude::*;
-use crate::inventory::slots::{CraftingHandler, NormalSlot, Slot as _, armor_slots};
+use crate::inventory::slots::{CraftingHandler, NormalSlot, armor_slots};
 use crate::player::Player;
 use crate::player::player_inventory::PlayerInventory;
 
@@ -42,7 +42,7 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
     let player = builder.player_inventory(&inventory);
     // Offhand is inventory slot 40.
     let offhand = builder.custom_section(
-        [SlotType::Normal(NormalSlot::new(inventory.clone(), 40))],
+        [Box::new(NormalSlot::new(inventory.clone(), 40)) as Box<dyn Slot>],
         [inventory],
     );
 

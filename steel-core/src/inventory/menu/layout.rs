@@ -9,7 +9,6 @@ use crate::{
             behavior::MenuBehavior,
             builder::{FakeResultRemainderPolicy, Route},
         },
-        slots::Slot,
     },
     player::Player,
 };

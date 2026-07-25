@@ -7,7 +7,7 @@ use steel_registry::{
 };
 use steel_utils::locks::{IntoShared as _, Shared};
 use steel_utils::types::GameType;
-use steel_utils::{ChunkPos, Downcast as _, WorldAabb};
+use steel_utils::{ChunkPos, Downcast as _, DowncastType, DowncastTypeKey, WorldAabb};
 use uuid::Uuid;
 
 use super::{MenuBuilder, kinds::BasicKind};
@@ -17,7 +17,7 @@ use crate::{
         click::{Click, SwapTarget},
         container::{Container as _, SimpleContainer},
         lock::{ContainerId, ContainerLockGuard, ContainerRef},
-        slots::{NormalSlot, Slot, SlotType},
+        slots::{NormalSlot, Slot},
     },
     player::Player,
     test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk},
@@ -26,6 +26,11 @@ use crate::{
 
 struct SingleItemSlot {
     base: NormalSlot,
+}
+
+// SAFETY: This test-only key uniquely identifies `SingleItemSlot`.
+unsafe impl DowncastType for SingleItemSlot {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:test/slot/single_item");
 }
 
 impl Slot for SingleItemSlot {
@@ -87,9 +92,9 @@ fn perform_partial_swap(world_name: &'static str, game_mode: GameType) -> Partia
     let target_ref = ContainerRef::from(Arc::clone(&target));
     let mut builder = MenuBuilder::new(None, 1);
     let target_slots = builder.custom_section(
-        [SlotType::Custom(Arc::new(SingleItemSlot {
+        [Box::new(SingleItemSlot {
             base: NormalSlot::new(target_ref.clone(), 0),
-        }))],
+        }) as Box<dyn Slot>],
         [target_ref],
     );
     let mut menu = builder.build(BasicKind {});

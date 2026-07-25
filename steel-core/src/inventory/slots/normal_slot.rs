@@ -1,4 +1,5 @@
 use steel_registry::item_stack::ItemStack;
+use steel_utils::{DowncastType, DowncastTypeKey};
 
 use crate::inventory::{
     lock::{ContainerId, ContainerLockGuard, ContainerRef},
@@ -9,6 +10,11 @@ use crate::inventory::{
 pub struct NormalSlot {
     container: ContainerRef,
     index: usize,
+}
+
+// SAFETY: This key uniquely identifies Steel's `NormalSlot`.
+unsafe impl DowncastType for NormalSlot {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:slot/normal");
 }
 
 impl NormalSlot {
