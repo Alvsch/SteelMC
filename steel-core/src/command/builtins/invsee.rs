@@ -113,8 +113,7 @@ fn invsee(
     let armor = if modify {
         // Administrative modification is intentionally not constrained by equipment rules.
         b.custom_section(
-            [39, 38, 37, 36]
-                .map(|index| Box::new(NormalSlot::new(target_ref.clone(), index)) as Box<dyn Slot>),
+            [39, 38, 37, 36].map(|index| NormalSlot::new(target_ref.clone(), index)),
             [target_ref.clone()],
         )
     } else {
@@ -122,7 +121,7 @@ fn invsee(
     };
     let offhand = if modify {
         b.custom_section(
-            [Box::new(NormalSlot::new(target_ref.clone(), 40)) as Box<dyn Slot>],
+            [NormalSlot::new(target_ref.clone(), 40)],
             [target_ref.clone()],
         )
     } else {
@@ -181,12 +180,12 @@ fn readonly_section(
     let may_place: MayPlaceFn = Arc::new(|_, _| false);
     let may_pickup: MayPickupFn = Arc::new(|_, _, _, _| false);
     let slots = indices.into_iter().map(|index| {
-        Box::new(RestrictedSlot::new(
+        RestrictedSlot::new(
             container.clone(),
             index,
             may_place.clone(),
             Some(may_pickup.clone()),
-        )) as Box<dyn Slot>
+        )
     });
     builder.custom_section(slots, [container.clone()])
 }

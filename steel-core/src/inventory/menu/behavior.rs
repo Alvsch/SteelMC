@@ -1064,7 +1064,7 @@ mod tests {
         let container_ref = ContainerRef::from(container);
         let mut builder = MenuBuilder::new(None, 1);
         builder.custom_section(
-            [Box::new(NormalSlot::new(container_ref.clone(), 0)) as Box<dyn Slot>],
+            [NormalSlot::new(container_ref.clone(), 0)],
             [container_ref.clone()],
         );
         (builder.build(BasicKind {}), container_ref)
@@ -1129,7 +1129,7 @@ mod tests {
         let container_ref = ContainerRef::from(container);
 
         let mut builder = MenuBuilder::new(None, 1);
-        builder.custom_section(
+        builder.custom_boxed_section(
             [
                 Box::new(NormalSlot::new(container_ref.clone(), 0)) as Box<dyn Slot>,
                 Box::new(RestrictedSlot::new(

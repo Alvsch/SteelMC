@@ -92,9 +92,9 @@ fn perform_partial_swap(world_name: &'static str, game_mode: GameType) -> Partia
     let target_ref = ContainerRef::from(Arc::clone(&target));
     let mut builder = MenuBuilder::new(None, 1);
     let target_slots = builder.custom_section(
-        [Box::new(SingleItemSlot {
+        [SingleItemSlot {
             base: NormalSlot::new(target_ref.clone(), 0),
-        }) as Box<dyn Slot>],
+        }],
         [target_ref],
     );
     let mut menu = builder.build(BasicKind {});

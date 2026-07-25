@@ -606,13 +606,37 @@ impl<'a> GridPlacer<'a> {
         )
     }
 
-    /// Adds pre-built slots over `rect`, consumed in row-major order.
+    /// Adds concrete pre-built slots over `rect`, consumed in row-major order.
     ///
     /// `containers` declares the containers the slots view, so the menu locks them.
+    /// Use [`place_boxed_slots`](Self::place_boxed_slots) for a heterogeneous or
+    /// already-erased collection.
     ///
     /// # Panics
     /// If the slot count differs from the rect's cell count, or on the overlap/bounds conditions of [`place`](Self::place).
-    pub fn place_slots(
+    pub fn place_slots<S>(
+        &mut self,
+        rect: Rect,
+        slots: impl IntoIterator<Item = S>,
+        containers: impl IntoIterator<Item = ContainerRef>,
+    ) -> Region
+    where
+        S: Slot + 'static,
+    {
+        self.place_boxed_slots(
+            rect,
+            slots
+                .into_iter()
+                .map(|slot| Box::new(slot) as Box<dyn Slot>),
+            containers,
+        )
+    }
+
+    /// Adds heterogeneous or already-erased slots over `rect` in row-major order.
+    ///
+    /// # Panics
+    /// If the slot count differs from the rect's cell count, or on the overlap/bounds conditions of [`place`](Self::place).
+    pub fn place_boxed_slots(
         &mut self,
         rect: Rect,
         slots: impl IntoIterator<Item = Box<dyn Slot>>,
@@ -986,22 +1010,22 @@ impl MenuBuilder {
                     let container = filler
                         .clone()
                         .expect("filler exists when cells are painted");
-                    self.push_slot(Box::new(RestrictedSlot::new(
+                    self.push_slot(RestrictedSlot::new(
                         container,
                         filler_next,
                         deny_place.clone(),
                         deny_pickup.clone(),
-                    )));
+                    ));
                     filler_next += 1;
                 }
                 Cell::Functional(placement) => {
                     let Placement { rect, kind } = &mut placements[*placement];
                     match kind {
                         PlacementKind::Normal { container, offset } => {
-                            self.push_slot(Box::new(NormalSlot::new(
+                            self.push_slot(NormalSlot::new(
                                 container.clone(),
                                 *offset + rect.local_index(x, y),
-                            )));
+                            ));
                         }
                         PlacementKind::Restricted {
                             container,
@@ -1009,24 +1033,21 @@ impl MenuBuilder {
                             may_place,
                             may_pickup,
                         } => {
-                            self.push_slot(Box::new(RestrictedSlot::new(
+                            self.push_slot(RestrictedSlot::new(
                                 container.clone(),
                                 *offset + rect.local_index(x, y),
                                 may_place.clone(),
                                 may_pickup.clone(),
-                            )));
+                            ));
                         }
                         PlacementKind::Result { handler, container } => {
-                            self.push_slot(Box::new(ResultSlot::new(
-                                handler.clone(),
-                                container.clone(),
-                            )));
+                            self.push_slot(ResultSlot::new(handler.clone(), container.clone()));
                         }
                         PlacementKind::Slots { slots, .. } => {
                             let slot = slots[rect.local_index(x, y)]
                                 .take()
                                 .expect("each grid cell maps to exactly one slot");
-                            self.push_slot(slot);
+                            self.push_boxed_slot(slot);
                         }
                     }
                 }
@@ -1091,9 +1112,7 @@ mod tests {
         use crate::inventory::menu::kinds::BasicKind;
 
         let c = container(9);
-        let slots: Vec<Box<dyn Slot>> = (3..7)
-            .map(|i| Box::new(NormalSlot::new(c.clone(), i)) as Box<dyn Slot>)
-            .collect();
+        let slots: Vec<NormalSlot> = (3..7).map(|i| NormalSlot::new(c.clone(), i)).collect();
 
         let mut b = MenuBuilder::new(None, 0);
         let region = b.grid(1, |g| {
@@ -1121,9 +1140,7 @@ mod tests {
     #[should_panic(expected = "place_slots got 3 slots")]
     fn place_slots_panics_on_count_mismatch() {
         let c = container(9);
-        let slots: Vec<Box<dyn Slot>> = (0..3)
-            .map(|i| Box::new(NormalSlot::new(c.clone(), i)) as Box<dyn Slot>)
-            .collect();
+        let slots: Vec<NormalSlot> = (0..3).map(|i| NormalSlot::new(c.clone(), i)).collect();
 
         let mut b = MenuBuilder::new(None, 0);
         b.grid(1, |g| {

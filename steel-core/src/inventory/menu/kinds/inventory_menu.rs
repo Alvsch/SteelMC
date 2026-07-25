@@ -41,10 +41,7 @@ pub fn inventory_menu(inventory: Shared<PlayerInventory>) -> Menu {
     let armor = builder.custom_section(armor_slots(&inventory), [inventory.clone()]);
     let player = builder.player_inventory(&inventory);
     // Offhand is inventory slot 40.
-    let offhand = builder.custom_section(
-        [Box::new(NormalSlot::new(inventory.clone(), 40)) as Box<dyn Slot>],
-        [inventory],
-    );
+    let offhand = builder.custom_section([NormalSlot::new(inventory.clone(), 40)], [inventory]);
 
     // No routes: quick_move is a custom override. The grid drains on close.
     builder.drain([grid]);

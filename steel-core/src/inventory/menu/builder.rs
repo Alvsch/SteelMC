@@ -573,8 +573,29 @@ impl MenuBuilder {
         self.section_from(start)
     }
 
-    /// Adds arbitrary or custom slots.
-    pub fn custom_section(
+    /// Adds arbitrary concrete slots, boxing them into the menu's erased storage.
+    ///
+    /// All slots produced by the iterator have the same concrete type. Use
+    /// [`custom_boxed_section`](Self::custom_boxed_section) for a heterogeneous
+    /// or already-erased collection.
+    pub fn custom_section<S>(
+        &mut self,
+        slots: impl IntoIterator<Item = S>,
+        containers: impl IntoIterator<Item = impl Into<ContainerRef>>,
+    ) -> Section
+    where
+        S: Slot + 'static,
+    {
+        self.custom_boxed_section(
+            slots
+                .into_iter()
+                .map(|slot| Box::new(slot) as Box<dyn Slot>),
+            containers,
+        )
+    }
+
+    /// Adds heterogeneous or already-erased slots.
+    pub fn custom_boxed_section(
         &mut self,
         slots: impl IntoIterator<Item = Box<dyn Slot>>,
         containers: impl IntoIterator<Item = impl Into<ContainerRef>>,
@@ -763,8 +784,13 @@ impl MenuBuilder {
         self.slots.len()
     }
 
-    /// Appends a single slot without creating a section.
-    pub(crate) fn push_slot(&mut self, slot: Box<dyn Slot>) {
+    /// Appends a single concrete slot without creating a section.
+    pub(crate) fn push_slot(&mut self, slot: impl Slot + 'static) {
+        self.push_boxed_slot(Box::new(slot));
+    }
+
+    /// Appends a single already-erased slot without creating a section.
+    pub(crate) fn push_boxed_slot(&mut self, slot: Box<dyn Slot>) {
         self.slots.push(slot);
     }
 

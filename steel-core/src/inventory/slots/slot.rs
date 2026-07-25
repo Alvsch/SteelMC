@@ -205,14 +205,14 @@ pub fn add_standard_inventory_slots(
 
 /// The four armor slots in display order (head, chest, legs, feet).
 #[must_use]
-pub fn armor_slots(inventory: &Shared<PlayerInventory>) -> [Box<dyn Slot>; 4] {
+pub fn armor_slots(inventory: &Shared<PlayerInventory>) -> [ArmorSlot; 4] {
     [
         (39, EquipmentSlot::Head),
         (38, EquipmentSlot::Chest),
         (37, EquipmentSlot::Legs),
         (36, EquipmentSlot::Feet),
     ]
-    .map(|(index, slot)| Box::new(ArmorSlot::new(inventory.clone(), index, slot)) as Box<dyn Slot>)
+    .map(|(index, slot)| ArmorSlot::new(inventory.clone(), index, slot))
 }
 
 #[cfg(test)]
