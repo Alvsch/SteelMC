@@ -305,9 +305,8 @@ impl World {
     /// Drops the loot for a block using its loot table.
     ///
     /// This is the no-tool/no-entity overload. Player block breaking uses
-    /// `block_breaking::drop_block_loot` which includes tool context for
-    /// fortune/silk touch.
-    // TODO: block entity and entity drops
+    /// [`BlockBehavior::player_destroy`](crate::behavior::BlockBehavior::player_destroy),
+    /// which includes player and tool context.
     pub fn drop_resources(self: &Arc<Self>, state: BlockStateId, pos: BlockPos) {
         self.drop_resources_with_entity(state, pos, None);
     }
@@ -319,14 +318,38 @@ impl World {
         entity: Option<&dyn Entity>,
     ) {
         let context = BlockLootContext::new(self, pos).with_entity(entity);
+        self.drop_resources_from_context(state, &context);
+    }
+
+    /// Drops block resources using Vanilla's player-destruction loot parameters.
+    pub(crate) fn drop_resources_for_player(
+        self: &Arc<Self>,
+        state: BlockStateId,
+        pos: BlockPos,
+        player: &Player,
+        tool: &ItemStack,
+    ) {
+        let context = BlockLootContext::new(self, pos)
+            .with_entity(Some(player))
+            .with_tool(tool);
+        self.drop_resources_from_context(state, &context);
+    }
+
+    pub(crate) fn drop_resources_from_context(
+        self: &Arc<Self>,
+        state: BlockStateId,
+        context: &BlockLootContext<'_>,
+    ) {
         for item in context.get_drops(state) {
             if !item.is_empty() {
-                self.pop_resource(pos, item);
+                self.pop_resource(context.pos(), item);
             }
         }
+        let empty_tool = ItemStack::empty();
+        let tool = context.tool().unwrap_or(&empty_tool);
         BLOCK_BEHAVIORS
             .get_behavior(state.get_block())
-            .spawn_after_break(state, self, pos, &ItemStack::empty(), true);
+            .spawn_after_break(state, self, context.pos(), tool, true);
     }
 
     pub(crate) fn block_drops(
