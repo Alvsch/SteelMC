@@ -222,10 +222,12 @@ async fn test_server_with_worlds(
         command_permission_keys,
         command_requests: CommandRequestQueue::new(),
         packet_processor: PacketProcessor::new(),
-        chunk_encoding_pool: rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .expect("test chunk encoding pool should initialize"),
+        chunk_encoding_pool: Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("test chunk encoding pool should initialize"),
+        ),
         jobs: ServerJobQueue::new(),
         player_data_storage,
         player_permission_states: SyncRwLock::new(player_permission_states),

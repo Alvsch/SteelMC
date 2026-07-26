@@ -448,8 +448,8 @@ pub struct Server {
     command_requests: CommandRequestQueue,
     /// Decoded serverbound play packets handled during the inter-tick phase.
     packet_processor: PacketProcessor,
-    /// Dedicated worker pool for CPU-heavy chunk packet extraction and encoding.
-    chunk_encoding_pool: ThreadPool,
+    /// Dedicated worker pool for CPU-heavy chunk persistence and packet encoding.
+    chunk_encoding_pool: Arc<ThreadPool>,
     /// Jobs resumed from a known point in the server game tick.
     pub jobs: ServerJobQueue,
     /// Player data storage for saving/loading player state.
@@ -605,7 +605,7 @@ impl Server {
                 .build()
                 .map_err(|e| format!("failed to create generation thread pool: {e}"))?
         });
-        let chunk_encoding_pool = {
+        let chunk_encoding_pool = Arc::new({
             let mut builder =
                 ThreadPoolBuilder::new().thread_name(|i| format!("rayon-chunk-encode-{i}"));
             if let Some(chunk_encoding_threads) =
@@ -616,7 +616,7 @@ impl Server {
             builder
                 .build()
                 .map_err(|e| format!("failed to create chunk encoding thread pool: {e}"))?
-        };
+        });
 
         let player_data_storage = PlayerDataStorage::new(
             resolved_worlds.save_path.clone(),
@@ -671,7 +671,7 @@ impl Server {
                 )
                 .map_err(|e| format!("failed to create generator for {}: {e}", world_entry.key))?;
             let generation_settings = generation_settings_for_world(world_entry, &generator_output);
-            let world = World::new_with_config(
+            let world = World::new_with_config_and_encoding_pool(
                 chunk_runtime.clone(),
                 world_entry.key.clone(),
                 generator_output.dimension_type,
@@ -693,6 +693,7 @@ impl Server {
                     difficulty: world_entry.difficulty,
                 },
                 generation_pool.clone(),
+                Arc::clone(&chunk_encoding_pool),
             )
             .await
             .map_err(|e| format!("failed to create world {}: {e}", world_entry.key))?;

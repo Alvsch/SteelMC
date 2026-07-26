@@ -400,7 +400,7 @@ impl Server {
                     player,
                     world,
                     &mut encode_cache,
-                    &self.chunk_encoding_pool,
+                    self.chunk_encoding_pool.as_ref(),
                 );
                 true
             });
