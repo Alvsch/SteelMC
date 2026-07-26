@@ -858,7 +858,7 @@ fn block_action_restriction_precedes_redstone_ore_attack() {
     }
 
     let predicate = BlockPredicate::new(
-        Some(RegistryHolderSet::Direct(vec![
+        Some(RegistryHolderSet::direct(vec![
             &vanilla_blocks::REDSTONE_ORE,
         ])),
         None,
