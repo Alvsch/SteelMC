@@ -145,6 +145,10 @@ impl BlockBehavior for SweetBerryBushBlock {
             let mut ctx = LootContext::new(random).with_block_state(state);
             loot_table.get_random_items(&mut ctx)
         });
+        let items = items.unwrap_or_else(|error| {
+            log::error!("Failed to evaluate sweet berry harvest loot: {error}");
+            Vec::new()
+        });
         for item in items {
             world.drop_item_stack(pos, item);
         }

@@ -17,6 +17,7 @@ pub mod entity;
 pub mod fluid;
 pub mod inventory;
 pub mod level_data;
+pub(crate) mod map;
 pub mod permission;
 pub mod physics;
 pub mod player;

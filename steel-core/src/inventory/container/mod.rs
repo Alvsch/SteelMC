@@ -11,29 +11,29 @@ pub use crafting::CraftingContainer;
 pub use result::ResultContainer;
 pub use simple::SimpleContainer;
 
-use std::mem;
 use std::ptr;
+use std::{mem, sync::Arc};
 
 use steel_registry::item_stack::ItemStack;
 use steel_utils::{BlockPos, ErasedType};
 
-use crate::{player::Player, world::World};
+use crate::{inventory::lock::ContainerRef, player::Player, world::World};
 
 /// Default distance buffer for container interaction range checks.
 pub const DEFAULT_DISTANCE_BUFFER: f32 = 4.0;
 
-/// World and optional player data supplied before a block container's inventory is accessed.
-pub struct ContainerAccessContext<'a> {
-    pub(crate) world: &'a World,
+/// Owned world and player data supplied to deferred container preparation.
+pub struct ContainerAccessContext {
+    pub(crate) world: Arc<World>,
     pub(crate) pos: BlockPos,
-    pub(crate) player: Option<&'a Player>,
+    pub(crate) player: Option<Arc<Player>>,
 }
 
-impl<'a> ContainerAccessContext<'a> {
+impl ContainerAccessContext {
     /// Returns the world containing the accessed block container.
     #[must_use]
-    pub const fn world(&self) -> &'a World {
-        self.world
+    pub fn world(&self) -> &World {
+        &self.world
     }
 
     /// Returns the block position of the accessed container.
@@ -44,9 +44,54 @@ impl<'a> ContainerAccessContext<'a> {
 
     /// Returns the player opening the menu, when this access came from a menu open.
     #[must_use]
-    pub const fn player(&self) -> Option<&'a Player> {
-        self.player
+    pub fn player(&self) -> Option<&Player> {
+        self.player.as_deref()
     }
+}
+
+/// Current readiness of a container's deferred contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerReadiness {
+    /// Contents can be accessed now.
+    Ready,
+    /// Preparation has started and will finish on a later server tick.
+    Pending,
+    /// Deferred contents exist, but no preparation task is currently running.
+    NeedsPreparation,
+}
+
+/// Result of requesting access to a container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerAccessResult {
+    /// Contents can be accessed now.
+    Ready,
+    /// Contents are being prepared on later server ticks.
+    Pending,
+    /// Preparation could not be started or completed.
+    Failed,
+}
+
+/// Storage-local first step of preparing deferred container contents.
+pub enum ContainerPreparation {
+    /// No task is needed.
+    Ready {
+        /// Whether the owning block entity must be marked changed after unlocking.
+        changed: bool,
+    },
+    /// A previously claimed task is still running.
+    Pending,
+    /// This task was claimed while locked and must be started after unlocking.
+    Start(Box<dyn ContainerPreparationTask>),
+}
+
+/// Work returned while a container is locked and started after the lock is released.
+pub trait ContainerPreparationTask: Send {
+    /// Starts claimed preparation after the container lock has been released.
+    fn start(
+        self: Box<Self>,
+        container: ContainerRef,
+        context: ContainerAccessContext,
+    ) -> ContainerAccessResult;
 }
 
 /// Something that contains items.
@@ -67,12 +112,14 @@ impl<'a> ContainerAccessContext<'a> {
 /// [`crate::inventory::lock::ContainerRef::owned_by_block_entity`], which runs
 /// only after every container lock has been released.
 pub trait Container: ErasedType + Send + Sync {
-    /// Realizes deferred inventory state before an access.
-    ///
-    /// Returns whether persistent container state changed. Implementations must
-    /// not call back into their owning block entity while the container is locked.
-    fn prepare_access(&mut self, _context: &ContainerAccessContext<'_>) -> bool {
-        false
+    /// Claims any deferred preparation work without leaving container storage.
+    fn begin_prepare_access(&mut self) -> ContainerPreparation {
+        ContainerPreparation::Ready { changed: false }
+    }
+
+    /// Reports whether contents are ready without starting work.
+    fn preparation_readiness(&self) -> ContainerReadiness {
+        ContainerReadiness::Ready
     }
 
     /// Returns the items in this container

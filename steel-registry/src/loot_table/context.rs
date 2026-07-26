@@ -1,6 +1,24 @@
 use steel_utils::random::Random;
 
-use super::{BlockStateId, Identifier, ItemStack};
+use super::{BlockStateId, ExplorationMapRequest, Identifier, ItemStack, LootError, LootResult};
+use crate::biome::BiomeRef;
+use steel_utils::BlockPos;
+
+/// Read-only level facts used by loot predicates.
+pub trait LootLevel: Sync {
+    /// Returns the biome at a loaded block position, or `None` when it is unavailable.
+    fn biome_at(&self, pos: BlockPos) -> Option<BiomeRef>;
+}
+
+/// Resolves the world-dependent result of an exploration-map loot function.
+pub trait ExplorationMapResolver {
+    /// Returns a replacement map, or `None` when no matching structure exists.
+    fn resolve(
+        &mut self,
+        request: &ExplorationMapRequest,
+        original: &ItemStack,
+    ) -> LootResult<Option<ItemStack>>;
+}
 
 /// Entity target for loot context lookups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,8 +99,8 @@ pub enum ScoreboardTarget {
 
 impl NumberProvider {
     /// Get a value from this provider using the given RNG.
-    pub fn get<R: Random>(&self, rng: &mut R, ctx: Option<&LootContextRef<'_>>) -> f32 {
-        match self {
+    pub fn get<R: Random>(&self, rng: &mut R, ctx: Option<&LootContextRef<'_>>) -> LootResult<f32> {
+        Ok(match self {
             Self::Constant(v) => *v,
             Self::Uniform { min, max } => {
                 if min >= max {
@@ -101,24 +119,20 @@ impl NumberProvider {
                 count as f32
             }
             Self::Score { .. } => {
-                // TODO: Implement when scoreboard system is available
-                let _ = ctx;
-                0.0
+                return Err(LootError::UnsupportedNumberProvider("score"));
             }
             Self::Storage { .. } => {
-                // TODO: Implement when command storage system is available
-                let _ = ctx;
-                0.0
+                return Err(LootError::UnsupportedNumberProvider("storage"));
             }
             Self::EnchantmentLevel { enchantment } => ctx
                 .and_then(|c| c.tool)
                 .map_or(0.0, |t| t.get_enchantment_level(enchantment) as f32),
-        }
+        })
     }
 
     /// Get a value without context (for backwards compatibility).
-    pub fn get_simple(&self, rng: &mut impl Random) -> f32 {
-        match self {
+    pub fn get_simple(&self, rng: &mut impl Random) -> LootResult<f32> {
+        Ok(match self {
             Self::Constant(v) => *v,
             Self::Uniform { min, max } => {
                 if min >= max {
@@ -136,14 +150,23 @@ impl NumberProvider {
                 }
                 count as f32
             }
-            // Context-dependent providers return 0 when no context available
-            Self::Score { .. } | Self::Storage { .. } | Self::EnchantmentLevel { .. } => 0.0,
-        }
+            Self::Score { .. } => {
+                return Err(LootError::UnsupportedNumberProvider("score"));
+            }
+            Self::Storage { .. } => {
+                return Err(LootError::UnsupportedNumberProvider("storage"));
+            }
+            Self::EnchantmentLevel { .. } => {
+                return Err(LootError::UnsupportedNumberProvider(
+                    "enchantment_level without a loot context",
+                ));
+            }
+        })
     }
 
     /// Get the value as an integer.
-    pub fn get_int(&self, rng: &mut impl Random) -> i32 {
-        match self {
+    pub fn get_int(&self, rng: &mut impl Random) -> LootResult<i32> {
+        Ok(match self {
             Self::Uniform { min, max } => {
                 let min = Self::java_round(*min);
                 let max = Self::java_round(*max);
@@ -153,8 +176,8 @@ impl NumberProvider {
                     rng.next_i32_between(min, max)
                 }
             }
-            _ => Self::java_round(self.get_simple(rng)),
-        }
+            _ => Self::java_round(self.get_simple(rng)?),
+        })
     }
 
     /// Get the value as an integer with context.
@@ -162,8 +185,8 @@ impl NumberProvider {
         &self,
         rng: &mut R,
         ctx: Option<&LootContextRef<'_>>,
-    ) -> i32 {
-        match self {
+    ) -> LootResult<i32> {
+        Ok(match self {
             Self::Uniform { min, max } => {
                 let min = Self::java_round(*min);
                 let max = Self::java_round(*max);
@@ -173,8 +196,8 @@ impl NumberProvider {
                     rng.next_i32_between(min, max)
                 }
             }
-            _ => Self::java_round(self.get(rng, ctx)),
-        }
+            _ => Self::java_round(self.get(rng, ctx)?),
+        })
     }
 
     fn java_round(value: f32) -> i32 {
@@ -191,18 +214,23 @@ pub struct NumberProviderRange {
 
 impl NumberProviderRange {
     /// Check if a value is within this range.
-    pub fn test(&self, value: f32, rng: &mut impl Random) -> bool {
+    pub fn test<R: Random>(
+        &self,
+        value: f32,
+        rng: &mut R,
+        ctx: Option<&LootContextRef<'_>>,
+    ) -> LootResult<bool> {
         if let Some(min) = &self.min
-            && value < min.get_simple(rng)
+            && value < min.get(rng, ctx)?
         {
-            return false;
+            return Ok(false);
         }
         if let Some(max) = &self.max
-            && value > max.get_simple(rng)
+            && value > max.get(rng, ctx)?
         {
-            return false;
+            return Ok(false);
         }
-        true
+        Ok(true)
     }
 
     /// Create an exact match range.
@@ -268,6 +296,10 @@ pub struct LootContext<'a, R: Random> {
 
     /// World position where the loot is generated (block position or entity death location).
     pub origin: Option<(f64, f64, f64)>,
+    /// Read-only level access for location predicates.
+    pub level: Option<&'a dyn LootLevel>,
+    /// Pre-resolved world access for exploration-map functions.
+    pub exploration_maps: Option<&'a mut dyn ExplorationMapResolver>,
     /// Current game time in ticks (for `TimeCheck` condition).
     pub game_time: Option<i64>,
     /// Current weather state.
@@ -364,6 +396,8 @@ impl<'a, R: Random> LootContext<'a, R> {
             explosion_radius: None,
             killed_by_player: false,
             origin: None,
+            level: None,
+            exploration_maps: None,
             game_time: None,
             weather: None,
             this_entity: None,
@@ -415,6 +449,20 @@ impl<'a, R: Random> LootContext<'a, R> {
     #[must_use]
     pub const fn with_origin(mut self, x: f64, y: f64, z: f64) -> Self {
         self.origin = Some((x, y, z));
+        self
+    }
+
+    /// Adds read-only level access for location predicates.
+    #[must_use]
+    pub const fn with_level(mut self, level: &'a dyn LootLevel) -> Self {
+        self.level = Some(level);
+        self
+    }
+
+    /// Adds a resolver for exploration-map loot functions.
+    #[must_use]
+    pub fn with_exploration_maps(mut self, resolver: &'a mut dyn ExplorationMapResolver) -> Self {
+        self.exploration_maps = Some(resolver);
         self
     }
 

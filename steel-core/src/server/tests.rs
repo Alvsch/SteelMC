@@ -47,10 +47,10 @@ use super::known_players::{
 use super::player_admission::PendingPlayerJoin;
 use super::{
     AsyncMutex, CancellationToken, CommandRegistry, CommandRequestQueue, DomainCommandStorage,
-    DomainPlayerData, DomainPlayerState, DomainRandomSequences, DomainScoreboards, FxHashMap,
-    KeyStore, KnownPlayerCacheState, KnownPlayers, Notify, PacketProcessor, PersistentPlayerData,
-    PlayerDataStorage, PlayerDisconnectQueue, PlayerJoinQueue, PlayerMap, PreparedSpawn,
-    RegistryCache, Server, ServerJobQueue, SyncMutex, SyncRwLock, TabListTickStats,
+    DomainMapData, DomainPlayerData, DomainPlayerState, DomainRandomSequences, DomainScoreboards,
+    FxHashMap, KeyStore, KnownPlayerCacheState, KnownPlayers, Notify, PacketProcessor,
+    PersistentPlayerData, PlayerDataStorage, PlayerDisconnectQueue, PlayerJoinQueue, PlayerMap,
+    PreparedSpawn, RegistryCache, Server, ServerJobQueue, SyncMutex, SyncRwLock, TabListTickStats,
     TickRateManager, UnpreparedDomainPlayerData, UnpreparedDomainPlayerState, WorldMap,
     can_entity_return_from_end_to_overworld, cap_positive_thread_count,
     create_registered_dispatcher, is_allowed_to_enter_portal_target, is_end_return_transition,
@@ -210,6 +210,8 @@ async fn test_server_with_worlds(
     let config = test_runtime_config();
     let registry_cache = RegistryCache::new(config.compression);
     let random_sequences = DomainRandomSequences::ephemeral(domains);
+    let map_data = DomainMapData::ephemeral(domains);
+    let jobs = Arc::new(ServerJobQueue::new());
     for world in worlds.values() {
         let Some(sequences) = random_sequences.get(world.domain()) else {
             return Err(format!(
@@ -218,6 +220,11 @@ async fn test_server_with_worlds(
             ));
         };
         world.bind_random_sequences(Arc::clone(sequences));
+        let Some(maps) = map_data.get(world.domain()) else {
+            return Err(format!("test world {} has no map-data owner", world.key));
+        };
+        world.bind_map_data(Arc::clone(maps));
+        world.bind_server_jobs(Arc::downgrade(&jobs));
     }
 
     Ok(Arc::new(Server {
@@ -228,6 +235,7 @@ async fn test_server_with_worlds(
         registry_cache,
         worlds,
         random_sequences,
+        map_data,
         online_players: PlayerMap::new(),
         player_admissions: SyncMutex::new(FxHashMap::default()),
         tick_rate_manager: SyncRwLock::new(TickRateManager::new()),
@@ -243,7 +251,7 @@ async fn test_server_with_worlds(
                 .build()
                 .expect("test chunk encoding pool should initialize"),
         ),
-        jobs: ServerJobQueue::new(),
+        jobs,
         player_data_storage,
         player_permission_states: SyncRwLock::new(player_permission_states),
         player_permission_updates: AsyncMutex::new(()),

@@ -220,6 +220,36 @@ impl RandomSequences {
         result
     }
 
+    /// Runs a fallible operation transactionally against the persistent stream.
+    ///
+    /// Failed loot evaluation must not consume a named sequence: the caller can
+    /// correct the missing context and retry without changing Vanilla's result.
+    pub(crate) fn try_with_sequence<T, E>(
+        &self,
+        key: &Identifier,
+        operation: impl FnOnce(&mut RandomSource) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let mut inner = self.inner.lock();
+        let salt = inner.salt;
+        let include_world_seed = inner.include_world_seed;
+        let include_sequence_id = inner.include_sequence_id;
+        let key = key.to_string();
+        let random = inner.sequences.entry(key.clone()).or_insert_with(|| {
+            Self::create_sequence(
+                self.domain_seed,
+                salt,
+                include_world_seed,
+                include_sequence_id,
+                &key,
+            )
+        });
+        let mut candidate = random.clone();
+        let result = operation(&mut candidate)?;
+        *random = candidate;
+        inner.revision = inner.revision.wrapping_add(1);
+        Ok(result)
+    }
+
     fn create_sequence(
         domain_seed: i64,
         salt: i32,

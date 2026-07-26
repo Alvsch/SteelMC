@@ -80,6 +80,10 @@ impl CaveVinesBlock {
                 .with_interacting_entity(entity_loot_ref(source_entity));
             loot_table.get_random_items(&mut ctx)
         });
+        let items = items.unwrap_or_else(|error| {
+            log::error!("Failed to evaluate cave-vine harvest loot: {error}");
+            Vec::new()
+        });
         for item in items {
             world.pop_resource(pos, item);
         }

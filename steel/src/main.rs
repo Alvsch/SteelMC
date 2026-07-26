@@ -433,8 +433,34 @@ async fn shutdown_worlds(server: &Arc<Server>) {
         Err(error) => log::error!("Failed to save domain command storage: {error}"),
     }
     let mut total_saved = 0;
+    let mut domains_with_map_save_failures = BTreeSet::new();
     let mut domains_with_chunk_save_failures = BTreeSet::new();
+    let mut domains = server.worlds.domain_names().collect::<Vec<_>>();
+    domains.sort_unstable();
+    for domain in &domains {
+        match server.save_map_data(domain).await {
+            Ok(true) => log::info!("Saved map data for domain {domain}"),
+            Ok(false) => {}
+            Err(error) => {
+                domains_with_map_save_failures.insert((*domain).to_owned());
+                log::error!("Failed to save map data for domain {domain}: {error}");
+            }
+        }
+    }
     for world in server.worlds.values() {
+        if domains_with_map_save_failures.contains(world.domain()) {
+            log::warn!(
+                "Skipping shutdown saves for world {} after its domain map-data save failed",
+                world.key
+            );
+            if let Err(error) = world.close_chunk_storage_without_saving().await {
+                log::error!(
+                    "Failed to close chunk storage for world {} after skipping its save: {error}",
+                    world.key
+                );
+            }
+            continue;
+        }
         let outcome = world.cleanup().await;
         total_saved += outcome.saved;
         if outcome.failures > 0 {
@@ -447,12 +473,12 @@ async fn shutdown_worlds(server: &Arc<Server>) {
         }
     }
     log::info!("Saved {total_saved} chunks");
-    let mut domains = server.worlds.domain_names().collect::<Vec<_>>();
-    domains.sort_unstable();
     for domain in domains {
-        if domains_with_chunk_save_failures.contains(domain) {
+        if domains_with_map_save_failures.contains(domain)
+            || domains_with_chunk_save_failures.contains(domain)
+        {
             log::warn!(
-                "Skipping random-sequence save for domain {domain} after chunk-save failure"
+                "Skipping random-sequence save for domain {domain} after an earlier save failure"
             );
             continue;
         }
@@ -470,6 +496,12 @@ async fn shutdown_worlds(server: &Arc<Server>) {
     let mut saved = 0;
     for (player, domain, data) in players_to_save {
         let uuid = player.gameprofile.id;
+        if domains_with_map_save_failures.contains(domain.as_str()) {
+            log::warn!(
+                "Skipping player {uuid} data save for domain {domain} after its map-data save failed"
+            );
+            continue;
+        }
         match server
             .player_data_storage
             .save_domain_data(&domain, uuid, &data)

@@ -25,7 +25,9 @@ use crate::world::game_event::{
 };
 use crate::{
     chunk::chunk_map::{ChunkMapGameTickTimings, ChunkSaveOutcome},
+    map::MapDataStore,
     random_sequences::RandomSequences,
+    server::jobs::{ServerJob, ServerJobQueue},
     world::weather::Weather,
 };
 use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
@@ -58,7 +60,7 @@ use steel_registry::game_events::GameEventRef;
 use steel_registry::game_rules::{ErasedGameRuleRef, GameRule, GameRuleValue, GameRuleValueType};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::level_events;
-use steel_registry::loot_table::LootContext;
+use steel_registry::loot_table::{LootContext, LootLevel};
 use steel_registry::particle_type::ParticleData;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_block_tags::BlockTag;
@@ -251,6 +253,10 @@ pub struct World {
     loot_random: SyncMutex<RandomSource>,
     /// Server-global named random sequences, rebound when this world joins a server.
     random_sequences: SyncRwLock<Arc<RandomSequences>>,
+    /// Domain-scoped filled-map data, rebound when this world joins a server.
+    map_data: SyncRwLock<Arc<MapDataStore>>,
+    /// Server tick job queue used by deferred world work.
+    server_jobs: SyncRwLock<Weak<ServerJobQueue>>,
     /// Runtime world border state.
     world_border: SyncMutex<WorldBorder>,
     /// Server view distance (maximum chunk radius).
@@ -300,6 +306,12 @@ pub struct World {
     pub poi_storage: SyncMutex<PointOfInterestStorage>,
     /// World-change requests queued by world-local ticks for server safe-point processing.
     pending_world_changes: SyncMutex<Vec<(SharedEntity, WorldChangeRequest)>>,
+}
+
+impl LootLevel for World {
+    fn biome_at(&self, pos: BlockPos) -> Option<BiomeRef> {
+        Self::biome_at(self, pos)
+    }
 }
 
 impl World {
@@ -421,6 +433,8 @@ impl World {
                     rand::random::<u64>(),
                 ))),
                 random_sequences: SyncRwLock::new(Arc::new(RandomSequences::ephemeral(seed))),
+                map_data: SyncRwLock::new(Arc::new(MapDataStore::ephemeral())),
+                server_jobs: SyncRwLock::new(Weak::new()),
                 world_border: SyncMutex::new(world_border),
                 view_distance,
                 simulation_distance,
@@ -455,6 +469,30 @@ impl World {
         *self.random_sequences.write() = random_sequences;
     }
 
+    /// Binds this world to the map store owned by its domain.
+    pub(crate) fn bind_map_data(&self, map_data: Arc<MapDataStore>) {
+        *self.map_data.write() = map_data;
+    }
+
+    /// Returns the map store shared by this world's domain.
+    pub(crate) fn map_data(&self) -> Arc<MapDataStore> {
+        Arc::clone(&self.map_data.read())
+    }
+
+    /// Binds this world to its owning server's tick job queue.
+    pub(crate) fn bind_server_jobs(&self, jobs: Weak<ServerJobQueue>) {
+        *self.server_jobs.write() = jobs;
+    }
+
+    /// Schedules deferred world work for a future server job tick.
+    pub(crate) fn spawn_server_job(&self, job: impl ServerJob + 'static) -> bool {
+        let Some(jobs) = self.server_jobs.read().upgrade() else {
+            return false;
+        };
+        jobs.spawn(job);
+        true
+    }
+
     /// Selects the RNG Vanilla uses for a loot context.
     pub(crate) fn with_loot_random<T>(
         &self,
@@ -473,6 +511,31 @@ impl World {
         }
 
         operation(&mut self.loot_random.lock())
+    }
+
+    /// Runs fallible loot evaluation without advancing a shared random source
+    /// unless the complete evaluation succeeds.
+    pub(crate) fn try_with_loot_random<T, E>(
+        &self,
+        seed: i64,
+        random_sequence: Option<&Identifier>,
+        operation: impl FnOnce(&mut RandomSource) -> Result<T, E>,
+    ) -> Result<T, E> {
+        if seed != 0 {
+            let mut random = RandomSource::Legacy(LegacyRandom::from_seed(seed as u64));
+            return operation(&mut random);
+        }
+
+        if let Some(random_sequence) = random_sequence {
+            let sequences = Arc::clone(&self.random_sequences.read());
+            return sequences.try_with_sequence(random_sequence, operation);
+        }
+
+        let mut random = self.loot_random.lock();
+        let mut candidate = random.clone();
+        let result = operation(&mut candidate)?;
+        *random = candidate;
+        Ok(result)
     }
 
     /// Cleans up the world by saving all chunks.
@@ -498,6 +561,14 @@ impl World {
         }
 
         self.save_all_chunks().await
+    }
+
+    /// Closes chunk storage without persisting current dirty chunks.
+    ///
+    /// Shutdown uses this when a prerequisite domain-owned data save failed, so
+    /// chunk references cannot advance past the data they depend on.
+    pub async fn close_chunk_storage_without_saving(&self) -> io::Result<()> {
+        self.chunk_map.close_storage_without_saving().await
     }
 
     /// Returns the domain this loaded world belongs to.

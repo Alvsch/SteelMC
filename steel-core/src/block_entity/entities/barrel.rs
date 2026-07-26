@@ -122,7 +122,7 @@ impl BlockEntity for BarrelBlockEntity {
         self.container_ref.prepare_access(None);
         let items = {
             let mut container = self.container.lock();
-            container.take_items()
+            container.remove_and_take_ready_items()
         };
         let Some(world) = self.get_level() else {
             return;

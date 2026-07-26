@@ -6,6 +6,10 @@ use crate::chunk_saver::PreparedChunkSave;
 use tokio::sync::oneshot;
 
 impl ChunkMap {
+    pub(crate) async fn close_storage_without_saving(&self) -> std::io::Result<()> {
+        self.storage.close_all().await
+    }
+
     async fn prepare_chunk_save_on_pool(
         self: &Arc<Self>,
         chunk_holder: &Arc<ChunkHolder>,

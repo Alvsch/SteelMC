@@ -2777,7 +2777,15 @@ fn death_loot_items_with_rng<R: Random, E: LivingEntity + ?Sized>(
         context = context.with_last_damage_player(entity);
     }
 
-    loot_table.get_random_items(&mut context)
+    loot_table
+        .get_random_items(&mut context)
+        .unwrap_or_else(|error| {
+            log::error!(
+                "Failed to evaluate entity loot table {}: {error}",
+                loot_table.key
+            );
+            Vec::new()
+        })
 }
 
 fn living_entity_loot_ref<E: LivingEntity + ?Sized>(entity: &E) -> EntityRef<'_> {
