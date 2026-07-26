@@ -2,6 +2,7 @@
 #![feature(thread_id_value)]
 
 use std::backtrace::{Backtrace, BacktraceStatus};
+use std::collections::BTreeSet;
 use std::num::NonZero;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
@@ -432,14 +433,36 @@ async fn shutdown_worlds(server: &Arc<Server>) {
         Err(error) => log::error!("Failed to save domain command storage: {error}"),
     }
     let mut total_saved = 0;
+    let mut domains_with_chunk_save_failures = BTreeSet::new();
     for world in server.worlds.values() {
-        world.cleanup(&mut total_saved).await;
+        let outcome = world.cleanup().await;
+        total_saved += outcome.saved;
+        if outcome.failures > 0 {
+            domains_with_chunk_save_failures.insert(world.domain().to_owned());
+            log::error!(
+                "World {} had {} shutdown chunk-save failures",
+                world.key,
+                outcome.failures
+            );
+        }
     }
     log::info!("Saved {total_saved} chunks");
-    match server.save_random_sequences().await {
-        Ok(true) => log::info!("Saved random sequences"),
-        Ok(false) => {}
-        Err(error) => log::error!("Failed to save random sequences: {error}"),
+    let mut domains = server.worlds.domain_names().collect::<Vec<_>>();
+    domains.sort_unstable();
+    for domain in domains {
+        if domains_with_chunk_save_failures.contains(domain) {
+            log::warn!(
+                "Skipping random-sequence save for domain {domain} after chunk-save failure"
+            );
+            continue;
+        }
+        match server.save_random_sequences(domain).await {
+            Ok(true) => log::info!("Saved random sequences for domain {domain}"),
+            Ok(false) => {}
+            Err(error) => {
+                log::error!("Failed to save random sequences for domain {domain}: {error}");
+            }
+        }
     }
 
     // Save all player data before shutdown

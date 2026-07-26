@@ -24,7 +24,8 @@ use crate::world::game_event::{
     SharedGameEventListener,
 };
 use crate::{
-    chunk::chunk_map::ChunkMapGameTickTimings, random_sequences::RandomSequences,
+    chunk::chunk_map::{ChunkMapGameTickTimings, ChunkSaveOutcome},
+    random_sequences::RandomSequences,
     world::weather::Weather,
 };
 use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
@@ -449,7 +450,7 @@ impl World {
         }))
     }
 
-    /// Binds this world to the single named-sequence map owned by its server.
+    /// Binds this world to the named-sequence map owned by its domain.
     pub(crate) fn bind_random_sequences(&self, random_sequences: Arc<RandomSequences>) {
         *self.random_sequences.write() = random_sequences;
     }
@@ -479,7 +480,7 @@ impl World {
         clippy::await_holding_lock,
         reason = "holding the write lock across await is safe here because it only happens during shutdown"
     )]
-    pub async fn cleanup(&self, total_saved: &mut usize) {
+    pub async fn cleanup(&self) -> ChunkSaveOutcome {
         self.sync_world_border_to_level_data();
         match self.level_data.write().save().await {
             Ok(()) => log::info!("World {} level data saved successfully", self.key),
@@ -496,10 +497,7 @@ impl World {
             Err(e) => log::error!("Failed to save world chunk ticket data: {e}"),
         }
 
-        match self.save_all_chunks().await {
-            Ok(count) => *total_saved += count,
-            Err(e) => log::error!("Failed to save world chunks: {e}"),
-        }
+        self.save_all_chunks().await
     }
 
     /// Returns the domain this loaded world belongs to.
@@ -662,8 +660,8 @@ impl World {
     /// Saves all dirty chunks in this world to disk.
     ///
     /// This should be called during graceful shutdown.
-    /// Returns the number of chunks saved.
-    pub async fn save_all_chunks(&self) -> io::Result<usize> {
+    /// Returns successful writes and failures after attempting the complete pass.
+    pub async fn save_all_chunks(&self) -> ChunkSaveOutcome {
         self.chunk_map.save_all_chunks().await
     }
 }
