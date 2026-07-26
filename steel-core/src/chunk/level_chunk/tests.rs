@@ -13,7 +13,9 @@ use steel_utils::{ChunkPos, Downcast as _, DowncastType, DowncastTypeKey, locks:
 use super::*;
 use crate::behavior::init_behaviors;
 use crate::block_entity::entities::ComparatorBlockEntity;
-use crate::block_entity::{BlockEntityBase, SharedBlockEntity, entities::RawBlockEntity};
+use crate::block_entity::{
+    BlockEntityBase, SharedBlockEntity, entities::RawBlockEntity, init_block_entities,
+};
 use crate::chunk::{
     chunk_access::{ChunkAccess, ChunkStatus},
     chunk_ticket_manager::ChunkTicketLevel,
@@ -313,24 +315,24 @@ fn block_change_replaces_a_structurally_valid_raw_entity_with_the_new_factory() 
     init_behaviors();
     let chunk = test_chunk();
     let pos = BlockPos::new(1, 2, 3);
-    let chest = vanilla_blocks::CHEST.default_state();
+    let spawner = vanilla_blocks::SPAWNER.default_state();
     let comparator = vanilla_blocks::COMPARATOR.default_state();
     assert!(
         chunk
-            .set_block_state(pos, chest, UpdateFlags::UPDATE_NONE)
+            .set_block_state(pos, spawner, UpdateFlags::UPDATE_NONE)
             .is_some()
     );
     let old: SharedBlockEntity = Arc::new(RawBlockEntity::new(
-        &vanilla_block_entity_types::CHEST,
+        &vanilla_block_entity_types::MOB_SPAWNER,
         Weak::new(),
         pos,
-        chest,
+        spawner,
     ));
     assert!(chunk.add_and_register_block_entity(Arc::clone(&old)));
 
     assert_eq!(
         chunk.set_block_state(pos, comparator, UpdateFlags::UPDATE_NONE),
-        Some(chest)
+        Some(spawner)
     );
     let Some(replacement) = chunk.get_block_entity(pos) else {
         panic!("comparator behavior should create its concrete block entity");
@@ -349,17 +351,17 @@ fn breaking_an_unimplemented_entity_block_removes_its_raw_entity() {
     init_behaviors();
     let chunk = test_chunk();
     let pos = BlockPos::new(2, 2, 2);
-    let chest = vanilla_blocks::CHEST.default_state();
+    let spawner = vanilla_blocks::SPAWNER.default_state();
     assert!(
         chunk
-            .set_block_state(pos, chest, UpdateFlags::UPDATE_NONE)
+            .set_block_state(pos, spawner, UpdateFlags::UPDATE_NONE)
             .is_some()
     );
     let old: SharedBlockEntity = Arc::new(RawBlockEntity::new(
-        &vanilla_block_entity_types::CHEST,
+        &vanilla_block_entity_types::MOB_SPAWNER,
         Weak::new(),
         pos,
-        chest,
+        spawner,
     ));
     assert!(chunk.add_and_register_block_entity(Arc::clone(&old)));
 
@@ -369,7 +371,7 @@ fn breaking_an_unimplemented_entity_block_removes_its_raw_entity() {
             vanilla_blocks::STONE.default_state(),
             UpdateFlags::UPDATE_NONE,
         ),
-        Some(chest)
+        Some(spawner)
     );
     assert!(old.is_removed());
     assert!(chunk.get_block_entity(pos).is_none());
@@ -451,6 +453,7 @@ fn same_block_property_change_preserves_entity_data_and_updates_cached_state() {
 fn shared_entity_type_does_not_imply_cross_block_preservation() {
     init_test_registry();
     init_behaviors();
+    init_block_entities();
     let chunk = test_chunk();
     let pos = BlockPos::new(4, 2, 1);
     let chest = vanilla_blocks::CHEST.default_state();
@@ -487,17 +490,17 @@ fn insertion_rejects_an_entity_owned_by_another_chunk() {
     let chunk = test_chunk();
     let local_pos = BlockPos::new(0, 2, 0);
     let foreign_pos = BlockPos::new(16, 2, 0);
-    let chest = vanilla_blocks::CHEST.default_state();
+    let spawner = vanilla_blocks::SPAWNER.default_state();
     assert!(
         chunk
-            .set_block_state(local_pos, chest, UpdateFlags::UPDATE_NONE)
+            .set_block_state(local_pos, spawner, UpdateFlags::UPDATE_NONE)
             .is_some()
     );
     let foreign: SharedBlockEntity = Arc::new(RawBlockEntity::new(
-        &vanilla_block_entity_types::CHEST,
+        &vanilla_block_entity_types::MOB_SPAWNER,
         Weak::new(),
         foreign_pos,
-        chest,
+        spawner,
     ));
 
     assert!(!chunk.add_and_register_block_entity(foreign));
@@ -512,17 +515,17 @@ fn insertion_below_world_does_not_alias_the_bottom_section() {
     let chunk = test_chunk();
     let bottom_section_pos = BlockPos::new(0, 15, 0);
     let below_world_pos = BlockPos::new(0, -1, 0);
-    let chest = vanilla_blocks::CHEST.default_state();
+    let spawner = vanilla_blocks::SPAWNER.default_state();
     assert!(
         chunk
-            .set_block_state(bottom_section_pos, chest, UpdateFlags::UPDATE_NONE)
+            .set_block_state(bottom_section_pos, spawner, UpdateFlags::UPDATE_NONE)
             .is_some()
     );
     let below_world: SharedBlockEntity = Arc::new(RawBlockEntity::new(
-        &vanilla_block_entity_types::CHEST,
+        &vanilla_block_entity_types::MOB_SPAWNER,
         Weak::new(),
         below_world_pos,
-        chest,
+        spawner,
     ));
 
     assert!(!chunk.add_and_register_block_entity(below_world));
@@ -543,9 +546,9 @@ fn stale_no_entity_promotion_cannot_consume_a_replacement_marker() {
     );
     chunk.set_pending_block_entity(pos);
 
-    let chest = vanilla_blocks::CHEST.default_state();
+    let spawner = vanilla_blocks::SPAWNER.default_state();
     assert_eq!(
-        chunk.set_block_state(pos, chest, UpdateFlags::UPDATE_NONE),
+        chunk.set_block_state(pos, spawner, UpdateFlags::UPDATE_NONE),
         Some(moving_piston)
     );
     assert_eq!(chunk.pending_block_entity_positions(), [pos]);

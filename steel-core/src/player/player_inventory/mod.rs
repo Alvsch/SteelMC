@@ -2,6 +2,7 @@
 
 use text_components::TextComponent;
 
+use crate::inventory::lock::ContainerId;
 use crate::inventory::menu::Menu;
 
 mod container;
@@ -85,6 +86,8 @@ impl PlayerInventorySyncState {
 
 struct OpenMenuDispatch {
     container_id: u8,
+    opener_container_ids: Vec<ContainerId>,
+    counts_as_open: bool,
     overrides_player_slots: bool,
     actions: Vec<DeferredMenuAction>,
 }

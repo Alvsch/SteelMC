@@ -91,6 +91,16 @@ pub trait BlockBehavior: Send + Sync {
         std::any::type_name::<Self>()
     }
 
+    /// Returns the sound used when this block's chest entity opens.
+    fn chest_open_sound(&self) -> Option<SoundEventRef> {
+        None
+    }
+
+    /// Returns the sound used when this block's chest entity closes.
+    fn chest_close_sound(&self) -> Option<SoundEventRef> {
+        None
+    }
+
     /// Called when a player uses an empty bucket on this block.
     ///
     /// Should:

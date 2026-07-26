@@ -212,6 +212,15 @@ impl Player {
         self.is_within_block_interaction_range_with_buffer(pos, 1.0)
     }
 
+    /// Returns the player's current block interaction range attribute.
+    #[must_use]
+    pub(crate) fn block_interaction_range(&self) -> f64 {
+        self.attributes()
+            .lock()
+            .get_value(vanilla_attributes::BLOCK_INTERACTION_RANGE)
+            .unwrap_or(4.5)
+    }
+
     /// Returns true if player is within block interaction range plus a vanilla buffer.
     #[must_use]
     pub fn is_within_block_interaction_range_with_buffer(
@@ -234,11 +243,7 @@ impl Player {
         let dz = f64::max(f64::max(min_z - player_pos.z, player_pos.z - max_z), 0.0);
         let dist_sq = dx * dx + dy * dy + dz * dz;
 
-        let base_range = self
-            .attributes()
-            .lock()
-            .get_value(vanilla_attributes::BLOCK_INTERACTION_RANGE)
-            .unwrap_or(4.5);
+        let base_range = self.block_interaction_range();
         let max_range = base_range + buffer;
         dist_sq < max_range * max_range
     }

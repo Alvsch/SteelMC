@@ -112,6 +112,17 @@ impl Menu {
         self.overrides_player_slots
     }
 
+    /// Returns whether this menu owns the opener lifecycle for the container.
+    #[must_use]
+    pub(crate) fn opens_container(&self, container_id: ContainerId) -> bool {
+        self.kind.opener_container_ids().contains(&container_id)
+    }
+
+    /// Snapshots the identities whose opener lifecycle this menu owns.
+    pub(crate) fn opener_container_ids(&self) -> Vec<ContainerId> {
+        self.kind.opener_container_ids().to_vec()
+    }
+
     /// Returns true if this menu is still valid for the player.
     #[must_use]
     pub fn still_valid(&self, player: &Player) -> bool {

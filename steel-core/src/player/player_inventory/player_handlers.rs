@@ -60,6 +60,8 @@ impl Player {
         };
         open_menu.dispatch = Some(OpenMenuDispatch {
             container_id,
+            opener_container_ids: menu.opener_container_ids(),
+            counts_as_open: true,
             overrides_player_slots,
             actions: Vec::new(),
         });
@@ -524,6 +526,8 @@ impl Player {
             }
             open_menu.dispatch = Some(OpenMenuDispatch {
                 container_id: menu.container_id(),
+                opener_container_ids: menu.opener_container_ids(),
+                counts_as_open: true,
                 overrides_player_slots: menu.overrides_player_slots(),
                 actions: Vec::new(),
             });
@@ -701,6 +705,8 @@ impl Player {
             };
             open_menu.dispatch = Some(OpenMenuDispatch {
                 container_id: menu.container_id(),
+                opener_container_ids: menu.opener_container_ids(),
+                counts_as_open: false,
                 overrides_player_slots: menu.overrides_player_slots(),
                 actions: Vec::new(),
             });
@@ -735,6 +741,26 @@ impl Player {
     pub fn has_container_open(&self) -> bool {
         let open_menu = self.open_menu.lock();
         open_menu.menu.is_some() || open_menu.dispatch.is_some()
+    }
+
+    /// Returns whether the player's active external menu owns `container_id`.
+    ///
+    /// The dispatch snapshot keeps ownership observable while callbacks
+    /// temporarily move the menu out of player state. Closing dispatches
+    /// stop counting before the menu's removal hook decrements its openers.
+    #[must_use]
+    pub(crate) fn has_open_container(&self, container_id: ContainerId) -> bool {
+        let open_menu = self.open_menu.lock();
+        if open_menu
+            .menu
+            .as_ref()
+            .is_some_and(|menu| menu.opens_container(container_id))
+        {
+            return true;
+        }
+        open_menu.dispatch.as_ref().is_some_and(|dispatch| {
+            dispatch.counts_as_open && dispatch.opener_container_ids.contains(&container_id)
+        })
     }
 
     /// Runs the open menu's per-tick hook, if an external menu is open.

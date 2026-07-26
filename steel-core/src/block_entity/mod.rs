@@ -24,7 +24,9 @@
 //! ```
 
 pub(crate) mod block_state_nbt;
+mod container_openers_counter;
 pub mod entities;
+mod randomizable_container;
 mod registry;
 mod storage;
 
@@ -43,6 +45,7 @@ use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_utils::{BlockPos, BlockStateId, ErasedType, locks::SyncMutex};
 
+pub use container_openers_counter::{ContainerOpeners, ContainerOpenersCounter};
 pub use registry::{BLOCK_ENTITIES, BlockEntityFactory, BlockEntityRegistry, init_block_entities};
 pub(crate) use storage::{
     BlockEntityInsert, BlockEntityLookup, BlockEntityStorage, ClearedBlockEntities,
@@ -439,6 +442,11 @@ pub trait BlockEntity: ErasedType + Send + Sync {
 
     /// Returns the independently lockable container capability owned by this entity.
     fn container_ref(&self) -> Option<ContainerRef> {
+        None
+    }
+
+    /// Returns the shared viewer-count capability for animated containers.
+    fn container_openers(&self) -> Option<&dyn ContainerOpeners> {
         None
     }
 

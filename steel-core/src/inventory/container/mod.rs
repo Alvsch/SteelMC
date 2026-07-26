@@ -353,18 +353,28 @@ fn with_indices<const N: usize>(
 /// Signal strength from 0 to 15
 #[must_use]
 pub fn calculate_redstone_signal_from_container(container: &dyn Container) -> i32 {
-    let size = container.get_container_size();
+    calculate_redstone_signal_from_containers(&[container])
+}
+
+/// Calculates one comparator signal across an ordered compound container.
+#[must_use]
+pub fn calculate_redstone_signal_from_containers(containers: &[&dyn Container]) -> i32 {
+    let size = containers
+        .iter()
+        .map(|container| container.get_container_size())
+        .sum::<usize>();
     if size == 0 {
         return 0;
     }
 
     let mut total_percent: f32 = 0.0;
 
-    for i in 0..size {
-        let item = container.get_item(i);
-        if !item.is_empty() {
-            let max_stack = container.get_max_stack_size_for_item(item);
-            total_percent += item.count() as f32 / max_stack as f32;
+    for container in containers {
+        for item in container.items() {
+            if !item.is_empty() {
+                let max_stack = container.get_max_stack_size_for_item(item);
+                total_percent += item.count() as f32 / max_stack as f32;
+            }
         }
     }
 
@@ -507,6 +517,21 @@ mod tests {
             container.set_item(slot, ItemStack::with_count(&vanilla_items::STONE, 64));
         }
         assert_eq!(calculate_redstone_signal_from_container(&container), 15);
+    }
+
+    #[test]
+    fn compound_comparator_signal_uses_the_total_slot_count() {
+        init_test_registry();
+        let mut first = TestContainer::new(27);
+        let second = TestContainer::new(27);
+        for slot in 0..first.get_container_size() {
+            first.set_item(slot, ItemStack::with_count(&vanilla_items::STONE, 64));
+        }
+
+        assert_eq!(
+            calculate_redstone_signal_from_containers(&[&first, &second]),
+            8
+        );
     }
 
     #[test]

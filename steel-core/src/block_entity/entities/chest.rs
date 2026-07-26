@@ -1,0 +1,316 @@
+//! Standard chest block entity implementation.
+
+use std::sync::{Arc, Weak};
+
+use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
+use simdnbt::owned::NbtCompound;
+use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::blocks::properties::{BlockStateProperties, ChestType};
+use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_entity_types;
+use steel_utils::{
+    BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex,
+    translations::CONTAINER_CHEST,
+};
+use text_components::TextComponent;
+
+use crate::behavior::BLOCK_BEHAVIORS;
+use crate::behavior::blocks::ChestBlock;
+use crate::block_entity::randomizable_container::RandomizableContainer;
+use crate::block_entity::{
+    BlockEntity, BlockEntityBase, ContainerOpeners, ContainerOpenersCounter,
+};
+use crate::inventory::lock::{ContainerId, ContainerRef, SharedContainer};
+use crate::world::World;
+
+/// Number of slots in one standard chest half.
+pub const CHEST_SLOTS: usize = 27;
+
+/// Inventory and viewer state for one standard chest block.
+pub struct ChestBlockEntity {
+    base: Arc<BlockEntityBase>,
+    container: Arc<SyncMutex<RandomizableContainer>>,
+    container_ref: ContainerRef,
+    openers: ContainerOpenersCounter,
+}
+
+// SAFETY: This key is owned by Steel and uniquely identifies `ChestBlockEntity`.
+unsafe impl DowncastType for ChestBlockEntity {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:block_entity/chest");
+}
+
+impl ChestBlockEntity {
+    /// Creates one standard chest half.
+    #[must_use]
+    pub fn new(level: Weak<World>, pos: BlockPos, state: BlockStateId) -> Self {
+        let base = Arc::new(BlockEntityBase::new(
+            &vanilla_block_entity_types::CHEST,
+            level,
+            pos,
+            state,
+        ));
+        let container = Arc::new(SyncMutex::new(RandomizableContainer::new(CHEST_SLOTS)));
+        let shared_container: SharedContainer = container.clone();
+        Self {
+            container_ref: ContainerRef::owned_by_block_entity(shared_container, Arc::clone(&base)),
+            base,
+            container,
+            openers: ContainerOpenersCounter::default(),
+        }
+    }
+
+    /// Returns the menu title, preferring a persisted custom name.
+    #[must_use]
+    pub fn display_name(&self) -> TextComponent {
+        self.container
+            .lock()
+            .display_name(TextComponent::translated(CONTAINER_CHEST.msg()))
+    }
+
+    /// Returns whether this chest half has a custom menu title.
+    #[must_use]
+    pub fn has_custom_name(&self) -> bool {
+        self.container.lock().has_custom_name()
+    }
+
+    /// Returns whether opening can proceed without an unavailable foundation.
+    #[must_use]
+    pub fn menu_is_ready(&self) -> bool {
+        let container = self.container.lock();
+        // TODO: Evaluate `LockCode` against the player's held item once
+        // `ItemPredicate` runtime matching is implemented.
+        // TODO: Unpack the loot table on first access once deterministic
+        // `LootTable.fill` and zero-seed random sequences are implemented.
+        !container.has_lock() && !container.has_pending_loot()
+    }
+
+    /// Returns whether this chest half still needs deterministic loot generation.
+    #[must_use]
+    pub fn has_pending_loot(&self) -> bool {
+        self.container.lock().has_pending_loot()
+    }
+
+    fn configured_sound(state: BlockStateId, opening: bool) -> Option<SoundEventRef> {
+        let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
+        if opening {
+            behavior.chest_open_sound()
+        } else {
+            behavior.chest_close_sound()
+        }
+    }
+
+    fn play_sound(&self, world: &World, state: BlockStateId, opening: bool) {
+        let chest_type = state.get_value(&BlockStateProperties::CHEST_TYPE);
+        if chest_type == ChestType::Left {
+            return;
+        }
+        let Some(sound) = Self::configured_sound(state, opening) else {
+            return;
+        };
+        let pos = self.get_block_pos();
+        let mut x = f64::from(pos.x()) + 0.5;
+        let y = f64::from(pos.y()) + 0.5;
+        let mut z = f64::from(pos.z()) + 0.5;
+        if chest_type == ChestType::Right {
+            let (offset_x, offset_z) = ChestBlock::connected_direction(state).offset_xz();
+            x += f64::from(offset_x) * 0.5;
+            z += f64::from(offset_z) * 0.5;
+        }
+        world.play_sound_at(
+            sound,
+            SoundSource::Blocks,
+            glam::DVec3::new(x, y, z),
+            0.5,
+            rand::random::<f32>() * 0.1 + 0.9,
+            None,
+        );
+    }
+}
+
+impl BlockEntity for ChestBlockEntity {
+    fn base(&self) -> &BlockEntityBase {
+        &self.base
+    }
+
+    fn pre_remove_side_effects(&self, pos: BlockPos, _state: BlockStateId) {
+        let items = {
+            let mut container = self.container.lock();
+            if container.has_pending_loot() {
+                // TODO: Vanilla unpacks pending container loot before dropping
+                // contents. This awaits deterministic `LootTable.fill`.
+                Vec::new()
+            } else {
+                container.take_items()
+            }
+        };
+        let Some(world) = self.get_level() else {
+            return;
+        };
+        for item in items {
+            world.drop_item_stack(pos, item);
+        }
+    }
+
+    fn load_additional(&self, nbt: &BorrowedNbtCompound<'_>) {
+        let nbt_view: NbtCompoundView<'_, '_> = nbt.into();
+        self.container.lock().load(&nbt_view);
+    }
+
+    fn save_additional(&self, nbt: &mut NbtCompound) {
+        self.container.lock().save(nbt);
+    }
+
+    fn trigger_event(&self, param_a: i32, _param_b: i32) -> bool {
+        param_a == 1
+    }
+
+    fn container_ref(&self) -> Option<ContainerRef> {
+        Some(self.container_ref.clone())
+    }
+
+    fn container_openers(&self) -> Option<&dyn ContainerOpeners> {
+        Some(self)
+    }
+}
+
+impl ContainerOpeners for ChestBlockEntity {
+    fn openers_counter(&self) -> &ContainerOpenersCounter {
+        &self.openers
+    }
+
+    fn opener_container_id(&self) -> ContainerId {
+        self.container_ref.container_id()
+    }
+
+    fn on_open(&self, world: &Arc<World>, _pos: BlockPos, block_state: BlockStateId) {
+        self.play_sound(world, block_state, true);
+    }
+
+    fn on_close(&self, world: &Arc<World>, _pos: BlockPos, block_state: BlockStateId) {
+        self.play_sound(world, block_state, false);
+    }
+
+    fn opener_count_changed(
+        &self,
+        world: &Arc<World>,
+        pos: BlockPos,
+        block_state: BlockStateId,
+        _previous: i32,
+        current: i32,
+    ) {
+        world.block_event(pos, block_state.get_block(), 1, current);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::DVec3;
+    use steel_registry::blocks::properties::{BlockStateProperties, ChestType, Direction};
+    use steel_registry::{
+        item_stack::ItemStack, test_support::init_test_registry, vanilla_blocks, vanilla_items,
+    };
+    use steel_utils::{ChunkPos, Downcast as _, types::UpdateFlags};
+    use uuid::Uuid;
+
+    use crate::behavior::init_behaviors;
+    use crate::block_entity::init_block_entities;
+    use crate::entity::Entity as _;
+    use crate::inventory::container::Container as _;
+    use crate::inventory::menu::kinds::chest_with_openers;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+
+    use super::*;
+
+    fn test_chest() -> ChestBlockEntity {
+        init_test_registry();
+        ChestBlockEntity::new(
+            Weak::new(),
+            BlockPos::new(1, 2, 3),
+            vanilla_blocks::CHEST.default_state(),
+        )
+    }
+
+    #[test]
+    fn pre_remove_preserves_slots_for_existing_menu_references() {
+        let chest = test_chest();
+        chest
+            .container
+            .lock()
+            .set_item(0, ItemStack::new(&vanilla_items::STONE));
+
+        chest.pre_remove_side_effects(
+            BlockPos::new(1, 2, 3),
+            vanilla_blocks::CHEST.default_state(),
+        );
+
+        let container = chest.container.lock();
+        assert_eq!(container.get_container_size(), CHEST_SLOTS);
+        assert!(container.items().iter().all(ItemStack::is_empty));
+    }
+
+    #[test]
+    fn double_chest_menu_owns_both_viewer_counters() {
+        init_test_registry();
+        init_behaviors();
+        init_block_entities();
+        let world = fresh_test_world("double_chest_openers");
+        let right_pos = BlockPos::new(3, 64, 3);
+        let left_pos = right_pos.west();
+        insert_ready_full_chunk(&world, ChunkPos::from_block_pos(right_pos));
+        let base_state = vanilla_blocks::CHEST
+            .default_state()
+            .set_value(&BlockStateProperties::HORIZONTAL_FACING, Direction::North);
+        let right_state = base_state.set_value(&BlockStateProperties::CHEST_TYPE, ChestType::Right);
+        let left_state = base_state.set_value(&BlockStateProperties::CHEST_TYPE, ChestType::Left);
+        assert!(world.set_block(right_pos, right_state, UpdateFlags::UPDATE_NONE));
+        assert!(world.set_block(left_pos, left_state, UpdateFlags::UPDATE_NONE));
+        let Some(right_entity) = world.get_block_entity(right_pos) else {
+            panic!("right chest half should create its block entity");
+        };
+        let Some(left_entity) = world.get_block_entity(left_pos) else {
+            panic!("left chest half should create its block entity");
+        };
+        let Some(right) = right_entity.downcast_ref::<ChestBlockEntity>() else {
+            panic!("right chest half should use the concrete chest entity");
+        };
+        let Some(left) = left_entity.downcast_ref::<ChestBlockEntity>() else {
+            panic!("left chest half should use the concrete chest entity");
+        };
+        let Some(right_container) = right_entity.container_ref() else {
+            panic!("right chest half should expose its inventory");
+        };
+        let Some(left_container) = left_entity.container_ref() else {
+            panic!("left chest half should expose its inventory");
+        };
+        let player =
+            TestPlayerBuilder::new(Arc::clone(&world), Uuid::from_u128(1), "ChestViewer", 1)
+                .build();
+        player.base().set_position_local(DVec3::new(3.5, 64.0, 3.5));
+        let inventory = Arc::clone(&player.inventory);
+        let right_opener = Arc::clone(&right_entity);
+        let left_opener = Arc::clone(&left_entity);
+        player.open_menu("Large Chest", move |container_id, _world| {
+            chest_with_openers(
+                inventory,
+                container_id,
+                vec![
+                    (right_container, CHEST_SLOTS),
+                    (left_container, CHEST_SLOTS),
+                ],
+                6,
+                vec![right_opener, left_opener],
+            )
+        });
+
+        assert_eq!(right.openers.opener_count(), 1);
+        assert_eq!(left.openers.opener_count(), 1);
+        assert!(world.has_scheduled_block_tick(right_pos, &vanilla_blocks::CHEST));
+        assert!(world.has_scheduled_block_tick(left_pos, &vanilla_blocks::CHEST));
+
+        player.close_container();
+
+        assert_eq!(right.openers.opener_count(), 0);
+        assert_eq!(left.openers.opener_count(), 0);
+    }
+}
