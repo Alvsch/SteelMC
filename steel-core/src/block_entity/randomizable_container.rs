@@ -1,21 +1,17 @@
 //! Shared storage and persistence for loot-backed block containers.
 
-use std::mem;
-
 use simdnbt::borrow::NbtCompound as NbtCompoundView;
-use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
-use simdnbt::{FromNbtTag as _, ToNbtTag as _};
-use steel_registry::{item_predicate::LockCode, item_stack::ItemStack};
+use simdnbt::owned::NbtCompound;
+use steel_registry::item_stack::ItemStack;
 use steel_utils::{DowncastType, DowncastTypeKey, Identifier};
 use text_components::TextComponent;
 
+use crate::block_entity::base_container::BaseContainer;
 use crate::inventory::container::Container;
 
 /// Inventory data shared by Vanilla randomizable block containers.
 pub(crate) struct RandomizableContainer {
-    items: Vec<ItemStack>,
-    custom_name: Option<TextComponent>,
-    lock: Option<LockCode>,
+    base: BaseContainer,
     loot_table: Option<Identifier>,
     loot_table_seed: i64,
 }
@@ -31,48 +27,28 @@ impl RandomizableContainer {
     #[must_use]
     pub(crate) fn new(size: usize) -> Self {
         Self {
-            items: vec![ItemStack::empty(); size],
-            custom_name: None,
-            lock: None,
+            base: BaseContainer::new(size),
             loot_table: None,
             loot_table_seed: 0,
         }
     }
 
     pub(crate) fn load(&mut self, nbt: &NbtCompoundView<'_, '_>) {
-        self.items.fill(ItemStack::empty());
-        self.custom_name = nbt
-            .get("CustomName")
-            .and_then(|tag| TextComponent::from_nbt(&tag.to_owned()));
-        self.lock = nbt.get("lock").and_then(LockCode::from_nbt_tag);
+        self.base.load_metadata(nbt);
         self.loot_table = nbt
             .string("LootTable")
             .and_then(|value| value.to_str().parse().ok());
         self.loot_table_seed = nbt.long("LootTableSeed").unwrap_or(0);
 
-        if self.loot_table.is_none()
-            && let Some(items) = nbt.list("Items").and_then(|items| items.compounds())
-        {
-            for compound in items {
-                let Some(slot) = compound.byte("Slot").map(|slot| slot as u8 as usize) else {
-                    continue;
-                };
-                if slot < self.items.len()
-                    && let Some(item) = ItemStack::from_borrowed_compound(&compound)
-                {
-                    self.items[slot] = item;
-                }
-            }
+        if self.loot_table.is_some() {
+            self.base.clear_items();
+        } else {
+            self.base.load_items(nbt);
         }
     }
 
     pub(crate) fn save(&self, nbt: &mut NbtCompound) {
-        if let Some(custom_name) = &self.custom_name {
-            nbt.insert("CustomName", custom_name.to_nbt_tag());
-        }
-        if let Some(lock) = &self.lock {
-            nbt.insert("lock", lock.to_nbt_tag_ref());
-        }
+        self.base.save_metadata(nbt);
         if let Some(loot_table) = &self.loot_table {
             nbt.insert("LootTable", loot_table.to_string());
             if self.loot_table_seed != 0 {
@@ -80,42 +56,27 @@ impl RandomizableContainer {
             }
             return;
         }
-
-        let mut items = Vec::new();
-        for (slot, item) in self.items.iter().enumerate() {
-            if item.is_empty() {
-                continue;
-            }
-            let NbtTag::Compound(mut item_nbt) = item.to_nbt_tag_ref() else {
-                continue;
-            };
-            item_nbt.insert("Slot", slot as i8);
-            items.push(item_nbt);
-        }
-        nbt.insert("Items", NbtList::Compound(items));
+        self.base.save_items(nbt);
     }
 
     /// Removes every realized item while retaining the fixed slot count.
     pub(crate) fn take_items(&mut self) -> Vec<ItemStack> {
-        let size = self.items.len();
-        mem::replace(&mut self.items, vec![ItemStack::empty(); size])
+        self.base.take_items()
     }
 
     #[must_use]
     pub(crate) fn display_name(&self, default: TextComponent) -> TextComponent {
-        self.custom_name.clone().unwrap_or(default)
+        self.base.display_name(default)
     }
 
     #[must_use]
     pub(crate) const fn has_custom_name(&self) -> bool {
-        self.custom_name.is_some()
+        self.base.has_custom_name()
     }
 
     #[must_use]
     pub(crate) fn has_lock(&self) -> bool {
-        self.lock
-            .as_ref()
-            .is_some_and(|lock| lock != &LockCode::NO_LOCK)
+        self.base.has_lock()
     }
 
     #[must_use]
@@ -129,22 +90,15 @@ impl Container for RandomizableContainer {
     // preserves the loot reference and fails closed at current block callers
     // until deterministic `LootTable.fill` is available.
     fn items(&self) -> &[ItemStack] {
-        &self.items
+        self.base.items()
     }
 
     fn items_mut(&mut self) -> &mut [ItemStack] {
-        &mut self.items
+        self.base.items_mut()
     }
 
-    fn set_item(&mut self, slot: usize, mut stack: ItemStack) {
-        if slot >= self.items.len() {
-            return;
-        }
-        let max_stack_size = self.get_max_stack_size_for_item(&stack);
-        if !stack.is_empty() && stack.count() > max_stack_size {
-            stack.set_count(max_stack_size);
-        }
-        self.items[slot] = stack;
+    fn set_item(&mut self, slot: usize, stack: ItemStack) {
+        self.base.set_item(slot, stack);
     }
 
     fn set_changed(&mut self) {}

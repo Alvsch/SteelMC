@@ -7,6 +7,7 @@ mod comparator;
 mod daylight_detector;
 mod end_gateway;
 mod end_portal;
+mod furnace;
 mod piston_moving;
 mod potent_sulfur;
 mod raw;
@@ -21,6 +22,10 @@ pub use comparator::ComparatorBlockEntity;
 pub use daylight_detector::DaylightDetectorBlockEntity;
 pub use end_gateway::EndGatewayBlockEntity;
 pub use end_portal::EndPortalBlockEntity;
+pub(crate) use furnace::FurnaceContainer;
+pub use furnace::{
+    FURNACE_FUEL_SLOT, FURNACE_INPUT_SLOT, FURNACE_RESULT_SLOT, FURNACE_SLOTS, FurnaceBlockEntity,
+};
 pub use piston_moving::PistonMovingBlockEntity;
 pub use potent_sulfur::PotentSulfurBlockEntity;
 pub use raw::RawBlockEntity;

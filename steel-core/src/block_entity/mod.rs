@@ -23,9 +23,11 @@
 //! let entity = BLOCK_ENTITIES.create(block_entity_type, pos, state);
 //! ```
 
+mod base_container;
 pub(crate) mod block_state_nbt;
 mod container_openers_counter;
 pub mod entities;
+mod fuel_values;
 mod randomizable_container;
 mod registry;
 mod storage;
@@ -46,6 +48,7 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_utils::{BlockPos, BlockStateId, ErasedType, locks::SyncMutex};
 
 pub use container_openers_counter::{ContainerOpeners, ContainerOpenersCounter};
+pub use fuel_values::{FuelValues, vanilla_fuel_values};
 pub use registry::{BLOCK_ENTITIES, BlockEntityFactory, BlockEntityRegistry, init_block_entities};
 pub(crate) use storage::{
     BlockEntityInsert, BlockEntityLookup, BlockEntityStorage, ClearedBlockEntities,

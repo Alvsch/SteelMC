@@ -78,8 +78,8 @@ impl ChestBlockEntity {
     #[must_use]
     pub fn menu_is_ready(&self) -> bool {
         let container = self.container.lock();
-        // TODO: Evaluate `LockCode` against the player's held item once
-        // `ItemPredicate` runtime matching is implemented.
+        // TODO: Use a shared `ItemPredicate` matcher, spectator bypass, and
+        // Vanilla's locked-container feedback once open validation supports them.
         // TODO: Unpack the loot table on first access once deterministic
         // `LootTable.fill` and zero-seed random sequences are implemented.
         !container.has_lock() && !container.has_pending_loot()
