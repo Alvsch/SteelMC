@@ -47,9 +47,9 @@ use super::{
     DomainPlayerData, DomainPlayerState, DomainScoreboards, FxHashMap, KeyStore,
     KnownPlayerCacheState, KnownPlayers, Notify, PacketProcessor, PersistentPlayerData,
     PlayerDataStorage, PlayerDisconnectQueue, PlayerJoinQueue, PlayerMap, PreparedSpawn,
-    RegistryCache, Server, ServerJobQueue, SyncMutex, SyncRwLock, TabListTickStats,
-    TickRateManager, UnpreparedDomainPlayerData, UnpreparedDomainPlayerState, WorldMap,
-    can_entity_return_from_end_to_overworld, cap_positive_thread_count,
+    RandomSequences, RegistryCache, Server, ServerJobQueue, SyncMutex, SyncRwLock,
+    TabListTickStats, TickRateManager, UnpreparedDomainPlayerData, UnpreparedDomainPlayerState,
+    WorldMap, can_entity_return_from_end_to_overworld, cap_positive_thread_count,
     create_registered_dispatcher, is_allowed_to_enter_portal_target, is_end_return_transition,
     offline_uuid, packet_workers_for_available, validate_player_permission_group_update,
 };
@@ -205,6 +205,13 @@ async fn test_server_with_worlds(
         .map_err(|error| format!("test permission groups should resolve: {error}"))?;
     let config = test_runtime_config();
     let registry_cache = RegistryCache::new(config.compression);
+    let Some(default_world) = worlds.server_default_world() else {
+        return Err("test server requires a default world".to_owned());
+    };
+    let random_sequences = Arc::new(RandomSequences::ephemeral(default_world.seed()));
+    for world in worlds.values() {
+        world.bind_random_sequences(Arc::clone(&random_sequences));
+    }
 
     Ok(Arc::new(Server {
         config,
@@ -213,6 +220,7 @@ async fn test_server_with_worlds(
         key_store: KeyStore::create(),
         registry_cache,
         worlds,
+        random_sequences,
         online_players: PlayerMap::new(),
         player_admissions: SyncMutex::new(FxHashMap::default()),
         tick_rate_manager: SyncRwLock::new(TickRateManager::new()),

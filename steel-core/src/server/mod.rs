@@ -60,6 +60,7 @@ use crate::portal::{
     PortalKind, TeleportPostTransition, TeleportTransition, WorldChangeRequest, end_gateway,
     end_portal, nether_portal,
 };
+use crate::random_sequences::RandomSequences;
 use crate::scoreboard::DomainScoreboards;
 use crate::server::jobs::{FnServerJob, ServerJobContext, ServerJobQueue};
 use crate::server::packet_processor::PacketProcessor;
@@ -430,6 +431,8 @@ pub struct Server {
     pub registry_cache: RegistryCache,
     /// A list of all the worlds on the server.
     pub worlds: WorldMap,
+    /// Vanilla's one persistent named-random-sequence map for the whole server.
+    random_sequences: Arc<RandomSequences>,
     /// Players currently connected to the server, independent of world membership.
     online_players: PlayerMap,
     /// UUIDs reserved by a join or disconnect/save lifecycle transition.
@@ -697,11 +700,25 @@ impl Server {
             )
             .await
             .map_err(|e| format!("failed to create world {}: {e}", world_entry.key))?;
-            world
-                .initialize_spawn_if_needed()
-                .await
-                .map_err(|e| format!("failed to initialize spawn for {}: {e}", world_entry.key))?;
             worlds.insert(world_entry.key.clone(), world);
+        }
+
+        let default_world_seed = worlds
+            .server_default_world()
+            .ok_or_else(|| "resolved worlds did not contain the server default world".to_owned())?
+            .seed();
+        let random_sequences = Arc::new(
+            RandomSequences::load(default_world_seed, &resolved_worlds.save_path)
+                .await
+                .map_err(|error| format!("failed to load random sequences: {error}"))?,
+        );
+        for world in worlds.values() {
+            world.bind_random_sequences(Arc::clone(&random_sequences));
+        }
+        for world in worlds.values() {
+            world.initialize_spawn_if_needed().await.map_err(|error| {
+                format!("failed to initialize spawn for {}: {error}", world.key)
+            })?;
         }
 
         let scoreboards = DomainScoreboards::load(&worlds)
@@ -724,6 +741,7 @@ impl Server {
             cancel_token,
             key_store: KeyStore::create(),
             worlds,
+            random_sequences,
             online_players: PlayerMap::new(),
             player_admissions: SyncMutex::new(FxHashMap::default()),
             registry_cache,
@@ -760,6 +778,14 @@ impl Server {
             scoreboards: self.scoreboards.save(&self.worlds).await,
             storage: self.save_command_storage().await,
         }
+    }
+
+    /// Saves the server-global named random sequences when they advanced.
+    ///
+    /// This must run after dirty chunks in a coordinated save cycle so sequence
+    /// state cannot get ahead of deferred loot-table NBT.
+    pub async fn save_random_sequences(&self) -> io::Result<bool> {
+        self.random_sequences.save().await
     }
 
     /// Queues a command for execution at the start of the next game tick.

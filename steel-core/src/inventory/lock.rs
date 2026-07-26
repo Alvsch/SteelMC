@@ -16,7 +16,7 @@ use steel_utils::{Downcast as _, DowncastType, locks::SyncMutex};
 
 use crate::{
     block_entity::{BlockEntityBase, SharedBlockEntity},
-    inventory::container::Container,
+    inventory::container::{Container, ContainerAccessContext},
     player::{Player, player_inventory::PlayerInventory},
 };
 use steel_registry::item_stack::ItemStack;
@@ -114,6 +114,32 @@ impl ContainerRef {
             .is_none_or(|owner| owner.is_valid_container_for(player))
     }
 
+    /// Realizes deferred block-container contents before inventory access.
+    ///
+    /// Player context is supplied by menu opening; other callers use `None`,
+    /// matching Vanilla's direct inventory-access overloads.
+    pub(crate) fn prepare_access(&self, player: Option<&Player>) -> bool {
+        let Some(owner) = &self.owner else {
+            return true;
+        };
+        let Some(world) = owner.level() else {
+            return false;
+        };
+        let context = ContainerAccessContext {
+            world: &world,
+            pos: owner.pos(),
+            player,
+        };
+        let changed = {
+            let mut container = self.lock();
+            container.prepare_access(&context)
+        };
+        if changed {
+            owner.set_changed();
+        }
+        true
+    }
+
     /// Locks this container and returns a guard.
     fn lock(&self) -> LockedContainer {
         LockedContainer(SyncMutex::lock_arc(&self.source))
@@ -169,6 +195,10 @@ impl ContainerLockGuard {
 
         // Deduplicate (in case same container passed multiple times)
         sources.dedup_by_key(|(id, _)| *id);
+
+        for (_, container) in &sources {
+            container.prepare_access(None);
+        }
 
         // Lock all in sorted order
         let mut guards = Vec::with_capacity(sources.len());

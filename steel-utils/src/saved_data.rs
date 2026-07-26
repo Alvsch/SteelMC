@@ -1,8 +1,8 @@
-//! Per-world saved data storage.
+//! Typed saved-data storage rooted under an owning save directory.
 //!
-//! Vanilla stores world-level saved data under each dimension's `data/`
-//! directory. Steel uses the same per-world saved-data boundary for both its
-//! human-readable TOML data and versioned binary data.
+//! Steel uses this for both per-world data and server-global data. Entries are
+//! stored beneath the supplied owner's `data/` directory as human-readable
+//! TOML or versioned binary data.
 
 use std::{
     fmt::Display,
@@ -27,9 +27,11 @@ pub mod names {
     pub const SCOREBOARD: SavedDataName = SavedDataName::trusted("scoreboard");
     /// Domain command storage, persisted through the domain default world.
     pub const COMMAND_STORAGE: SavedDataName = SavedDataName::trusted("command_storage");
+    /// Vanilla server-global named random sequences.
+    pub const RANDOM_SEQUENCES: SavedDataName = SavedDataName::trusted("random_sequences");
 }
 
-/// Name of a per-world saved data entry.
+/// Name of a saved-data entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SavedDataName(&'static str);
 
@@ -54,7 +56,7 @@ impl SavedDataName {
     }
 }
 
-/// Name and format header of a wincode-encoded per-world saved data entry.
+/// Name and format header of a wincode-encoded saved-data entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WincodeSavedDataName {
     name: &'static str,
@@ -98,16 +100,16 @@ fn is_valid_saved_data_name(name: &str) -> bool {
         && crate::Identifier::validate_path(name)
 }
 
-/// Typed saved-data storage for a loaded world.
+/// Typed saved-data storage for a world or server save root.
 #[derive(Debug, Clone)]
 pub struct SavedDataManager {
     data_dir: Option<PathBuf>,
 }
 
 impl SavedDataManager {
-    /// Creates saved-data storage rooted at `world_dir/data`.
+    /// Creates saved-data storage rooted at `save_root/data`.
     ///
-    /// `None` means the world is ephemeral, matching Steel's RAM-only storage.
+    /// `None` means the owner is ephemeral, matching Steel's RAM-only storage.
     #[must_use]
     pub fn new(world_dir: Option<&Path>) -> Self {
         Self {

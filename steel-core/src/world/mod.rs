@@ -23,7 +23,10 @@ use crate::world::game_event::{
     GameEventContext, GameEventDispatcher, GameEventListenerCount, GameEventListenerStorage,
     SharedGameEventListener,
 };
-use crate::{chunk::chunk_map::ChunkMapGameTickTimings, world::weather::Weather};
+use crate::{
+    chunk::chunk_map::ChunkMapGameTickTimings, random_sequences::RandomSequences,
+    world::weather::Weather,
+};
 use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
 
 use glam::DVec3;
@@ -243,6 +246,10 @@ pub struct World {
     pub level_data: SyncRwLock<LevelDataManager>,
     /// Per-world saved data storage.
     pub(crate) saved_data: SavedDataManager,
+    /// Vanilla's live per-level random source used when no explicit or named seed applies.
+    loot_random: SyncMutex<RandomSource>,
+    /// Server-global named random sequences, rebound when this world joins a server.
+    random_sequences: SyncRwLock<Arc<RandomSequences>>,
     /// Runtime world border state.
     world_border: SyncMutex<WorldBorder>,
     /// Server view distance (maximum chunk radius).
@@ -409,6 +416,10 @@ impl World {
                 dimension_type,
                 level_data: SyncRwLock::new(level_data),
                 saved_data,
+                loot_random: SyncMutex::new(RandomSource::Legacy(LegacyRandom::from_seed(
+                    rand::random::<u64>(),
+                ))),
+                random_sequences: SyncRwLock::new(Arc::new(RandomSequences::ephemeral(seed))),
                 world_border: SyncMutex::new(world_border),
                 view_distance,
                 simulation_distance,
@@ -436,6 +447,31 @@ impl World {
                 pending_world_changes: SyncMutex::new(Vec::new()),
             }
         }))
+    }
+
+    /// Binds this world to the single named-sequence map owned by its server.
+    pub(crate) fn bind_random_sequences(&self, random_sequences: Arc<RandomSequences>) {
+        *self.random_sequences.write() = random_sequences;
+    }
+
+    /// Selects the RNG Vanilla uses for a loot context.
+    pub(crate) fn with_loot_random<T>(
+        &self,
+        seed: i64,
+        random_sequence: Option<&Identifier>,
+        operation: impl FnOnce(&mut RandomSource) -> T,
+    ) -> T {
+        if seed != 0 {
+            let mut random = RandomSource::Legacy(LegacyRandom::from_seed(seed as u64));
+            return operation(&mut random);
+        }
+
+        if let Some(random_sequence) = random_sequence {
+            let sequences = Arc::clone(&self.random_sequences.read());
+            return sequences.with_sequence(random_sequence, operation);
+        }
+
+        operation(&mut self.loot_random.lock())
     }
 
     /// Cleans up the world by saving all chunks.

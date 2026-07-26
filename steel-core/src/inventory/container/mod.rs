@@ -15,10 +15,39 @@ use std::mem;
 use std::ptr;
 
 use steel_registry::item_stack::ItemStack;
-use steel_utils::ErasedType;
+use steel_utils::{BlockPos, ErasedType};
+
+use crate::{player::Player, world::World};
 
 /// Default distance buffer for container interaction range checks.
 pub const DEFAULT_DISTANCE_BUFFER: f32 = 4.0;
+
+/// World and optional player data supplied before a block container's inventory is accessed.
+pub struct ContainerAccessContext<'a> {
+    pub(crate) world: &'a World,
+    pub(crate) pos: BlockPos,
+    pub(crate) player: Option<&'a Player>,
+}
+
+impl<'a> ContainerAccessContext<'a> {
+    /// Returns the world containing the accessed block container.
+    #[must_use]
+    pub const fn world(&self) -> &'a World {
+        self.world
+    }
+
+    /// Returns the block position of the accessed container.
+    #[must_use]
+    pub const fn pos(&self) -> BlockPos {
+        self.pos
+    }
+
+    /// Returns the player opening the menu, when this access came from a menu open.
+    #[must_use]
+    pub const fn player(&self) -> Option<&'a Player> {
+        self.player
+    }
+}
 
 /// Something that contains items.
 /// I also use container interchangeably with inventory as they mean approximately the same thing.
@@ -38,6 +67,14 @@ pub const DEFAULT_DISTANCE_BUFFER: f32 = 4.0;
 /// [`crate::inventory::lock::ContainerRef::owned_by_block_entity`], which runs
 /// only after every container lock has been released.
 pub trait Container: ErasedType + Send + Sync {
+    /// Realizes deferred inventory state before an access.
+    ///
+    /// Returns whether persistent container state changed. Implementations must
+    /// not call back into their owning block entity while the container is locked.
+    fn prepare_access(&mut self, _context: &ContainerAccessContext<'_>) -> bool {
+        false
+    }
+
     /// Returns the items in this container
     fn items(&self) -> &[ItemStack];
     /// Returns mutable references to the items in this container.

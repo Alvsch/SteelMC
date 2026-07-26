@@ -1,6 +1,8 @@
+use steel_utils::random::Random;
+
 use super::{
     ConditionalLootFunction, Identifier, ItemStack, LootCondition, LootContext, LootType,
-    NumberProvider, REGISTRY, RegistryExt, RngExt, TaggedRegistryExt,
+    NumberProvider, REGISTRY, RegistryExt, TaggedRegistryExt,
 };
 
 /// A loot table entry that can generate items.
@@ -199,7 +201,33 @@ impl LootTable {
     /// 4. Apply entry-level functions to each item
     /// 5. Apply pool-level functions to all items from that pool
     /// 6. Apply table-level functions to all items from the table
-    pub fn get_random_items<R: rand::Rng>(&self, ctx: &mut LootContext<'_, R>) -> Vec<ItemStack> {
+    pub fn get_random_items<R: Random>(&self, ctx: &mut LootContext<'_, R>) -> Vec<ItemStack> {
+        let raw_items = self.get_random_items_raw(ctx);
+        Self::split_stacks(raw_items)
+    }
+
+    /// Fills the empty slots in a container using Vanilla's split-and-shuffle algorithm.
+    pub fn fill<R: Random>(&self, items: &mut [ItemStack], ctx: &mut LootContext<'_, R>) {
+        let mut generated = self.get_random_items(ctx);
+        let mut available_slots = items
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, stack)| stack.is_empty().then_some(slot))
+            .collect::<Vec<_>>();
+
+        Self::shuffle(&mut available_slots, ctx.rng);
+        Self::shuffle_and_split_items(&mut generated, available_slots.len(), ctx.rng);
+
+        for stack in generated {
+            let Some(slot) = available_slots.pop() else {
+                log::warn!("Tried to over-fill a container");
+                return;
+            };
+            items[slot] = stack;
+        }
+    }
+
+    fn get_random_items_raw<R: Random>(&self, ctx: &mut LootContext<'_, R>) -> Vec<ItemStack> {
         let mut result = Vec::new();
         for pool in self.pools {
             pool.add_random_items(ctx, &mut result);
@@ -220,11 +248,100 @@ impl LootTable {
 
         result
     }
+
+    fn split_stacks(raw_items: Vec<ItemStack>) -> Vec<ItemStack> {
+        let mut result = Vec::new();
+
+        for item in raw_items {
+            if item.is_empty() {
+                continue;
+            }
+
+            let max_stack_size = item.max_stack_size();
+            if item.count < max_stack_size {
+                result.push(item);
+                continue;
+            }
+
+            let mut remaining = item.count;
+            while remaining > 0 {
+                let count = remaining.min(max_stack_size);
+                result.push(item.copy_with_count(count));
+                remaining -= count;
+            }
+        }
+
+        result
+    }
+
+    fn shuffle_and_split_items<R: Random>(
+        result: &mut Vec<ItemStack>,
+        available_slots: usize,
+        random: &mut R,
+    ) {
+        let mut splittable_items = Vec::new();
+        let mut single_items = Vec::with_capacity(result.len());
+
+        for item in std::mem::take(result) {
+            if item.is_empty() {
+                continue;
+            }
+            if item.count > 1 {
+                splittable_items.push(item);
+            } else {
+                single_items.push(item);
+            }
+        }
+        *result = single_items;
+
+        while result.len() + splittable_items.len() < available_slots
+            && !splittable_items.is_empty()
+        {
+            let Some(index) = Self::random_index(splittable_items.len(), random) else {
+                break;
+            };
+            let mut item = splittable_items.remove(index);
+            let split_count = random.next_i32_between(1, item.count / 2);
+            let split = item.split(split_count);
+
+            if item.count > 1 && random.next_bool() {
+                splittable_items.push(item);
+            } else {
+                result.push(item);
+            }
+
+            if split.count > 1 && random.next_bool() {
+                splittable_items.push(split);
+            } else {
+                result.push(split);
+            }
+        }
+
+        result.append(&mut splittable_items);
+        Self::shuffle(result, random);
+    }
+
+    fn shuffle<T, R: Random>(values: &mut [T], random: &mut R) {
+        for size in (2..=values.len()).rev() {
+            let Some(index) = Self::random_index(size, random) else {
+                return;
+            };
+            values.swap(size - 1, index);
+        }
+    }
+
+    fn random_index<R: Random>(len: usize, random: &mut R) -> Option<usize> {
+        let bound = i32::try_from(len).ok()?;
+        if bound == 0 {
+            return None;
+        }
+        usize::try_from(random.next_i32_bounded(bound)).ok()
+    }
 }
 
 impl LootPool {
     /// Add random items from this pool to the result.
-    fn add_random_items<R: rand::Rng>(
+    fn add_random_items<R: Random>(
         &self,
         ctx: &mut LootContext<'_, R>,
         result: &mut Vec<ItemStack>,
@@ -261,7 +378,7 @@ impl LootPool {
     }
 
     /// Select and add a single random item from this pool.
-    fn add_random_item<R: rand::Rng>(
+    fn add_random_item<R: Random>(
         &self,
         ctx: &mut LootContext<'_, R>,
         result: &mut Vec<ItemStack>,
@@ -293,7 +410,7 @@ impl LootPool {
         let selected = if valid_entries.len() == 1 {
             valid_entries[0].0
         } else {
-            let mut index = ctx.rng.random_range(0..total_weight);
+            let mut index = ctx.rng.next_i32_bounded(total_weight);
             let mut selected_entry = valid_entries[0].0;
             for (entry, weight) in &valid_entries {
                 index -= weight;
@@ -312,11 +429,7 @@ impl LootPool {
 
 impl LootEntry {
     /// Create items from this entry and add them to the result.
-    fn create_items<R: rand::Rng>(
-        &self,
-        ctx: &mut LootContext<'_, R>,
-        result: &mut Vec<ItemStack>,
-    ) {
+    fn create_items<R: Random>(&self, ctx: &mut LootContext<'_, R>, result: &mut Vec<ItemStack>) {
         match self {
             LootEntry::Item {
                 name, functions, ..
@@ -341,7 +454,7 @@ impl LootEntry {
             } => {
                 // Recursively get items from referenced loot table
                 if let Some(table) = REGISTRY.loot_tables.by_key(name) {
-                    let mut items = table.get_random_items(ctx);
+                    let mut items = table.get_random_items_raw(ctx);
                     // Apply functions to all items from the referenced table
                     for item in &mut items {
                         for cond_func in *functions {
@@ -381,8 +494,7 @@ impl LootEntry {
                 if let Some(items) = REGISTRY.items.get_tag(name) {
                     if *expand {
                         // Pick one random item from the tag (weighted equally)
-                        if !items.is_empty() {
-                            let index = ctx.rng.random_range(0..items.len());
+                        if let Some(index) = LootTable::random_index(items.len(), ctx.rng) {
                             let mut item = ItemStack::new(items[index]);
                             for cond_func in *functions {
                                 if cond_func.conditions.iter().all(|c| c.test(ctx)) {

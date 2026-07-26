@@ -66,12 +66,15 @@ impl BlockBehavior for BarrelBlock {
         let Some(barrel) = block_entity.downcast_ref::<BarrelBlockEntity>() else {
             return InteractionResult::Success;
         };
-        if !barrel.menu_is_ready() {
+        if !barrel.menu_is_ready(player) {
             return InteractionResult::Success;
         }
         let Some(container_ref) = block_entity.container_ref() else {
             return InteractionResult::Success;
         };
+        if !container_ref.prepare_access(Some(player)) {
+            return InteractionResult::Success;
+        }
         let title = barrel.display_name();
 
         player.open_menu(title, move |id, _world| {
@@ -137,12 +140,7 @@ impl BlockBehavior for BarrelBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return 0;
         };
-        let Some(barrel) = block_entity.downcast_ref::<BarrelBlockEntity>() else {
-            return 0;
-        };
-        if barrel.has_pending_loot() {
-            // TODO: Vanilla comparator access unpacks the loot table. Return an
-            // empty signal until deterministic `LootTable.fill` is available.
+        if block_entity.downcast_ref::<BarrelBlockEntity>().is_none() {
             return 0;
         }
         let Some(container_ref) = ContainerRef::from_block_entity(block_entity) else {

@@ -436,6 +436,11 @@ async fn shutdown_worlds(server: &Arc<Server>) {
         world.cleanup(&mut total_saved).await;
     }
     log::info!("Saved {total_saved} chunks");
+    match server.save_random_sequences().await {
+        Ok(true) => log::info!("Saved random sequences"),
+        Ok(false) => {}
+        Err(error) => log::error!("Failed to save random sequences: {error}"),
+    }
 
     // Save all player data before shutdown
     log::info!("Saving player data...");

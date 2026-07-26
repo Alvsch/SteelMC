@@ -40,6 +40,36 @@ impl Xoroshiro {
         Self::new(lo, hi)
     }
 
+    /// Creates Vanilla's named `RandomSequence` source.
+    ///
+    /// Vanilla upgrades the world seed without mixing, XORs both halves with
+    /// the MD5 hash of the sequence identifier, then mixes the resulting pair.
+    #[must_use]
+    pub fn from_seed_with_key(seed: u64, key: &str) -> Self {
+        let digest = md5::compute(key.as_bytes());
+        let key_lo = u64::from_be_bytes([
+            digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+        ]);
+        let key_hi = u64::from_be_bytes([
+            digest[8], digest[9], digest[10], digest[11], digest[12], digest[13], digest[14],
+            digest[15],
+        ]);
+        let (lo, hi) = Self::upgrade_seed_to_128_bit(seed);
+        Self::new(mix_stafford_13(lo ^ key_lo), mix_stafford_13(hi ^ key_hi))
+    }
+
+    /// Restores the two persisted words from Vanilla's xoroshiro codec.
+    #[must_use]
+    pub const fn from_state(seed_lo: u64, seed_hi: u64) -> Self {
+        Self::new(seed_lo, seed_hi)
+    }
+
+    /// Returns the two words persisted by Vanilla's xoroshiro codec.
+    #[must_use]
+    pub const fn state(&self) -> (u64, u64) {
+        (self.seed_lo, self.seed_hi)
+    }
+
     const fn new(lo: u64, hi: u64) -> Self {
         let (lo, hi) = if (lo | hi) == 0 {
             (GOLDEN_RATIO_64, SILVER_RATIO_64)
@@ -250,6 +280,23 @@ mod tests {
         let mut rng = Xoroshiro::from_seed(0);
         for &expected in &EXPECTED {
             assert_eq!(rng.next_i32(), expected);
+        }
+    }
+
+    #[test]
+    fn named_random_sequence_matches_java() {
+        const EXPECTED: [i64; 6] = [
+            -7_926_599_914_381_742_280,
+            2_815_976_813_362_629_879,
+            -7_881_546_883_657_656_982,
+            7_566_939_538_098_743_793,
+            1_577_751_100_484_795_614,
+            -3_148_579_496_239_899_411,
+        ];
+        let mut random = Xoroshiro::from_seed_with_key(12_345, "minecraft:chests/simple_dungeon");
+
+        for expected in EXPECTED {
+            assert_eq!(random.next_i64(), expected);
         }
     }
 

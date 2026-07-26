@@ -2,12 +2,15 @@
 
 use simdnbt::borrow::NbtCompound as NbtCompoundView;
 use simdnbt::owned::NbtCompound;
-use steel_registry::item_stack::ItemStack;
+use steel_registry::{
+    REGISTRY, RegistryExt, item_stack::ItemStack, loot_table::LootContext, vanilla_attributes,
+};
 use steel_utils::{DowncastType, DowncastTypeKey, Identifier};
 use text_components::TextComponent;
 
 use crate::block_entity::base_container::BaseContainer;
-use crate::inventory::container::Container;
+use crate::entity::{LivingEntity as _, entity_loot_ref};
+use crate::inventory::container::{Container, ContainerAccessContext};
 
 /// Inventory data shared by Vanilla randomizable block containers.
 pub(crate) struct RandomizableContainer {
@@ -83,12 +86,52 @@ impl RandomizableContainer {
     pub(crate) const fn has_pending_loot(&self) -> bool {
         self.loot_table.is_some()
     }
+
+    /// Realizes the pending loot table with Vanilla's chest loot parameters.
+    pub(crate) fn unpack_loot_table(&mut self, context: &ContainerAccessContext<'_>) -> bool {
+        let Some(loot_table_key) = self.loot_table.take() else {
+            return false;
+        };
+        let Some(loot_table) = REGISTRY.loot_tables.by_key(&loot_table_key) else {
+            // Vanilla resolves a missing table to LootTable.EMPTY while still
+            // clearing the deferred table reference.
+            return true;
+        };
+
+        let luck = context.player.map_or(0.0, |player| {
+            player
+                .attributes()
+                .lock()
+                .get_value(vanilla_attributes::LUCK)
+                .unwrap_or(0.0) as f32
+        });
+        // TODO: Trigger `GENERATE_LOOT` once Steel has advancement criteria.
+        context.world.with_loot_random(
+            self.loot_table_seed,
+            loot_table.random_sequence.as_ref(),
+            |random| {
+                let mut loot_context = LootContext::new(random).with_origin(
+                    f64::from(context.pos.x()) + 0.5,
+                    f64::from(context.pos.y()) + 0.5,
+                    f64::from(context.pos.z()) + 0.5,
+                );
+                if let Some(player) = context.player {
+                    loot_context = loot_context
+                        .with_luck(luck)
+                        .with_this_entity(entity_loot_ref(player));
+                }
+                loot_table.fill(self.base.items_mut(), &mut loot_context);
+            },
+        );
+        true
+    }
 }
 
 impl Container for RandomizableContainer {
-    // TODO: Vanilla unpacks pending loot before every inventory access. Steel
-    // preserves the loot reference and fails closed at current block callers
-    // until deterministic `LootTable.fill` is available.
+    fn prepare_access(&mut self, context: &ContainerAccessContext<'_>) -> bool {
+        self.unpack_loot_table(context)
+    }
+
     fn items(&self) -> &[ItemStack] {
         self.base.items()
     }
@@ -109,7 +152,18 @@ mod tests {
     use std::io::Cursor;
 
     use simdnbt::borrow::read_compound as read_borrowed_compound;
-    use steel_registry::{test_support::init_test_registry, vanilla_items};
+    use steel_registry::{
+        test_support::init_test_registry, vanilla_blocks, vanilla_entities, vanilla_items,
+    };
+    use steel_utils::{BlockPos, ChunkPos, Downcast as _, WorldAabb, types::UpdateFlags};
+
+    use crate::{
+        behavior::init_behaviors,
+        block_entity::init_block_entities,
+        entity::entities::ItemEntity,
+        inventory::lock::ContainerLockGuard,
+        test_support::{fresh_test_world, insert_ready_full_chunk},
+    };
 
     use super::*;
 
@@ -159,6 +213,94 @@ mod tests {
         );
         assert_eq!(saved.long("LootTableSeed"), Some(42));
         assert!(saved.list("Items").is_none());
+    }
+
+    #[test]
+    fn direct_inventory_access_unpacks_pending_loot() {
+        init_test_registry();
+        init_behaviors();
+        init_block_entities();
+        let world = fresh_test_world("pending_loot_inventory_access");
+        let pos = BlockPos::new(3, 64, 3);
+        insert_ready_full_chunk(&world, ChunkPos::from_block_pos(pos));
+        assert!(world.set_block(
+            pos,
+            vanilla_blocks::CHEST.default_state(),
+            UpdateFlags::UPDATE_NONE,
+        ));
+        let Some(block_entity) = world.get_block_entity(pos) else {
+            panic!("chest placement should create its block entity");
+        };
+
+        let mut loot_nbt = NbtCompound::new();
+        loot_nbt.insert("LootTable", "minecraft:chests/simple_dungeon");
+        loot_nbt.insert("LootTableSeed", 42_i64);
+        let mut bytes = Vec::new();
+        loot_nbt.write(&mut bytes);
+        let borrowed = read_borrowed_compound(&mut Cursor::new(bytes.as_slice()))
+            .expect("test loot NBT should reborrow");
+        block_entity.load_additional(&borrowed);
+
+        let Some(container_ref) = block_entity.container_ref() else {
+            panic!("chest should expose its inventory");
+        };
+        let container_id = container_ref.container_id();
+        let guard = ContainerLockGuard::lock_all(&[&container_ref]);
+        let Some(container) = guard.get_typed::<RandomizableContainer>(container_id) else {
+            panic!("chest should use randomizable container storage");
+        };
+
+        assert!(!container.has_pending_loot());
+        assert!(container.items().iter().any(|stack| !stack.is_empty()));
+    }
+
+    #[test]
+    fn destroying_unopened_chest_and_barrel_drops_generated_loot() {
+        init_test_registry();
+        init_behaviors();
+        init_block_entities();
+        let world = fresh_test_world("unopened_container_drops");
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+
+        for (pos, block, loot_seed) in [
+            (BlockPos::new(3, 64, 3), &vanilla_blocks::CHEST, 42_i64),
+            (BlockPos::new(8, 64, 3), &vanilla_blocks::BARREL, 0_i64),
+        ] {
+            assert!(world.set_block(pos, block.default_state(), UpdateFlags::UPDATE_NONE));
+            let Some(block_entity) = world.get_block_entity(pos) else {
+                panic!("container placement should create its block entity");
+            };
+
+            let mut loot_nbt = NbtCompound::new();
+            loot_nbt.insert("LootTable", "minecraft:chests/simple_dungeon");
+            loot_nbt.insert("LootTableSeed", loot_seed);
+            let mut bytes = Vec::new();
+            loot_nbt.write(&mut bytes);
+            let borrowed = read_borrowed_compound(&mut Cursor::new(bytes.as_slice()))
+                .expect("test loot NBT should reborrow");
+            block_entity.load_additional(&borrowed);
+
+            assert!(world.set_block(
+                pos,
+                vanilla_blocks::AIR.default_state(),
+                UpdateFlags::UPDATE_ALL,
+            ));
+            assert!(world.get_block_entity(pos).is_none());
+
+            let min_x = f64::from(pos.x()) - 2.0;
+            let min_y = f64::from(pos.y()) - 2.0;
+            let min_z = f64::from(pos.z()) - 2.0;
+            let dropped = world.get_entities_in_aabb_matching(
+                &WorldAabb::new(min_x, min_y, min_z, min_x + 5.0, min_y + 5.0, min_z + 5.0),
+                |entity| entity.entity_type() == &vanilla_entities::ITEM,
+            );
+            let generated_count = dropped
+                .iter()
+                .filter_map(|entity| entity.as_ref().downcast_ref::<ItemEntity>())
+                .map(|entity| entity.get_item().count())
+                .sum::<i32>();
+            assert!(generated_count > 0, "{block:?} should drop generated loot");
+        }
     }
 
     #[test]

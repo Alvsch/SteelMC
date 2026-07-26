@@ -39,19 +39,11 @@ impl ChestCombination {
             .collect()
     }
 
-    fn menu_is_ready(&self) -> bool {
+    fn menu_is_ready(&self, player: &Player) -> bool {
         self.entities.iter().all(|entity| {
             entity
                 .downcast_ref::<ChestBlockEntity>()
-                .is_some_and(ChestBlockEntity::menu_is_ready)
-        })
-    }
-
-    fn has_pending_loot(&self) -> bool {
-        self.entities.iter().any(|entity| {
-            entity
-                .downcast_ref::<ChestBlockEntity>()
-                .is_some_and(ChestBlockEntity::has_pending_loot)
+                .is_some_and(|chest| chest.menu_is_ready(player))
         })
     }
 
@@ -302,13 +294,19 @@ impl BlockBehavior for ChestBlock {
         let Some(combination) = self.combination(state, world, pos, false) else {
             return InteractionResult::Success;
         };
-        if !combination.menu_is_ready() {
+        if !combination.menu_is_ready(player) {
+            return InteractionResult::Success;
+        }
+        let Some(containers) = combination.container_refs() else {
+            return InteractionResult::Success;
+        };
+        if !containers
+            .iter()
+            .all(|container| container.prepare_access(Some(player)))
+        {
             return InteractionResult::Success;
         }
         let Some(title) = combination.title() else {
-            return InteractionResult::Success;
-        };
-        let Some(containers) = combination.container_refs() else {
             return InteractionResult::Success;
         };
         let rows = containers.len() * 3;
@@ -393,11 +391,6 @@ impl BlockBehavior for ChestBlock {
         let Some(combination) = self.combination(state, world, pos, false) else {
             return 0;
         };
-        if combination.has_pending_loot() {
-            // TODO: Vanilla comparator access unpacks both loot tables. Return
-            // an empty signal until deterministic `LootTable.fill` is available.
-            return 0;
-        }
         let Some(containers) = combination.container_refs() else {
             return 0;
         };
