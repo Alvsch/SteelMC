@@ -357,10 +357,11 @@ impl World {
                     let mut ctx = LootContext::new(random)
                         .with_luck(context.luck())
                         .with_block_state(state)
+                        .with_level(context.world().as_ref())
                         .with_origin(
-                            f64::from(context.pos().x()),
-                            f64::from(context.pos().y()),
-                            f64::from(context.pos().z()),
+                            f64::from(context.pos().x()) + 0.5,
+                            f64::from(context.pos().y()) + 0.5,
+                            f64::from(context.pos().z()) + 0.5,
                         );
                     if let Some(tool) = context.tool() {
                         ctx = ctx.with_tool(tool);
