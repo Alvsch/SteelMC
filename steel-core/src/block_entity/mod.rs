@@ -39,8 +39,8 @@ use std::{
 use simdnbt::borrow::BaseNbtCompound as BorrowedNbtCompound;
 use simdnbt::owned::NbtCompound;
 use smallvec::SmallVec;
-use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::{block_entity_type::BlockEntityTypeRef, item_stack::ItemStack};
 use steel_utils::{BlockPos, BlockStateId, ErasedType, locks::SyncMutex};
 
 pub use registry::{BLOCK_ENTITIES, BlockEntityFactory, BlockEntityRegistry, init_block_entities};
@@ -449,6 +449,15 @@ pub trait BlockEntity: ErasedType + Send + Sync {
     fn game_event_listener(&self) -> Option<SharedGameEventListener> {
         None
     }
+
+    /// Vanilla `BlockEntity.applyComponentsFromItemStack`.
+    ///
+    /// Called in `BlockItem.place` before `placedState.getBlock().setPlacedBy`
+    #[expect(
+        unused_variables,
+        reason = "default trait impl; parameters used by overrides"
+    )]
+    fn apply_components_from_item(&self, item: &ItemStack) {}
 }
 
 /// Final block-entity common-state operations.
