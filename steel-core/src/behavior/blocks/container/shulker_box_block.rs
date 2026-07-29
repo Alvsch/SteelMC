@@ -138,10 +138,7 @@ impl BlockBehavior for ShulkerBoxBlock {
         state: BlockStateId,
         context: &BlockLootContext<'_>,
     ) -> Option<Vec<ItemStack>> {
-        let world = context.world();
-        let pos = context.pos();
-
-        let block_entity = world.get_block_entity(pos)?;
+        let block_entity = context.block_entity()?;
         let shulker_box_block_entity = block_entity.downcast_ref::<ShulkerBoxBlockEntity>()?;
 
         let item = shulker_box_as_item(state, shulker_box_block_entity);
