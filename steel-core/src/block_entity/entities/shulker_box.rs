@@ -95,8 +95,13 @@ fn do_neighbor_updates(world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
     world.update_neighbors_at(pos, state.get_block());
 }
 
-// TODO: move into shulker entity implementation
-fn get_progress_delta_aabb(
+/// Calculates the bounding box of a shulker during its opening animation.
+///
+/// The bounds are expanded in the opening direction based on the animation progress.
+///
+/// TODO: move into shulker entity implementation
+#[must_use]
+pub fn get_progress_delta_aabb(
     size: f32,
     direction: Direction,
     progress_from: f32,
@@ -109,19 +114,11 @@ fn get_progress_delta_aabb(
     let max_movement = f64::from(progress_from.max(progress_to));
     let min_movement = f64::from(progress_from.min(progress_to));
 
-    let (dir_x, dir_y, dir_z) = direction.offset();
+    let dir = DVec3::from(direction.offset_vec());
 
     bounds
-        .expand_towards(DVec3::new(
-            f64::from(dir_x) * max_movement * size,
-            f64::from(dir_y) * max_movement * size,
-            f64::from(dir_z) * max_movement * size,
-        ))
-        .contract(DVec3::new(
-            -(f64::from(dir_x)) * (1.0 + min_movement) * size,
-            -(f64::from(dir_y)) * (1.0 + min_movement) * size,
-            -(f64::from(dir_z)) * (1.0 + min_movement) * size,
-        ))
+        .expand_towards(dir * max_movement * size)
+        .contract(-dir * (1.0 + min_movement) * size)
         .translate(position)
 }
 
@@ -197,7 +194,7 @@ impl ShulkerBoxBlockEntity {
                 direction,
                 animation.old_progress(),
                 animation.progress(),
-                DVec3::from(pos.get_bottom_center()) + DVec3::new(0.5, 0.0, 0.5),
+                DVec3::from(pos.get_bottom_center()),
             )
         };
 

@@ -1,5 +1,6 @@
 use std::sync::{Arc, Weak};
 
+use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_registry::{
     REGISTRY,
@@ -19,13 +20,14 @@ use crate::{
     },
     block_entity::{
         BLOCK_ENTITIES, BlockEntity,
-        entities::{AnimationStatus, ShulkerBoxBlockEntity},
+        entities::{AnimationStatus, ShulkerBoxBlockEntity, get_progress_delta_aabb},
     },
     inventory::{
         container::calculate_redstone_signal_from_container,
         lock::{ContainerLockGuard, ContainerRef},
         menu::kinds::shulker_box,
     },
+    physics::{CollisionWorld, WorldCollisionProvider},
     player::Player,
     world::{LevelReader, World},
 };
@@ -46,7 +48,7 @@ impl ShulkerBoxBlock {
 
 fn can_open(
     state: BlockStateId,
-    world: &World,
+    world: &Arc<World>,
     pos: BlockPos,
     block_entity: &ShulkerBoxBlockEntity,
 ) -> bool {
@@ -54,8 +56,19 @@ fn can_open(
         return true;
     }
 
-    // TODO: bounding box collision
-    true
+    let direction = state.get_value(&BlockStateProperties::FACING);
+
+    let lid_open_bounding_box = get_progress_delta_aabb(
+        1.0,
+        direction,
+        0.0,
+        0.5,
+        DVec3::from(pos.get_bottom_center()),
+    )
+    .deflate(1.0E-6);
+
+    let collision = WorldCollisionProvider::new(world);
+    !collision.has_block_collision(&lid_open_bounding_box)
 }
 
 impl BlockBehavior for ShulkerBoxBlock {
