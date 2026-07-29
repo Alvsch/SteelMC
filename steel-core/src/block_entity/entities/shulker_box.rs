@@ -1,4 +1,7 @@
-use std::sync::{Arc, Weak};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicI32, Ordering},
+};
 
 use simdnbt::{
     ToNbtTag,
@@ -7,23 +10,25 @@ use simdnbt::{
 };
 use steel_registry::{
     ItemStackTemplate,
+    blocks::block_state_ext::BlockStateExt,
     data_components::{ItemContainerContents, vanilla_components::CONTAINER},
     item_stack::ItemStack,
     vanilla_block_entity_types,
 };
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex};
+use steel_utils::{
+    BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex, types::UpdateFlags,
+};
 
 use crate::{
-    block_entity::{BlockEntity, BlockEntityBase},
-    inventory::{
+    block_entity::{BlockEntity, BlockEntityBase}, entity::Entity, inventory::{
         container::Container,
         lock::{ContainerRef, SharedContainer},
-    },
-    world::World,
+    }, world::World,
 };
 
 /// Number of slots in a shulker box (3 rows of 9).
 pub const SHULKER_BOX_SLOTS: usize = 27;
+const ANIMATION_STEPS: u8 = 10;
 
 /// The current animation state of a shulker box.
 #[derive(Debug, Clone, Copy)]
@@ -37,12 +42,20 @@ pub enum AnimationStatus {
     /// Closing.
     Closing,
 }
+
+pub struct ShulkerBoxAnimation {
+    animation_status: AnimationStatus,
+    progress: u8,
+    old_progress: u8,
+}
+
 /// Behavior for shulker box blocks.
 pub struct ShulkerBoxBlockEntity {
     base: Arc<BlockEntityBase>,
     container: Arc<SyncMutex<ShulkerBoxContainer>>,
     container_ref: ContainerRef,
-    animation_status: AnimationStatus,
+    animation: SyncMutex<ShulkerBoxAnimation>,
+    open_count: AtomicI32,
 }
 
 struct ShulkerBoxContainer {
@@ -58,6 +71,11 @@ unsafe impl DowncastType for ShulkerBoxBlockEntity {
 // lockable inventory data used by a barrel block entity.
 unsafe impl DowncastType for ShulkerBoxContainer {
     const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:container/shulker_box");
+}
+
+fn do_neighbor_updates(world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
+    world.update_neighbour_shapes(state, pos, UpdateFlags::UPDATE_ALL, 512);
+    world.update_neighbors_at(pos, state.get_block());
 }
 
 impl ShulkerBoxBlockEntity {
@@ -78,7 +96,47 @@ impl ShulkerBoxBlockEntity {
             container_ref: ContainerRef::owned_by_block_entity(shared_container, Arc::clone(&base)),
             base,
             container,
-            animation_status: AnimationStatus::Closed,
+            animation: SyncMutex::new(ShulkerBoxAnimation {
+                animation_status: AnimationStatus::Closed,
+                progress: 0,
+                old_progress: 0,
+            }),
+            open_count: AtomicI32::new(0),
+        }
+    }
+
+    fn update_animation(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
+        let mut animation = self.animation.lock();
+        animation.old_progress = animation.progress;
+        match animation.animation_status {
+            AnimationStatus::Closed => animation.progress = 0,
+            AnimationStatus::Opening => {
+                animation.progress += 1;
+                if animation.old_progress == 0 {
+                    do_neighbor_updates(world, pos, state);
+                }
+
+                if animation.progress >= ANIMATION_STEPS {
+                    animation.animation_status = AnimationStatus::Opened;
+                    animation.progress = ANIMATION_STEPS;
+                    do_neighbor_updates(world, pos, state);
+                }
+
+                // this.moveCollidedEntities(level, pos, blockState);
+            }
+            AnimationStatus::Opened => animation.progress = ANIMATION_STEPS,
+            AnimationStatus::Closing => {
+                animation.progress = animation.progress.saturating_sub(1);
+                if animation.old_progress == ANIMATION_STEPS {
+                    do_neighbor_updates(world, pos, state);
+                }
+
+                if animation.progress == 0 {
+                    animation.animation_status = AnimationStatus::Closed;
+                    animation.progress = 0;
+                    do_neighbor_updates(world, pos, state);
+                }
+            }
         }
     }
 
@@ -118,16 +176,46 @@ impl ShulkerBoxBlockEntity {
             .expect("shulker box slot count is always within the 256 container-contents limit")
     }
 
+    /// Interpolated progress for smooth rendering between ticks.
+    #[must_use]
+    pub fn progress(&self, partial_tick: f32) -> f32 {
+        let animation = self.animation.lock();
+        let old = f32::from(animation.old_progress) / f32::from(ANIMATION_STEPS);
+        let new = f32::from(animation.progress) / f32::from(ANIMATION_STEPS);
+        old + partial_tick * (new - old) // lerp
+    }
+
     /// Get the current animation state
     #[must_use]
     pub fn animation_status(&self) -> AnimationStatus {
-        self.animation_status
+        self.animation.lock().animation_status
     }
 }
 
 impl BlockEntity for ShulkerBoxBlockEntity {
     fn base(&self) -> &BlockEntityBase {
         &self.base
+    }
+
+    fn tick(&self, world: &Arc<World>) {
+        self.update_animation(world, self.base.pos, self.base.block_state());
+    }
+
+    fn trigger_event(&self, kind: i32, data: i32) -> bool {
+        if kind == 1 {
+            self.open_count.store(data, Ordering::Relaxed);
+            if data == 0 {
+                self.animation.lock().animation_status = AnimationStatus::Closing;
+            }
+
+            if data == 1 {
+                self.animation.lock().animation_status = AnimationStatus::Opening;
+            }
+
+            true
+        } else {
+            false
+        }
     }
 
     fn load_additional(&self, nbt: &BaseNbtCompound<'_>) {
