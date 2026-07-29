@@ -145,7 +145,6 @@ impl BlockBehavior for ShulkerBoxBlock {
         let shulker_box_block_entity = block_entity.downcast_ref::<ShulkerBoxBlockEntity>()?;
 
         let item = shulker_box_as_item(state, shulker_box_block_entity);
-        dbg!(&item);
         Some(vec![item])
     }
 
