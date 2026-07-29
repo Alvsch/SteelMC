@@ -9,6 +9,7 @@ mod end_portal;
 mod piston_moving;
 mod potent_sulfur;
 mod raw;
+mod shulker_box;
 mod sign;
 
 pub use barrel::{BARREL_SLOTS, BarrelBlockEntity};
@@ -22,4 +23,5 @@ pub use end_portal::EndPortalBlockEntity;
 pub use piston_moving::PistonMovingBlockEntity;
 pub use potent_sulfur::PotentSulfurBlockEntity;
 pub use raw::RawBlockEntity;
+pub use shulker_box::{AnimationStatus, ShulkerBoxBlockEntity};
 pub use sign::{SIGN_LINES, SignBlockEntity, SignText};
