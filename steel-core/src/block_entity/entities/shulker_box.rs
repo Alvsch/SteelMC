@@ -3,6 +3,7 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
+use glam::DVec3;
 use simdnbt::{
     ToNbtTag,
     borrow::{BaseNbtCompound, NbtCompound as NbtCompoundView},
@@ -10,20 +11,26 @@ use simdnbt::{
 };
 use steel_registry::{
     ItemStackTemplate,
-    blocks::block_state_ext::BlockStateExt,
+    blocks::{
+        behavior::PushReaction, block_state_ext::BlockStateExt, properties::BlockStateProperties,
+    },
     data_components::{ItemContainerContents, vanilla_components::CONTAINER},
     item_stack::ItemStack,
     vanilla_block_entity_types,
 };
 use steel_utils::{
-    BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex, types::UpdateFlags,
+    BlockPos, BlockStateId, Direction, DowncastType, DowncastTypeKey, WorldAabb, locks::SyncMutex,
+    types::UpdateFlags,
 };
 
 use crate::{
-    block_entity::{BlockEntity, BlockEntityBase}, entity::Entity, inventory::{
+    block_entity::{BlockEntity, BlockEntityBase},
+    inventory::{
         container::Container,
         lock::{ContainerRef, SharedContainer},
-    }, world::World,
+    },
+    physics::MoverType,
+    world::World,
 };
 
 /// Number of slots in a shulker box (3 rows of 9).
@@ -47,6 +54,16 @@ pub struct ShulkerBoxAnimation {
     animation_status: AnimationStatus,
     progress: u8,
     old_progress: u8,
+}
+
+impl ShulkerBoxAnimation {
+    fn progress(&self) -> f32 {
+        f32::from(self.progress) / f32::from(ANIMATION_STEPS)
+    }
+
+    fn old_progress(&self) -> f32 {
+        f32::from(self.old_progress) / f32::from(ANIMATION_STEPS)
+    }
 }
 
 /// Behavior for shulker box blocks.
@@ -76,6 +93,36 @@ unsafe impl DowncastType for ShulkerBoxContainer {
 fn do_neighbor_updates(world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
     world.update_neighbour_shapes(state, pos, UpdateFlags::UPDATE_ALL, 512);
     world.update_neighbors_at(pos, state.get_block());
+}
+
+// TODO: move into shulker entity implementation
+fn get_progress_delta_aabb(
+    size: f32,
+    direction: Direction,
+    progress_from: f32,
+    progress_to: f32,
+    position: DVec3,
+) -> WorldAabb {
+    let size = f64::from(size);
+    let bounds = WorldAabb::new(-size * 0.5, 0.0, -size * 0.5, size * 0.5, size, size * 0.5);
+
+    let max_movement = f64::from(progress_from.max(progress_to));
+    let min_movement = f64::from(progress_from.min(progress_to));
+
+    let (dir_x, dir_y, dir_z) = direction.offset();
+
+    bounds
+        .expand_towards(DVec3::new(
+            f64::from(dir_x) * max_movement * size,
+            f64::from(dir_y) * max_movement * size,
+            f64::from(dir_z) * max_movement * size,
+        ))
+        .contract(DVec3::new(
+            -(f64::from(dir_x)) * (1.0 + min_movement) * size,
+            -(f64::from(dir_y)) * (1.0 + min_movement) * size,
+            -(f64::from(dir_z)) * (1.0 + min_movement) * size,
+        ))
+        .translate(position)
 }
 
 impl ShulkerBoxBlockEntity {
@@ -122,7 +169,7 @@ impl ShulkerBoxBlockEntity {
                     do_neighbor_updates(world, pos, state);
                 }
 
-                // this.moveCollidedEntities(level, pos, blockState);
+                self.move_collided_entities(world, pos, state);
             }
             AnimationStatus::Opened => animation.progress = ANIMATION_STEPS,
             AnimationStatus::Closing => {
@@ -137,6 +184,37 @@ impl ShulkerBoxBlockEntity {
                     do_neighbor_updates(world, pos, state);
                 }
             }
+        }
+    }
+
+    fn move_collided_entities(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
+        let direction = state.get_value(&BlockStateProperties::FACING);
+
+        let aabb = {
+            let animation = self.animation.lock();
+            get_progress_delta_aabb(
+                1.0,
+                direction,
+                animation.old_progress(),
+                animation.progress(),
+                DVec3::from(pos.get_bottom_center()) + DVec3::new(0.5, 0.0, 0.5),
+            )
+        };
+
+        let entities = world.get_entities_in_aabb(&aabb);
+        for entity in entities {
+            if entity.piston_push_reaction() == PushReaction::Ignore {
+                continue;
+            }
+            let (offset_x, offset_y, offset_z) = direction.offset();
+            entity.move_entity(
+                MoverType::ShulkerBox,
+                DVec3::new(
+                    (aabb.width() + 0.01) * f64::from(offset_x),
+                    (aabb.height() + 0.01) * f64::from(offset_y),
+                    (aabb.depth() + 0.01) * f64::from(offset_z),
+                ),
+            );
         }
     }
 
@@ -180,8 +258,8 @@ impl ShulkerBoxBlockEntity {
     #[must_use]
     pub fn progress(&self, partial_tick: f32) -> f32 {
         let animation = self.animation.lock();
-        let old = f32::from(animation.old_progress) / f32::from(ANIMATION_STEPS);
-        let new = f32::from(animation.progress) / f32::from(ANIMATION_STEPS);
+        let new = animation.progress();
+        let old = animation.old_progress();
         old + partial_tick * (new - old) // lerp
     }
 
