@@ -44,12 +44,10 @@ use std::{
     },
 };
 
-use simdnbt::borrow::BaseNbtCompound as BorrowedNbtCompound;
-use simdnbt::owned::NbtCompound;
-use smallvec::SmallVec;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_registry::{block_entity_type::BlockEntityTypeRef, data_components::DataComponentMap};
-use steel_registry::{block_entity_type::BlockEntityTypeRef, item_stack::ItemStack};
+use steel_registry::{
+    block_entity_type::BlockEntityTypeRef, data_components::DataComponentMap, item_stack::ItemStack,
+};
 use steel_utils::{
     BlockPos, BlockStateId, ErasedType,
     locks::{SyncMutex, SyncRwLock},
