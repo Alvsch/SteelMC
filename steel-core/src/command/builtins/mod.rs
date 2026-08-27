@@ -1,11 +1,13 @@
 //! Steel-owned built-in command declarations.
 
 mod clear;
+mod damage;
 mod difficulty;
 mod domain;
 mod enchant;
 mod execute;
 mod experience;
+mod fill;
 mod fly;
 pub(crate) mod gamemode;
 mod gamerule;
@@ -18,6 +20,8 @@ mod operator;
 mod perms;
 mod return_command;
 mod seed;
+mod setblock;
+mod setidletimeout;
 mod setworldspawn;
 mod stop;
 mod summon;
@@ -58,11 +62,13 @@ pub(crate) fn create_registered_dispatcher(
     builder.declare_permission(perms::METADATA_PERMISSION)?;
     builder.register(clear::registration())?;
     builder.register(operator::deop_registration())?;
+    builder.register(damage::registration())?;
     builder.register(difficulty::registration())?;
     builder.register(domain::registration())?;
     builder.register(enchant::registration())?;
     builder.register(execute::registration())?;
     builder.register(experience::registration())?;
+    builder.register(fill::registration())?;
     builder.register(fly::registration())?;
     builder.register(gamemode::registration()?)?;
     builder.register(gamerule::registration())?;
@@ -74,6 +80,8 @@ pub(crate) fn create_registered_dispatcher(
     builder.register(perms::registration())?;
     builder.register(return_command::registration())?;
     builder.register(seed::registration())?;
+    builder.register(setblock::registration())?;
+    builder.register(setidletimeout::registration())?;
     builder.register(setworldspawn::registration())?;
     builder.register(stop::registration())?;
     builder.register(summon::registration())?;
@@ -97,7 +105,7 @@ mod tests {
         literal as extension_literal,
     };
     use crate::permission::PermissionKey;
-    use steel_registry::test_support::init_test_registry;
+    use steel_registry::init_vanilla_registry;
     use steel_utils::Identifier;
 
     #[expect(
@@ -106,7 +114,7 @@ mod tests {
     )]
     #[test]
     fn first_builtin_slice_has_the_expected_graph_shape() {
-        init_test_registry();
+        init_vanilla_registry();
         let Ok(dispatcher) = create_dispatcher() else {
             panic!("built-in commands should register");
         };
@@ -128,12 +136,14 @@ mod tests {
             [
                 "clear",
                 "deop",
+                "damage",
                 "difficulty",
                 "domain",
                 "enchant",
                 "execute",
                 "experience",
                 "xp",
+                "fill",
                 "fly",
                 "gamemode",
                 "gamerule",
@@ -145,6 +155,8 @@ mod tests {
                 "perms",
                 "return",
                 "seed",
+                "setblock",
+                "setidletimeout",
                 "setworldspawn",
                 "stop",
                 "summon",
@@ -214,7 +226,7 @@ mod tests {
 
     #[test]
     fn startup_extensions_merge_after_builtins_with_namespaced_collision_fallbacks() {
-        init_test_registry();
+        init_vanilla_registry();
         let mut extensions = CommandRegistry::new();
         let registration =
             ExtensionCommandRegistration::new(Identifier::new("steel_test", "stop"), || {
@@ -249,7 +261,7 @@ mod tests {
 
     #[test]
     fn invsee_discovers_only_steel_namespaced_permissions() {
-        init_test_registry();
+        init_vanilla_registry();
         let Ok(registered) = create_registered_dispatcher(CommandRegistry::new()) else {
             panic!("built-in commands should register");
         };
@@ -270,7 +282,7 @@ mod tests {
         reason = "one graph-shape test keeps execute paths and redirects directly comparable"
     )]
     fn execute_graph_uses_expected_redirects_and_argument_types() {
-        init_test_registry();
+        init_vanilla_registry();
         let Ok(dispatcher) = create_dispatcher() else {
             panic!("built-in commands should register");
         };

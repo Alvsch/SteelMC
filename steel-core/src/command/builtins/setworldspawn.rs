@@ -35,9 +35,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
                 .then(
                     argument("rotation", SteelArgumentType::rotation()).executes(|context| {
                         let position = spawnable_position(context)?;
-                        let Some(rotation) = context.coordinates("rotation") else {
-                            return Err(missing_argument("rotation"));
-                        };
+                        let rotation = context.coordinates("rotation")?;
                         set_spawn(context, position, rotation.rotation(context.source()))
                     }),
                 ),
@@ -47,9 +45,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
 fn spawnable_position(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<BlockPos, CommandSyntaxError> {
-    let Some(coordinates) = context.coordinates("pos") else {
-        return Err(missing_argument("pos"));
-    };
+    let coordinates = context.coordinates("pos")?;
     let position = coordinates.block_pos(context.source());
     if !World::is_in_spawnable_bounds(position) {
         return Err(CommandSyntaxError::dynamic(TextComponent::from(
@@ -87,12 +83,6 @@ fn set_spawn(
     Ok(1)
 }
 
-fn missing_argument(name: &str) -> CommandSyntaxError {
-    CommandSyntaxError::dynamic(format!(
-        "Parsed value for {name} is missing from the command context"
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::create_dispatcher;
@@ -100,7 +90,7 @@ mod tests {
         brigadier::{CommandDispatcher, NodeId},
         execution::{CommandSource, SteelArgumentType, SteelCommandRuntime},
     };
-    use steel_registry::test_support::init_test_registry;
+    use steel_registry::init_vanilla_registry;
 
     type Dispatcher = CommandDispatcher<CommandSource, SteelCommandRuntime>;
 
@@ -120,7 +110,7 @@ mod tests {
 
     #[test]
     fn setworldspawn_graph_uses_deferred_coordinate_arguments() {
-        init_test_registry();
+        init_vanilla_registry();
         let Ok(dispatcher) = create_dispatcher() else {
             panic!("built-in commands should register");
         };

@@ -1,32 +1,10 @@
 use std::{fmt, sync::Arc};
 
-use crate::command::brigadier::{
-    ArgumentSuggestionContext, ArgumentType, CommandArgumentParser, CommandSyntaxError,
-    CommandSyntaxErrorKind, ContainsPrimitiveArgumentValue, PrimitiveArgumentValue, StringReader,
-    SuggestionsBuilder,
-};
-use glam::DVec3;
-use steel_protocol::packets::game::{
-    ArgumentType as ProtocolArgumentType, SuggestionType as ProtocolSuggestionType,
-};
-use steel_registry::{
-    ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY, REGISTRY, RegistryExt as _, TIMELINE_REGISTRY,
-    WORLD_CLOCK_REGISTRY, enchantment::EnchantmentRef, entity_type::EntityTypeRef,
-    item_stack::ItemStack, timeline::TimelineRef, world_clock::WorldClockRef,
-};
-use steel_utils::{
-    Downcast as _, DowncastType, DowncastTypeKey, ErasedType, Identifier,
-    nbt::{NbtPath, parse_snbt_argument},
-    translations,
-    types::GameType,
-};
-use text_components::TextComponent;
-
 use super::{
-    BiomeOrTag, BlockPredicate, CommandArgumentSource, Coordinates, IntRange, ItemPredicate,
-    ScoreHolderArgument, StructureOrTagKey, WorldArgument,
+    BiomeOrTag, BlockInput, BlockPredicate, CommandArgumentSource, Coordinates, IntRange,
+    ItemPredicate, ScoreHolderArgument, StructureOrTagKey, WorldArgument,
     biome::{parse_biome_or_tag, suggest_biomes},
-    block::{parse_block_predicate, suggest_blocks},
+    block::{parse_block_input, parse_block_predicate, suggest_block_inputs, suggest_blocks},
     coordinates::{parse_block_pos, parse_rotation, parse_vec3, suggest_coordinates},
     item::{parse_item_stack, suggest_item_stack},
     item_predicate::{parse_item_predicate, suggest_item_predicate},
@@ -40,8 +18,32 @@ use super::{
     world::{parse_world_argument, suggest_worlds},
 };
 use crate::chunk::heightmap::HeightmapType;
+use crate::command::brigadier::{
+    ArgumentSuggestionContext, ArgumentType, CommandArgumentParser, CommandSyntaxError,
+    CommandSyntaxErrorKind, ContainsPrimitiveArgumentValue, PrimitiveArgumentValue, StringReader,
+    SuggestionsBuilder,
+};
+use crate::command::incorrectly_typed_argument;
 use crate::command::protocol::protocol_argument_type;
 use crate::entity::{ENTITIES, EntityAnchor};
+use glam::DVec3;
+use steel_protocol::packets::game::{
+    ArgumentType as ProtocolArgumentType, SuggestionType as ProtocolSuggestionType,
+};
+use steel_registry::damage_type::DamageTypeRef;
+use steel_registry::{
+    DAMAGE_TYPE_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY, REGISTRY, RegistryExt as _,
+    TIMELINE_REGISTRY, WORLD_CLOCK_REGISTRY, enchantment::EnchantmentRef,
+    entity_type::EntityTypeRef, item_stack::ItemStack, timeline::TimelineRef,
+    world_clock::WorldClockRef,
+};
+use steel_utils::{
+    Downcast as _, DowncastType, DowncastTypeKey, ErasedType, Identifier,
+    nbt::{NbtPath, parse_snbt_argument},
+    translations,
+    types::GameType,
+};
+use text_components::TextComponent;
 
 /// Axes selected by vanilla's coordinate swizzle argument.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -287,6 +289,10 @@ impl SteelArgumentType {
         Self::new(BlockPredicateParser)
     }
 
+    pub(crate) fn block_state() -> Self {
+        Self::new(BlockStateParser)
+    }
+
     pub(crate) fn game_mode() -> Self {
         Self::new(GameModeParser)
     }
@@ -305,6 +311,10 @@ impl SteelArgumentType {
 
     pub(crate) fn enchantment() -> Self {
         Self::new(EnchantmentParser)
+    }
+
+    pub(crate) fn damage_type() -> Self {
+        Self::new(DamageTypeParser)
     }
 
     pub(crate) fn item_stack() -> Self {
@@ -407,8 +417,9 @@ impl fmt::Debug for SteelArgumentValue {
 }
 
 impl ContainsPrimitiveArgumentValue for SteelArgumentValue {
-    fn primitive_value(&self) -> Option<&PrimitiveArgumentValue> {
+    fn primitive_value(&self, name: &str) -> Result<&PrimitiveArgumentValue, CommandSyntaxError> {
         self.downcast_ref::<PrimitiveArgumentValue>()
+            .ok_or_else(|| incorrectly_typed_argument(name))
     }
 }
 
@@ -416,7 +427,7 @@ impl ContainsPrimitiveArgumentValue for SteelArgumentValue {
 pub(crate) trait SteelArgumentSuggestionContext {
     fn source(&self) -> &dyn CommandArgumentSource;
 
-    fn argument(&self, name: &str) -> Option<&SteelArgumentValue>;
+    fn argument(&self, name: &str) -> Result<&SteelArgumentValue, CommandSyntaxError>;
 }
 
 impl<S> SteelArgumentSuggestionContext for ArgumentSuggestionContext<'_, S, SteelArgumentValue>
@@ -427,7 +438,7 @@ where
         ArgumentSuggestionContext::source(self)
     }
 
-    fn argument(&self, name: &str) -> Option<&SteelArgumentValue> {
+    fn argument(&self, name: &str) -> Result<&SteelArgumentValue, CommandSyntaxError> {
         ArgumentSuggestionContext::argument(self, name)
     }
 }
@@ -478,6 +489,7 @@ impl_downcast_type!(
     "steel:command/value/structure_or_tag_key"
 );
 impl_downcast_type!(BlockPredicate, "steel:command/value/block_predicate");
+impl_downcast_type!(BlockInput, "steel:command/value/block_input");
 impl_downcast_type!(WorldArgument, "steel:command/value/world");
 impl_downcast_type!(ItemPredicate, "steel:command/value/item_predicate");
 
@@ -501,6 +513,10 @@ argument_value_wrapper!(
 argument_value_wrapper!(
     EnchantmentValue(EnchantmentRef),
     "steel:command/value/enchantment"
+);
+argument_value_wrapper!(
+    DamageTypeValue(DamageTypeRef),
+    "steel:command/value/damage_type"
 );
 argument_value_wrapper!(ItemStackValue(ItemStack), "steel:command/value/item_stack");
 argument_value_wrapper!(
@@ -846,6 +862,18 @@ unit_argument_parser!(
     )
 );
 unit_argument_parser!(
+    BlockStateParser,
+    "steel:command/parser/block_state",
+    BlockInput,
+    parse | reader,
+    _source | { parse_block_input(reader) },
+    suggest | _context,
+    builder | {
+        suggest_block_inputs(builder);
+    },
+    protocol(ProtocolArgumentType::BlockState, None)
+);
+unit_argument_parser!(
     BlockPredicateParser,
     "steel:command/parser/block_predicate",
     BlockPredicate,
@@ -956,6 +984,35 @@ unit_argument_parser!(
     protocol(
         ProtocolArgumentType::Resource {
             identifier: "minecraft:enchantment",
+        },
+        None,
+    )
+);
+unit_argument_parser!(
+    DamageTypeParser,
+    "steel:command/parser/damage_type",
+    DamageTypeValue,
+    parse | reader,
+    _source | {
+        let key = parse_identifier(reader)?;
+        REGISTRY.damage_types.by_key(&key).map_or_else(
+            || Err(unknown_resource(reader, &key, &DAMAGE_TYPE_REGISTRY)),
+            |damage_type| Ok(DamageTypeValue(damage_type)),
+        )
+    },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY
+                .damage_types
+                .iter()
+                .map(|(_, damage_type)| &damage_type.key),
+            builder,
+        );
+    },
+    protocol(
+        ProtocolArgumentType::Resource {
+            identifier: "minecraft:damage_type",
         },
         None,
     )
@@ -1156,7 +1213,8 @@ fn selected_clock(
         return context.source().default_world_clock();
     };
     context
-        .argument(clock_argument)?
+        .argument(clock_argument)
+        .ok()?
         .downcast_ref::<WorldClockValue>()
         .map(|clock| clock.0)
 }

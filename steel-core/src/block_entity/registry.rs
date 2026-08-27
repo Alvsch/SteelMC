@@ -16,9 +16,10 @@ use steel_utils::{BlockPos, BlockStateId};
 
 use super::SharedBlockEntity;
 use super::entities::{
-    BarrelBlockEntity, BeehiveBlockEntity, ComparatorBlockEntity, DaylightDetectorBlockEntity,
-    EndGatewayBlockEntity, EndPortalBlockEntity, PistonMovingBlockEntity, PotentSulfurBlockEntity,
-    RawBlockEntity, SignBlockEntity,
+    BarrelBlockEntity, BeehiveBlockEntity, BellBlockEntity, BrushableBlockEntity,
+    ChiseledBookShelfBlockEntity, ComparatorBlockEntity, DaylightDetectorBlockEntity,
+    EndGatewayBlockEntity, EndPortalBlockEntity, JukeboxBlockEntity, PistonMovingBlockEntity,
+    PotentSulfurBlockEntity, RawBlockEntity, SignBlockEntity,
 };
 use crate::block_entity::entities::ShulkerBoxBlockEntity;
 use crate::world::World;
@@ -95,23 +96,6 @@ impl BlockEntityRegistry {
         } else {
             Arc::new(RawBlockEntity::new(block_entity_type, level, pos, state))
         }
-    }
-
-    /// Creates a new block entity and loads NBT data into it.
-    ///
-    /// Returns `None` if no factory is registered for the given type.
-    #[must_use]
-    pub fn create_and_load(
-        &self,
-        block_entity_type: BlockEntityTypeRef,
-        level: Weak<World>,
-        pos: BlockPos,
-        state: BlockStateId,
-        nbt: &BorrowedNbtCompound<'_>,
-    ) -> Option<SharedBlockEntity> {
-        let entity = self.create(block_entity_type, level, pos, state)?;
-        entity.load_additional(nbt);
-        Some(entity)
     }
 
     /// Creates a block entity and loads borrowed NBT, falling back to raw preservation.
@@ -240,9 +224,23 @@ pub fn init_block_entities() {
             Arc::new(BarrelBlockEntity::new(level, pos, state))
         });
 
+        registry.register(
+            &vanilla_block_entity_types::CHISELED_BOOKSHELF,
+            |level, pos, state| Arc::new(ChiseledBookShelfBlockEntity::new(level, pos, state)),
+        );
+
+        // Register jukebox block entity factory
+        registry.register(&vanilla_block_entity_types::JUKEBOX, |level, pos, state| {
+            Arc::new(JukeboxBlockEntity::new(level, pos, state))
+        });
+
         // Register beehive block entity factory
         registry.register(&vanilla_block_entity_types::BEEHIVE, |level, pos, state| {
             Arc::new(BeehiveBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(&vanilla_block_entity_types::BELL, |level, pos, state| {
+            Arc::new(BellBlockEntity::new(level, pos, state))
         });
 
         // Register comparator block entity factory
@@ -259,6 +257,11 @@ pub fn init_block_entities() {
         registry.register(&vanilla_block_entity_types::PISTON, |level, pos, state| {
             Arc::new(PistonMovingBlockEntity::new(level, pos, state))
         });
+
+        registry.register(
+            &vanilla_block_entity_types::BRUSHABLE_BLOCK,
+            |level, pos, state| Arc::new(BrushableBlockEntity::new(level, pos, state)),
+        );
 
         // Register End gateway block entity factory
         registry.register(

@@ -23,7 +23,6 @@ use steel_utils::types::GameType;
 
 use crate::entity::{
     AcceptedClientMovement, AcceptedClientMovementOutcome, Entity, EntityMoveError, LivingEntity,
-    get_input_vector,
 };
 use crate::physics::{
     MOVEMENT_ERROR_THRESHOLD, MovementCollisionValidation, MoverType, WorldCollisionProvider,
@@ -45,6 +44,9 @@ pub const SPEED_THRESHOLD_FLYING: f64 = 300.0;
 pub const CLAMP_HORIZONTAL: f64 = 3.0E7;
 /// Vertical position clamping limit (matches vanilla).
 pub const CLAMP_VERTICAL: f64 = 2.0E7;
+
+/// The threshold of the client delta of a player in order to reset their action time.
+pub const RESET_ACTION_TIME_DELTA_THRESHOLD: f64 = 1E-5;
 
 /// Clamps a horizontal coordinate to vanilla limits.
 #[must_use]
@@ -430,10 +432,7 @@ impl Player {
         self.movement
             .lock()
             .mark_last_good_position(self.position());
-
-        self.movement
-            .lock()
-            .set_last_known_client_movement(client_delta);
+        self.handle_player_known_movement(client_delta);
     }
 
     /// Handles a controlled-vehicle movement packet.
@@ -599,9 +598,7 @@ impl Player {
                 return;
             }
         }
-        self.movement
-            .lock()
-            .set_last_known_client_movement(client_delta);
+        self.handle_player_known_movement(client_delta);
         world.chunk_map.update_player_status(self);
         self.record_client_vehicle_floating(
             &world,
@@ -612,6 +609,15 @@ impl Player {
         self.movement
             .lock()
             .mark_vehicle_last_good_position(vehicle.id(), vehicle.position());
+    }
+
+    fn handle_player_known_movement(&self, client_delta: DVec3) {
+        if client_delta.length_squared() > RESET_ACTION_TIME_DELTA_THRESHOLD {
+            self.reset_last_action_time();
+        }
+        self.movement
+            .lock()
+            .set_last_known_client_movement(client_delta);
     }
 
     fn record_client_floating(
@@ -857,16 +863,6 @@ impl Player {
         self.movement.lock().last_client_input()
     }
 
-    /// Returns vanilla `ServerPlayer.getLastClientMoveIntent()`.
-    #[must_use]
-    pub fn last_client_move_intent(&self) -> DVec3 {
-        get_input_vector(
-            self.last_client_input().movement_input(),
-            1.0,
-            self.rotation().0,
-        )
-    }
-
     /// Handles a player input packet (movement keys, sneaking, sprinting).
     pub fn handle_player_input(&self, packet: SPlayerInput) {
         // Vanilla stores the input unconditionally before the guard check.
@@ -877,8 +873,7 @@ impl Player {
             return;
         }
 
-        // TODO: Vanilla calls this.player.resetLastActionTime() here which sets
-        // lastActionTime = Util.getMillis(), preventing idle-kick. Add when idle-kick system is implemented.
+        self.reset_last_action_time();
 
         self.set_crouching(input.shift());
     }
@@ -899,8 +894,7 @@ impl Player {
             return;
         }
 
-        // TODO: Vanilla calls this.player.resetLastActionTime() here which sets
-        // noActionTime = 0, preventing idle-kick. Add when idle-kick system is implemented.
+        self.reset_last_action_time();
 
         match packet.action {
             PlayerCommandAction::StartSprinting => {
@@ -916,16 +910,7 @@ impl Player {
             }
             PlayerCommandAction::LeaveBed => {
                 if self.is_sleeping() {
-                    self.stop_sleeping();
-                    // TODO: Full bed wake-up logic:
-                    //   - set bed block OCCUPIED property to false
-                    //   - compute stand-up position via BedBlock::findStandUpPosition
-                    //   - teleport player + set rotation toward bed
-                    //   - set pose to Standing, clear sleeping pos entity data
-                    //   - update server sleeping player list (for sleep-skip)
-                    //   - set sleepCounter = 100
-                    //   - set awaiting_position_from_client
-                    // Blocked on: bed block properties, sleeping pos entity data
+                    self.stop_sleep_in_bed(false, true);
                 }
             }
             PlayerCommandAction::StartRidingJump
@@ -940,7 +925,6 @@ impl Player {
 }
 
 #[cfg(test)]
-#[expect(clippy::float_cmp, reason = "exact match against vanilla test vectors")]
 mod tests {
     use super::*;
 
