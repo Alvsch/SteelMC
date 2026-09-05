@@ -15,6 +15,14 @@ use steel_registry::{REGISTRY, RegistryEntry, RegistryExt};
 use steel_utils::{BlockPos, BlockStateId};
 
 use super::SharedBlockEntity;
+#[cfg_attr(
+    not(test),
+    expect(
+        clippy::wildcard_imports,
+        reason = "the registry intentionally imports every block entity implementation"
+    )
+)]
+use super::entities::*;
 use super::entities::{
     BarrelBlockEntity, BeehiveBlockEntity, BellBlockEntity, BrushableBlockEntity,
     ChiseledBookShelfBlockEntity, ComparatorBlockEntity, DaylightDetectorBlockEntity,
@@ -273,6 +281,12 @@ pub fn init_block_entities() {
         registry.register(
             &vanilla_block_entity_types::END_PORTAL,
             |level, pos, state| Arc::new(EndPortalBlockEntity::new(level, pos, state)),
+        );
+
+        // Register ender chest block entity factory
+        registry.register(
+            &vanilla_block_entity_types::ENDER_CHEST,
+            |level, pos, state| Arc::new(EnderChestBlockEntity::new(level, pos, state)),
         );
 
         // Register potent sulfur block entity factory
