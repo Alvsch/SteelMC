@@ -17,7 +17,7 @@ use steel_registry::{REGISTRY, RegistryEntry, RegistryExt, sound_events, vanilla
 use steel_utils::types::InteractionHand;
 use text_components::TextComponent;
 
-use crate::behavior::items::DefaultItemBehavior;
+use crate::behavior::items::{DefaultItemBehavior, SpawnEggItem};
 use crate::behavior::{InteractionResult, UseItemContext, UseOnContext};
 use crate::entity::consume_effect::apply_consume_effect;
 use crate::entity::damage::DamageSource;
@@ -225,11 +225,16 @@ pub trait ItemBehavior: Send + Sync {
             .map(|weapon| weapon.item_damage_per_attack)
     }
 
-    /// Returns whether this item can be placed inside of container items like shulker boxes and bundles.
-    /// Used to prevent nesting
+    /// Whether this item may be stored inside container items such as shulker
+    /// boxes and bundles, which vanilla uses to stop them nesting.
     #[must_use]
     fn can_fit_inside_container_items(&self) -> bool {
         true
+    }
+
+    /// Returns this item behavior as a `SpawnEggItem`.
+    fn as_spawn_egg(&self) -> Option<&SpawnEggItem> {
+        None
     }
 }
 
