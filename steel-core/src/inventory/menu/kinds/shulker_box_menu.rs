@@ -1,14 +1,12 @@
-use steel_registry::vanilla_menu_types;
-use steel_utils::locks::Shared;
+//! Shulker box menu.
 
-use crate::{
-    behavior::ITEM_BEHAVIORS,
-    inventory::{
-        lock::ContainerRef,
-        menu::{FillDirection, Menu, MenuBehavior, MenuBuilder, MenuKind, SectionKind},
-    },
-    player::{Player, player_inventory::PlayerInventory},
-};
+use steel_registry::vanilla_menu_types;
+use steel_utils::{DowncastType, DowncastTypeKey};
+
+use crate::behavior::ITEM_BEHAVIORS;
+use crate::block_entity::entities::SHULKER_BOX_SLOTS;
+use crate::inventory::prelude::*;
+use crate::player::player_inventory::PlayerInventory;
 
 /// Builds a shulker box menu with 3 rows of 9 slots plus the player inventory.
 #[must_use]
@@ -22,7 +20,7 @@ pub fn shulker_box(
     let mut builder = MenuBuilder::new(&vanilla_menu_types::SHULKER_BOX, container_id);
     let shulker_box = builder.section_with(
         &container,
-        27,
+        SHULKER_BOX_SLOTS,
         SectionKind::restricted(|_slot, stack| {
             ITEM_BEHAVIORS
                 .get_behavior(stack.item())
@@ -39,19 +37,16 @@ pub fn shulker_box(
 
 /// Per-menu shulker box state: just the backing container for the validity check.
 pub struct ShulkerBoxKind {
-    /// The backing container.
     container: ContainerRef,
 }
 
 // SAFETY: This Steel-owned key uniquely identifies the concrete menu kind
 // within the process.
-unsafe impl steel_utils::DowncastType for ShulkerBoxKind {
-    const TYPE_KEY: steel_utils::DowncastTypeKey =
-        steel_utils::DowncastTypeKey::new("steel:menu/shulker_box");
+unsafe impl DowncastType for ShulkerBoxKind {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:menu/shulker_box");
 }
 
 impl MenuKind for ShulkerBoxKind {
-    /// Returns true if the backing container is still valid for the player.
     fn still_valid(&self, _behavior: &MenuBehavior, player: &Player) -> bool {
         self.container.still_valid(player)
     }

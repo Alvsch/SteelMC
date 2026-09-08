@@ -19,7 +19,9 @@ use steel_registry::{
     vanilla_block_entity_types,
 };
 use steel_utils::{
-    BlockPos, BlockStateId, Direction, DowncastType, DowncastTypeKey, WorldAabb, locks::SyncMutex,
+    BlockLocalAabb, BlockPos, BlockStateId, Direction, DowncastType, DowncastTypeKey, WorldAabb,
+    geometry::{Aabb, Space},
+    locks::SyncMutex,
     types::UpdateFlags,
 };
 
@@ -67,7 +69,7 @@ impl ShulkerBoxAnimation {
     }
 }
 
-/// Behavior for shulker box blocks.
+/// Block entity backing every shulker box color, including the undyed one.
 pub struct ShulkerBoxBlockEntity {
     base: Arc<BlockEntityBase>,
     container: Arc<SyncMutex<ShulkerBoxContainer>>,
@@ -86,7 +88,7 @@ unsafe impl DowncastType for ShulkerBoxBlockEntity {
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies the independently
-// lockable inventory data used by a barrel block entity.
+// lockable inventory data used by a shulker box block entity.
 unsafe impl DowncastType for ShulkerBoxContainer {
     const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:container/shulker_box");
 }
@@ -102,15 +104,15 @@ fn do_neighbor_updates(world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
 ///
 /// TODO: move into shulker entity implementation
 #[must_use]
-pub fn get_progress_delta_aabb(
+pub fn get_progress_delta_aabb<I: Space>(
     size: f32,
     direction: Direction,
     progress_from: f32,
     progress_to: f32,
     position: DVec3,
-) -> WorldAabb {
+) -> Aabb<DVec3, I> {
     let size = f64::from(size);
-    let bounds = WorldAabb::new(-size * 0.5, 0.0, -size * 0.5, size * 0.5, size, size * 0.5);
+    let bounds = Aabb::<DVec3, I>::new(-size * 0.5, 0.0, -size * 0.5, size * 0.5, size, size * 0.5);
 
     let max_movement = f64::from(progress_from.max(progress_to));
     let min_movement = f64::from(progress_from.min(progress_to));
@@ -124,7 +126,7 @@ pub fn get_progress_delta_aabb(
 }
 
 impl ShulkerBoxBlockEntity {
-    /// Creates a new barrel block entity.
+    /// Creates a new shulker box block entity.
     #[must_use]
     pub fn new(level: Weak<World>, pos: BlockPos, state: BlockStateId) -> Self {
         let base = Arc::new(BlockEntityBase::new(
@@ -189,7 +191,7 @@ impl ShulkerBoxBlockEntity {
     fn move_collided_entities(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
         let direction = state.get_value(&BlockStateProperties::FACING);
 
-        let aabb = {
+        let aabb: WorldAabb = {
             let animation = self.animation.lock();
             get_progress_delta_aabb(
                 1.0,
@@ -231,7 +233,9 @@ impl ShulkerBoxBlockEntity {
         ItemStack::with_count_and_patch(block_item, 1, patch)
     }
 
-    pub fn get_bounding_box(&self, state: BlockStateId) -> WorldAabb {
+    /// Block-local bounds of the box including the lid at its current progress.
+    #[must_use]
+    pub fn get_bounding_box(&self, state: BlockStateId) -> BlockLocalAabb {
         let bottom_center = DVec3::new(0.5, 0.0, 0.5);
         get_progress_delta_aabb(
             1.0,
@@ -246,12 +250,6 @@ impl ShulkerBoxBlockEntity {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.container.lock().is_empty()
-    }
-
-    /// Collects all the items inside the block entity's container
-    #[must_use]
-    pub fn collect_items(&self) -> Vec<ItemStack> {
-        self.container.lock().items.clone()
     }
 
     /// Collect all the items inside the shulker box into an `ItemContainerContents`
@@ -284,7 +282,7 @@ impl ShulkerBoxBlockEntity {
         let animation = self.animation.lock();
         let new = animation.progress();
         let old = animation.old_progress();
-        old + partial_tick * (new - old) // lerp
+        old + partial_tick * (new - old)
     }
 
     /// Get the current animation state
@@ -321,42 +319,43 @@ impl BlockEntity for ShulkerBoxBlockEntity {
     }
 
     fn load_additional(&self, nbt: &BaseNbtCompound<'_>) {
-        // Convert to NbtCompound view for accessing methods
         let nbt_view: NbtCompoundView<'_, '_> = nbt.into();
         let mut container = self.container.lock();
         container.items.fill(ItemStack::empty());
 
-        // Load items from NBT using borrowed NBT for proper ItemStack parsing
-        if let Some(items_list) = nbt_view.list("Items")
-            && let Some(compounds) = items_list.compounds()
-        {
-            for compound in compounds {
-                // Each item has a "Slot" byte and item data
-                if let Some(slot) = compound.byte("Slot") {
-                    let slot = slot as usize;
-                    if slot < SHULKER_BOX_SLOTS {
-                        // Parse item directly from the borrowed compound
-                        if let Some(item) = ItemStack::from_borrowed_compound(&compound) {
-                            container.items[slot] = item;
-                        }
-                    }
-                }
+        let Some(items_list) = nbt_view.list("Items") else {
+            return;
+        };
+        let Some(compounds) = items_list.compounds() else {
+            return;
+        };
+
+        for compound in compounds {
+            let Some(slot) = compound.byte("Slot") else {
+                continue;
+            };
+            let slot = slot as usize;
+            if slot >= SHULKER_BOX_SLOTS {
+                continue;
+            }
+            if let Some(item) = ItemStack::from_borrowed_compound(&compound) {
+                container.items[slot] = item;
             }
         }
     }
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
-        // Save items to NBT (only non-empty slots)
         let container = self.container.lock();
         let mut items: Vec<NbtCompound> = Vec::new();
         for (slot, item) in container.items().iter().enumerate() {
-            if !item.is_empty() {
-                // Use ItemStack's ToNbtTag implementation for proper component serialization
-                if let NbtTag::Compound(mut item_nbt) = item.clone().to_nbt_tag() {
-                    item_nbt.insert("Slot", slot as i8);
-                    items.push(item_nbt);
-                }
+            if item.is_empty() {
+                continue;
             }
+            let NbtTag::Compound(mut item_nbt) = item.clone().to_nbt_tag() else {
+                continue;
+            };
+            item_nbt.insert("Slot", slot as i8);
+            items.push(item_nbt);
         }
         nbt.insert("Items", NbtList::Compound(items));
     }

@@ -14,7 +14,7 @@ use steel_registry::{
     items::item::BlockHitResult,
     vanilla_block_entity_types, vanilla_custom_stats,
 };
-use steel_utils::{BlockPos, BlockStateId, Direction, Downcast, translations};
+use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId, Direction, Downcast, translations};
 use text_components::TextComponent;
 
 use crate::{
@@ -36,20 +36,50 @@ use crate::{
     world::{LevelReader, World},
 };
 
-/// Behavior for barrel blocks.
+/// Behavior for shulker box blocks.
 #[block_behavior]
 pub struct ShulkerBoxBlock {
     block: BlockRef,
 }
 
 impl ShulkerBoxBlock {
-    pub const FACING: &EnumProperty<Direction> = &BlockStateProperties::HORIZONTAL_FACING;
+    /// Face the shulker box's lid opens towards.
+    pub const FACING: &EnumProperty<Direction> = &BlockStateProperties::FACING;
 
     /// Creates a new shulker block behavior.
     #[must_use]
     pub const fn new(block: BlockRef) -> Self {
         Self { block }
     }
+}
+
+// Vanilla `ShulkerBoxBlock.SHAPES_OPEN_SUPPORT`, derived there with
+// `Shapes.rotateAll(Block.boxZ(16.0, 0.0, 1.0))`. Rotation is not available at
+// compile time here, so each rotated result is written out directly.
+const OPEN_SUPPORT_DOWN_BOXES: &[BlockLocalAabb] =
+    &[BlockLocalAabb::new(0.0, 0.0, 0.0, 1.0, 0.0625, 1.0)];
+const OPEN_SUPPORT_UP_BOXES: &[BlockLocalAabb] =
+    &[BlockLocalAabb::new(0.0, 0.9375, 0.0, 1.0, 1.0, 1.0)];
+const OPEN_SUPPORT_NORTH_BOXES: &[BlockLocalAabb] =
+    &[BlockLocalAabb::new(0.0, 0.0, 0.0, 1.0, 1.0, 0.0625)];
+const OPEN_SUPPORT_SOUTH_BOXES: &[BlockLocalAabb] =
+    &[BlockLocalAabb::new(0.0, 0.0, 0.9375, 1.0, 1.0, 1.0)];
+const OPEN_SUPPORT_WEST_BOXES: &[BlockLocalAabb] =
+    &[BlockLocalAabb::new(0.0, 0.0, 0.0, 0.0625, 1.0, 1.0)];
+const OPEN_SUPPORT_EAST_BOXES: &[BlockLocalAabb] =
+    &[BlockLocalAabb::new(0.9375, 0.0, 0.0, 1.0, 1.0, 1.0)];
+
+/// The one-pixel slab covering `direction`'s face, all that still supports the
+/// block once the lid has started opening.
+const fn open_support_shape(direction: Direction) -> VoxelShape {
+    VoxelShape::from_boxes(match direction {
+        Direction::Down => OPEN_SUPPORT_DOWN_BOXES,
+        Direction::Up => OPEN_SUPPORT_UP_BOXES,
+        Direction::North => OPEN_SUPPORT_NORTH_BOXES,
+        Direction::South => OPEN_SUPPORT_SOUTH_BOXES,
+        Direction::West => OPEN_SUPPORT_WEST_BOXES,
+        Direction::East => OPEN_SUPPORT_EAST_BOXES,
+    })
 }
 
 fn can_open(
@@ -191,20 +221,27 @@ impl BlockBehavior for ShulkerBoxBlock {
         block_entity.trigger_event(event, data)
     }
 
-    fn get_collision_shape(
+    /// Vanilla `ShulkerBoxBlock.getShape`, which the collision shape inherits.
+    ///
+    /// The lid box is computed from live animation progress, so the boxes are
+    /// produced directly instead of going through a static [`VoxelShape`].
+    fn get_collision_boxes(
         &self,
         state: BlockStateId,
         world: &dyn LevelReader,
         pos: BlockPos,
         _context: BlockCollisionContext,
-    ) -> VoxelShape {
+    ) -> BlockCollisionBoxes {
         if let Some(block_entity) = world.get_block_entity(pos)
-            && let Some(shulker_block_entity) = block_entity.downcast_ref::<ShulkerBoxBlockEntity>()
+            && let Some(shulker_box_block_entity) =
+                block_entity.downcast_ref::<ShulkerBoxBlockEntity>()
         {
-            VoxelShape::from_boxes(&[shulker_block_entity.get_bounding_box(state)])
-        } else {
-            VoxelShape::FULL_BLOCK
+            return BlockCollisionBoxes::from_slice(&[
+                shulker_box_block_entity.get_bounding_box(state)
+            ]);
         }
+
+        BlockCollisionBoxes::from_slice(VoxelShape::FULL_BLOCK.boxes())
     }
 
     fn get_block_support_boxes(
@@ -213,16 +250,19 @@ impl BlockBehavior for ShulkerBoxBlock {
         world: &dyn LevelReader,
         pos: BlockPos,
     ) -> BlockCollisionBoxes {
-        if let Some(block_entity) = world.get_block_entity(pos)
-            && let Some(shulker_block_entity) = block_entity.downcast_ref::<ShulkerBoxBlockEntity>()
-            && matches!(
-                shulker_block_entity.animation_status(),
+        let shape = if let Some(block_entity) = world.get_block_entity(pos)
+            && let Some(shulker_box_block_entity) =
+                block_entity.downcast_ref::<ShulkerBoxBlockEntity>()
+            && !matches!(
+                shulker_box_block_entity.animation_status(),
                 AnimationStatus::Closed
-            )
-        {
+            ) {
+            open_support_shape(state.get_value(Self::FACING).opposite())
         } else {
-            BlockCollisionBoxes::from_slice(VoxelShape::FULL_BLOCK.boxes())
-        }
+            VoxelShape::FULL_BLOCK
+        };
+
+        BlockCollisionBoxes::from_slice(shape.boxes())
     }
 
     fn affect_neighbors_after_removal(
@@ -246,7 +286,6 @@ impl BlockBehavior for ShulkerBoxBlock {
         pos: BlockPos,
         _direction: Direction,
     ) -> i32 {
-        // Get the block entity and calculate signal from container contents
         let Some(container_ref) = world
             .get_block_entity(pos)
             .and_then(ContainerRef::from_block_entity)

@@ -531,34 +531,6 @@ impl<I: Space> Aabb<DVec3, I> {
     pub fn size(self) -> f64 {
         (self.width() + self.height() + self.depth()) / 3.0
     }
-}
-
-impl Aabb<DVec3, BlockLocal> {
-    /// Converts this block-local box to a world-space box at `pos`.
-    #[must_use]
-    pub fn at_block(self, pos: BlockPos) -> Aabb<DVec3, World> {
-        let offset = DVec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z()));
-        Aabb {
-            min: self.min + offset,
-            max: self.max + offset,
-            p: PhantomData,
-        }
-    }
-}
-
-impl Aabb<DVec3, World> {
-    /// Creates an entity bounding box centered on X/Z and using `y` as feet.
-    #[must_use]
-    pub fn entity_box(x: f64, y: f64, z: f64, half_width: f64, height: f64) -> Self {
-        Self::new(
-            x - half_width,
-            y,
-            z - half_width,
-            x + half_width,
-            y + height,
-            z + half_width,
-        )
-    }
 
     /// Expands the box only in the direction of `delta`.
     #[must_use]
@@ -568,14 +540,6 @@ impl Aabb<DVec3, World> {
             max: self.max + delta.max(DVec3::ZERO),
             p: PhantomData,
         }
-    }
-
-    /// Returns `true` if this box intersects the full block at `pos`.
-    #[must_use]
-    pub fn intersects_block(self, pos: BlockPos) -> bool {
-        let min = DVec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z()));
-        let max = min + DVec3::ONE;
-        self.intersects_bounds(min, max)
     }
 
     /// Shrinks the box in the direction of `delta`.
@@ -612,6 +576,42 @@ impl Aabb<DVec3, World> {
             max,
             p: PhantomData,
         }
+    }
+}
+
+impl Aabb<DVec3, BlockLocal> {
+    /// Converts this block-local box to a world-space box at `pos`.
+    #[must_use]
+    pub fn at_block(self, pos: BlockPos) -> Aabb<DVec3, World> {
+        let offset = DVec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z()));
+        Aabb {
+            min: self.min + offset,
+            max: self.max + offset,
+            p: PhantomData,
+        }
+    }
+}
+
+impl Aabb<DVec3, World> {
+    /// Creates an entity bounding box centered on X/Z and using `y` as feet.
+    #[must_use]
+    pub fn entity_box(x: f64, y: f64, z: f64, half_width: f64, height: f64) -> Self {
+        Self::new(
+            x - half_width,
+            y,
+            z - half_width,
+            x + half_width,
+            y + height,
+            z + half_width,
+        )
+    }
+
+    /// Returns `true` if this box intersects the full block at `pos`.
+    #[must_use]
+    pub fn intersects_block(self, pos: BlockPos) -> bool {
+        let min = DVec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z()));
+        let max = min + DVec3::ONE;
+        self.intersects_bounds(min, max)
     }
 }
 

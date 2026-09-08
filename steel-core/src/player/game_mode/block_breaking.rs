@@ -367,7 +367,8 @@ impl BlockBreakingManager {
         // block leaves water behind instead of air.
         let replacement = fluid_state_to_block(state.get_fluid_state());
 
-        // Store the block entity before removal.
+        // Read before the removal below, so loot generation still sees the
+        // block entity's contents.
         let block_entity = world.get_block_entity(pos);
 
         // Vanilla removes the live state after `playerWillDestroy`; tripwire uses
@@ -566,7 +567,7 @@ fn drop_block_loot(
     pos: BlockPos,
     state: BlockStateId,
     tool: &ItemStack,
-    block_entity: Option<&'_ dyn BlockEntity>,
+    block_entity: Option<&dyn BlockEntity>,
 ) {
     let luck = player
         .attributes()

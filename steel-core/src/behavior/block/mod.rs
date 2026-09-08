@@ -1221,8 +1221,11 @@ pub trait BlockBehavior: Send + Sync {
         None
     }
 
-    /// Returns whether items placing this block are able to be put inside of container items like shulker boxes.
-    /// This is needed because shulker boxes don't have their own item class, but still
+    /// Whether this block's item may be stored inside container items such as
+    /// shulker boxes and bundles.
+    ///
+    /// Vanilla gates this on the item class, but shulker boxes share
+    /// `BlockItem`, so the rule lives on the block instead.
     fn fits_inside_container_items(&self) -> bool {
         true
     }

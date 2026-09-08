@@ -23,13 +23,6 @@ use super::SharedBlockEntity;
     )
 )]
 use super::entities::*;
-use super::entities::{
-    BarrelBlockEntity, BeehiveBlockEntity, BellBlockEntity, BrushableBlockEntity,
-    ChiseledBookShelfBlockEntity, ComparatorBlockEntity, DaylightDetectorBlockEntity,
-    EndGatewayBlockEntity, EndPortalBlockEntity, JukeboxBlockEntity, PistonMovingBlockEntity,
-    PotentSulfurBlockEntity, RawBlockEntity, SignBlockEntity,
-};
-use crate::block_entity::entities::ShulkerBoxBlockEntity;
 use crate::world::World;
 
 /// Factory function type for creating block entities.
@@ -313,7 +306,6 @@ pub fn init_block_entities() {
             |level, pos, state| Arc::new(PotentSulfurBlockEntity::new(level, pos, state)),
         );
 
-        // Register shulker box block entity factory
         registry.register(
             &vanilla_block_entity_types::SHULKER_BOX,
             |level, pos, state| Arc::new(ShulkerBoxBlockEntity::new(level, pos, state)),
