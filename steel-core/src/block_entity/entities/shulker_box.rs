@@ -10,11 +10,11 @@ use simdnbt::{
     owned::{NbtCompound, NbtList, NbtTag},
 };
 use steel_registry::{
-    ItemStackTemplate,
+    ItemStackTemplate, REGISTRY,
     blocks::{
         behavior::PushReaction, block_state_ext::BlockStateExt, properties::BlockStateProperties,
     },
-    data_components::{ItemContainerContents, vanilla_components::CONTAINER},
+    data_components::{DataComponentPatch, ItemContainerContents, vanilla_components::CONTAINER},
     item_stack::ItemStack,
     vanilla_block_entity_types,
 };
@@ -213,6 +213,20 @@ impl ShulkerBoxBlockEntity {
                 ),
             );
         }
+    }
+
+    /// Builds the item form of a placed, possibly-filled shulker box.
+    /// Vanilla `ShulkerBoxBlockEntity.collectComponents()` +
+    /// `BaseContainerBlockEntity.collectImplicitComponents(CONTAINER)`.
+    pub fn shulker_box_as_item(&self, state: BlockStateId) -> ItemStack {
+        let block_item = REGISTRY.items.by_block(state.get_block());
+
+        let contents = self.collect_components();
+
+        let mut patch = DataComponentPatch::new();
+        patch.set(CONTAINER, contents);
+
+        ItemStack::with_count_and_patch(block_item, 1, patch)
     }
 
     /// Checks if the block entity's container has any items

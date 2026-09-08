@@ -176,6 +176,12 @@ impl ItemBehavior for BlockItem {
     fn use_on(&self, context: &mut UseOnContext) -> InteractionResult {
         self.place(context.build_place_context())
     }
+
+    fn can_fit_inside_container_items(&self) -> bool {
+        BLOCK_BEHAVIORS
+            .get_behavior(self.block)
+            .fits_inside_container_items()
+    }
 }
 
 /// Behavior for double-high block items (doors, tall flowers, etc.).

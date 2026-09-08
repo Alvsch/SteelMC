@@ -1,9 +1,8 @@
-use std::sync::LazyLock;
-
-use steel_registry::{RegistryEntry, item_stack::ItemStack, vanilla_items, vanilla_menu_types};
+use steel_registry::vanilla_menu_types;
 use steel_utils::locks::Shared;
 
 use crate::{
+    behavior::ITEM_BEHAVIORS,
     inventory::{
         lock::ContainerRef,
         menu::{FillDirection, Menu, MenuBehavior, MenuBuilder, MenuKind, SectionKind},
@@ -24,7 +23,11 @@ pub fn shulker_box(
     let shulker_box = builder.section_with(
         &container,
         27,
-        SectionKind::restricted(|_slot, stack| !is_shulker_box(stack)),
+        SectionKind::restricted(|_slot, stack| {
+            ITEM_BEHAVIORS
+                .get_behavior(stack.item())
+                .can_fit_inside_container_items()
+        }),
     );
     let player = builder.player_inventory(&inventory);
 
@@ -32,31 +35,6 @@ pub fn shulker_box(
     builder.route(player.all(), shulker_box, FillDirection::Forward);
 
     builder.build(ShulkerBoxKind { container })
-}
-
-fn is_shulker_box(stack: &ItemStack) -> bool {
-    static SHULKERS: LazyLock<[usize; 17]> = LazyLock::new(|| {
-        [
-            vanilla_items::SHULKER_BOX.id(),
-            vanilla_items::RED_SHULKER_BOX.id(),
-            vanilla_items::BLUE_SHULKER_BOX.id(),
-            vanilla_items::CYAN_SHULKER_BOX.id(),
-            vanilla_items::GRAY_SHULKER_BOX.id(),
-            vanilla_items::LIME_SHULKER_BOX.id(),
-            vanilla_items::PINK_SHULKER_BOX.id(),
-            vanilla_items::BLACK_SHULKER_BOX.id(),
-            vanilla_items::BROWN_SHULKER_BOX.id(),
-            vanilla_items::GREEN_SHULKER_BOX.id(),
-            vanilla_items::WHITE_SHULKER_BOX.id(),
-            vanilla_items::ORANGE_SHULKER_BOX.id(),
-            vanilla_items::PURPLE_SHULKER_BOX.id(),
-            vanilla_items::YELLOW_SHULKER_BOX.id(),
-            vanilla_items::MAGENTA_SHULKER_BOX.id(),
-            vanilla_items::LIGHT_BLUE_SHULKER_BOX.id(),
-            vanilla_items::LIGHT_GRAY_SHULKER_BOX.id(),
-        ]
-    });
-    SHULKERS.contains(&stack.item().id())
 }
 
 /// Per-menu shulker box state: just the backing container for the validity check.

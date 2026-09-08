@@ -224,6 +224,13 @@ pub trait ItemBehavior: Send + Sync {
             .get_weapon()
             .map(|weapon| weapon.item_damage_per_attack)
     }
+
+    /// Returns whether this item can be placed inside of container items like shulker boxes and bundles.
+    /// Used to prevent nesting
+    #[must_use]
+    fn can_fit_inside_container_items(&self) -> bool {
+        true
+    }
 }
 
 fn should_emit_consume_particles_and_sounds(consumable: &Consumable, ticks_remaining: i32) -> bool {

@@ -3,12 +3,10 @@ use std::sync::{Arc, Weak};
 use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_registry::{
-    REGISTRY,
     blocks::{BlockRef, block_state_ext::BlockStateExt, properties::BlockStateProperties},
-    data_components::{DataComponentPatch, vanilla_components::CONTAINER},
     item_stack::ItemStack,
     items::item::BlockHitResult,
-    vanilla_block_entity_types,
+    vanilla_block_entity_types, vanilla_custom_stats,
 };
 use steel_utils::{BlockPos, BlockStateId, Direction, Downcast, translations};
 use text_components::TextComponent;
@@ -101,7 +99,7 @@ impl BlockBehavior for ShulkerBoxBlock {
                 move |context| shulker_box(inventory, context.container_id, container_ref),
             );
 
-            // TODO: Award stat OPEN_SHULKER_BOX
+            player.award_custom_stat(&vanilla_custom_stats::OPEN_SHULKER_BOX);
             // TODO: Anger nearby piglins (PiglinAi.angerNearbyPiglins)
         }
         InteractionResult::Success
@@ -124,7 +122,7 @@ impl BlockBehavior for ShulkerBoxBlock {
         };
 
         if player.prevents_block_drops() && !shulker_box_block_entity.is_empty() {
-            let item = shulker_box_as_item(state, shulker_box_block_entity);
+            let item = shulker_box_block_entity.shulker_box_as_item(state);
             world.pop_resource(pos, item);
         } else {
             // TODO: maybe? shulkerBoxBlockEntity.unpackLootTable(player);
@@ -141,7 +139,7 @@ impl BlockBehavior for ShulkerBoxBlock {
         let block_entity = context.block_entity()?;
         let shulker_box_block_entity = block_entity.downcast_ref::<ShulkerBoxBlockEntity>()?;
 
-        let item = shulker_box_as_item(state, shulker_box_block_entity);
+        let item = shulker_box_block_entity.shulker_box_as_item(state);
         Some(vec![item])
     }
 
@@ -184,18 +182,8 @@ impl BlockBehavior for ShulkerBoxBlock {
                 calculate_redstone_signal_from_container(container)
             })
     }
-}
 
-/// Builds the item form of a placed, possibly-filled shulker box.
-/// Vanilla `ShulkerBoxBlockEntity.collectComponents()` +
-/// `BaseContainerBlockEntity.collectImplicitComponents(CONTAINER)`.
-fn shulker_box_as_item(state: BlockStateId, shulker_box: &ShulkerBoxBlockEntity) -> ItemStack {
-    let block_item = REGISTRY.items.by_block(state.get_block());
-
-    let contents = shulker_box.collect_components();
-
-    let mut patch = DataComponentPatch::new();
-    patch.set(CONTAINER, contents);
-
-    ItemStack::with_count_and_patch(block_item, 1, patch)
+    fn fits_inside_container_items(&self) -> bool {
+        false
+    }
 }

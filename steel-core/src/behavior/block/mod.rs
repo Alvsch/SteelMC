@@ -1220,6 +1220,12 @@ pub trait BlockBehavior: Send + Sync {
     fn as_rail(&self) -> Option<&dyn RailBehavior> {
         None
     }
+
+    /// Returns whether items placing this block are able to be put inside of container items like shulker boxes.
+    /// This is needed because shulker boxes don't have their own item class, but still
+    fn fits_inside_container_items(&self) -> bool {
+        true
+    }
 }
 
 mod registry;
