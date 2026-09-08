@@ -24,6 +24,7 @@ use steel_utils::{
 };
 
 use crate::{
+    behavior::blocks::ShulkerBoxBlock,
     block_entity::{BlockEntity, BlockEntityBase},
     inventory::{
         container::Container,
@@ -166,6 +167,7 @@ impl ShulkerBoxBlockEntity {
                     do_neighbor_updates(world, pos, state);
                 }
 
+                drop(animation);
                 self.move_collided_entities(world, pos, state);
             }
             AnimationStatus::Opened => animation.progress = ANIMATION_STEPS,
@@ -227,6 +229,17 @@ impl ShulkerBoxBlockEntity {
         patch.set(CONTAINER, contents);
 
         ItemStack::with_count_and_patch(block_item, 1, patch)
+    }
+
+    pub fn get_bounding_box(&self, state: BlockStateId) -> WorldAabb {
+        let bottom_center = DVec3::new(0.5, 0.0, 0.5);
+        get_progress_delta_aabb(
+            1.0,
+            state.get_value(ShulkerBoxBlock::FACING),
+            -1.0,
+            0.5 * self.progress(1.0),
+            bottom_center,
+        )
     }
 
     /// Checks if the block entity's container has any items

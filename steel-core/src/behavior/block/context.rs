@@ -133,7 +133,7 @@ impl<'a> BlockLootContext<'a> {
         self
     }
 
-    /// Adds the entity responsible for destroying the block.
+    /// Adds the block entity at the broken position.
     #[must_use]
     pub const fn with_block_entity(mut self, block_entity: Option<&'a dyn BlockEntity>) -> Self {
         self.block_entity = block_entity;

@@ -3,7 +3,13 @@ use std::sync::{Arc, Weak};
 use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_registry::{
-    blocks::{BlockRef, block_state_ext::BlockStateExt, properties::BlockStateProperties},
+    block_entity_type::BlockEntityTypeRef,
+    blocks::{
+        BlockRef,
+        block_state_ext::BlockStateExt,
+        properties::{BlockStateProperties, EnumProperty},
+        shapes::VoxelShape,
+    },
     item_stack::ItemStack,
     items::item::BlockHitResult,
     vanilla_block_entity_types, vanilla_custom_stats,
@@ -13,11 +19,11 @@ use text_components::TextComponent;
 
 use crate::{
     behavior::{
-        BlockBehavior, BlockEntityCreation, BlockLootContext, BlockPlaceContext, InteractionResult,
-        InventoryAccess,
+        BlockBehavior, BlockCollisionBoxes, BlockCollisionContext, BlockEntityCreation,
+        BlockLootContext, BlockPlaceContext, InteractionResult, InventoryAccess,
     },
     block_entity::{
-        BLOCK_ENTITIES, BlockEntity,
+        BLOCK_ENTITIES, BlockEntity, BlockEntityTicker,
         entities::{AnimationStatus, ShulkerBoxBlockEntity, get_progress_delta_aabb},
     },
     inventory::{
@@ -37,6 +43,8 @@ pub struct ShulkerBoxBlock {
 }
 
 impl ShulkerBoxBlock {
+    pub const FACING: &EnumProperty<Direction> = &BlockStateProperties::HORIZONTAL_FACING;
+
     /// Creates a new shulker block behavior.
     #[must_use]
     pub const fn new(block: BlockRef) -> Self {
@@ -155,6 +163,76 @@ impl BlockBehavior for ShulkerBoxBlock {
             pos,
             state,
         ))
+    }
+
+    fn get_block_entity_ticker(
+        &self,
+        _world: &Arc<World>,
+        _state: BlockStateId,
+        block_entity_type: BlockEntityTypeRef,
+    ) -> Option<BlockEntityTicker> {
+        BlockEntityTicker::for_matching_entity_tick(
+            block_entity_type,
+            &vanilla_block_entity_types::SHULKER_BOX,
+        )
+    }
+
+    fn trigger_event(
+        &self,
+        _state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        event: i32,
+        data: i32,
+    ) -> bool {
+        let Some(block_entity) = world.get_block_entity(pos) else {
+            return false;
+        };
+        block_entity.trigger_event(event, data)
+    }
+
+    fn get_collision_shape(
+        &self,
+        state: BlockStateId,
+        world: &dyn LevelReader,
+        pos: BlockPos,
+        _context: BlockCollisionContext,
+    ) -> VoxelShape {
+        if let Some(block_entity) = world.get_block_entity(pos)
+            && let Some(shulker_block_entity) = block_entity.downcast_ref::<ShulkerBoxBlockEntity>()
+        {
+            VoxelShape::from_boxes(&[shulker_block_entity.get_bounding_box(state)])
+        } else {
+            VoxelShape::FULL_BLOCK
+        }
+    }
+
+    fn get_block_support_boxes(
+        &self,
+        state: BlockStateId,
+        world: &dyn LevelReader,
+        pos: BlockPos,
+    ) -> BlockCollisionBoxes {
+        if let Some(block_entity) = world.get_block_entity(pos)
+            && let Some(shulker_block_entity) = block_entity.downcast_ref::<ShulkerBoxBlockEntity>()
+            && matches!(
+                shulker_block_entity.animation_status(),
+                AnimationStatus::Closed
+            )
+        {
+        } else {
+            BlockCollisionBoxes::from_slice(VoxelShape::FULL_BLOCK.boxes())
+        }
+    }
+
+    fn affect_neighbors_after_removal(
+        &self,
+        _state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        _moved_by_piston: bool,
+    ) {
+        world.update_neighbor_for_output_signal(pos, self.block);
     }
 
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {
