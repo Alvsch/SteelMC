@@ -32,7 +32,7 @@ use crate::{
         container::Container,
         lock::{ContainerRef, SharedContainer},
     },
-    physics::MoverType,
+    physics::{CollisionWorld as _, MoverType, WorldCollisionProvider},
     world::World,
 };
 
@@ -96,33 +96,6 @@ unsafe impl DowncastType for ShulkerBoxContainer {
 fn do_neighbor_updates(world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
     world.update_neighbour_shapes(state, pos, UpdateFlags::UPDATE_ALL, 512);
     world.update_neighbors_at(pos, state.get_block());
-}
-
-/// Calculates the bounding box of a shulker during its opening animation.
-///
-/// The bounds are expanded in the opening direction based on the animation progress.
-///
-/// TODO: move into shulker entity implementation
-#[must_use]
-pub fn get_progress_delta_aabb<I: Space>(
-    size: f32,
-    direction: Direction,
-    progress_from: f32,
-    progress_to: f32,
-    position: DVec3,
-) -> Aabb<DVec3, I> {
-    let size = f64::from(size);
-    let bounds = Aabb::<DVec3, I>::new(-size * 0.5, 0.0, -size * 0.5, size * 0.5, size, size * 0.5);
-
-    let max_movement = f64::from(progress_from.max(progress_to));
-    let min_movement = f64::from(progress_from.min(progress_to));
-
-    let dir = DVec3::from(direction.offset_vec());
-
-    bounds
-        .expand_towards(dir * max_movement * size)
-        .contract(-dir * (1.0 + min_movement) * size)
-        .translate(position)
 }
 
 impl ShulkerBoxBlockEntity {
@@ -193,7 +166,7 @@ impl ShulkerBoxBlockEntity {
 
         let aabb: WorldAabb = {
             let animation = self.animation.lock();
-            get_progress_delta_aabb(
+            Self::get_progress_delta_aabb(
                 1.0,
                 direction,
                 animation.old_progress(),
@@ -233,17 +206,65 @@ impl ShulkerBoxBlockEntity {
         ItemStack::with_count_and_patch(block_item, 1, patch)
     }
 
+    /// Calculates the bounding box of a shulker during its opening animation.
+    ///
+    /// The bounds are expanded in the opening direction based on the animation progress.
+    #[must_use]
+    pub fn get_progress_delta_aabb<I: Space>(
+        size: f32,
+        direction: Direction,
+        progress_from: f32,
+        progress_to: f32,
+        position: DVec3,
+    ) -> Aabb<DVec3, I> {
+        let size = f64::from(size);
+        let bounds =
+            Aabb::<DVec3, I>::new(-size * 0.5, 0.0, -size * 0.5, size * 0.5, size, size * 0.5);
+
+        let max_movement = f64::from(progress_from.max(progress_to));
+        let min_movement = f64::from(progress_from.min(progress_to));
+
+        let dir = DVec3::from(direction.offset_vec());
+
+        bounds
+            .expand_towards(dir * max_movement * size)
+            .contract(-dir * (1.0 + min_movement) * size)
+            .translate(position)
+    }
+
     /// Block-local bounds of the box including the lid at its current progress.
     #[must_use]
     pub fn get_bounding_box(&self, state: BlockStateId) -> BlockLocalAabb {
         let bottom_center = DVec3::new(0.5, 0.0, 0.5);
-        get_progress_delta_aabb(
+        Self::get_progress_delta_aabb(
             1.0,
             state.get_value(ShulkerBoxBlock::FACING),
             -1.0,
             0.5 * self.progress(1.0),
             bottom_center,
         )
+    }
+
+    /// Returns whether the shulker box can open
+    #[must_use]
+    pub fn can_open(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) -> bool {
+        if !matches!(self.animation_status(), AnimationStatus::Closed) {
+            return true;
+        }
+
+        let direction = state.get_value(ShulkerBoxBlock::FACING);
+
+        let lid_open_bounding_box: WorldAabb = Self::get_progress_delta_aabb(
+            1.0,
+            direction,
+            0.0,
+            0.5,
+            DVec3::from(pos.get_bottom_center()),
+        )
+        .deflate(1.0E-6);
+
+        let collision = WorldCollisionProvider::new(world);
+        !collision.has_block_collision(&lid_open_bounding_box)
     }
 
     /// Checks if the block entity's container has any items

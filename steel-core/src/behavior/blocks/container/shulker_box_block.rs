@@ -1,6 +1,5 @@
 use std::sync::{Arc, Weak};
 
-use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_registry::{
     block_entity_type::BlockEntityTypeRef,
@@ -24,14 +23,13 @@ use crate::{
     },
     block_entity::{
         BLOCK_ENTITIES, BlockEntity, BlockEntityTicker,
-        entities::{AnimationStatus, ShulkerBoxBlockEntity, get_progress_delta_aabb},
+        entities::{AnimationStatus, ShulkerBoxBlockEntity},
     },
     inventory::{
         container::calculate_redstone_signal_from_container,
         lock::{ContainerLockGuard, ContainerRef},
         menu::kinds::shulker_box,
     },
-    physics::{CollisionWorld, WorldCollisionProvider},
     player::Player,
     world::{LevelReader, World},
 };
@@ -82,31 +80,6 @@ const fn open_support_shape(direction: Direction) -> VoxelShape {
     })
 }
 
-fn can_open(
-    state: BlockStateId,
-    world: &Arc<World>,
-    pos: BlockPos,
-    block_entity: &ShulkerBoxBlockEntity,
-) -> bool {
-    if !matches!(block_entity.animation_status(), AnimationStatus::Closed) {
-        return true;
-    }
-
-    let direction = state.get_value(&BlockStateProperties::FACING);
-
-    let lid_open_bounding_box = get_progress_delta_aabb(
-        1.0,
-        direction,
-        0.0,
-        0.5,
-        DVec3::from(pos.get_bottom_center()),
-    )
-    .deflate(1.0E-6);
-
-    let collision = WorldCollisionProvider::new(world);
-    !collision.has_block_collision(&lid_open_bounding_box)
-}
-
 impl BlockBehavior for ShulkerBoxBlock {
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         let facing = context.clicked_face();
@@ -129,7 +102,7 @@ impl BlockBehavior for ShulkerBoxBlock {
         if let Some(block_entity) = world.get_block_entity(pos)
             && let Some(block_entity) = block_entity.downcast_ref::<ShulkerBoxBlockEntity>()
             && let Some(container_ref) = block_entity.container_ref()
-            && can_open(state, world, pos, block_entity)
+            && block_entity.can_open(state, world, pos)
         {
             let inventory = player.inventory.clone();
             player.open_menu(
