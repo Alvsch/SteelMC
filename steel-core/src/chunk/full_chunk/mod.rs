@@ -383,7 +383,6 @@ impl Chunk {
             heightmaps,
             structure_starts,
             structure_references,
-            None,
             postprocessing,
             block_ticks,
             fluid_ticks,
