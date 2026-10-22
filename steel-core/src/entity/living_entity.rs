@@ -518,6 +518,22 @@ pub trait LivingEntity: Entity {
             .set_last_hurt_by_player(player_uuid, time_to_remember);
     }
 
+    /// Returns the remaining hurt-cooldown ticks (vanilla `Entity.invulnerableTime`).
+    fn invulnerable_time(&self) -> i32 {
+        self.living_base().invulnerable_time()
+    }
+
+    /// Sets the remaining hurt-cooldown ticks.
+    fn set_invulnerable_time(&self, invulnerable_time: i32) {
+        self.living_base().set_invulnerable_time(invulnerable_time);
+    }
+
+    /// Sets the remaining memory time without touching the remembered player.
+    fn set_last_hurt_by_player_memory_time(&self, time_to_remember: i32) {
+        self.living_base()
+            .set_last_hurt_by_player_memory_time(time_to_remember);
+    }
+
     /// Returns ticks remaining that this entity will remember the player who last hurt it.
     fn last_hurt_by_player_memory_time(&self) -> i32 {
         self.living_base().last_hurt_by_player_memory_time()

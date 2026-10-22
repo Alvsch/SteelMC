@@ -290,7 +290,7 @@ pub(crate) fn equipment_items_to_packet_items(
         .collect()
 }
 
-fn aabb_contains_any_liquid(world: &Arc<World>, aabb: WorldAabb) -> bool {
+pub(crate) fn aabb_contains_any_liquid(world: &Arc<World>, aabb: WorldAabb) -> bool {
     (aabb.min_x().floor() as i32..aabb.max_x().ceil() as i32).any(|x| {
         (aabb.min_y().floor() as i32..aabb.max_y().ceil() as i32).any(|y| {
             (aabb.min_z().floor() as i32..aabb.max_z().ceil() as i32)
@@ -762,6 +762,7 @@ mod block_effects;
 mod callback;
 mod combat_rules;
 pub mod consume_effect;
+mod conversion;
 pub mod damage;
 pub(crate) mod dismount_helper;
 pub mod entities;
@@ -786,6 +787,7 @@ mod living_reference;
 mod manager;
 mod mob;
 pub mod mob_effect;
+mod monster;
 mod movement_sync;
 mod potion_contents;
 pub mod projectile;
@@ -814,6 +816,7 @@ pub use callback::{
     EntityChunkCallback, EntityLevelCallback, InactiveEntityCallback, NullEntityCallback,
     PlayerEntityCallback, RemovalReason,
 };
+pub use conversion::{AfterConversion, ConversionParams, ConversionType};
 pub(crate) use entity::apply_entity_look_at;
 pub(crate) use entity::position_rider_default;
 pub use entity::{
@@ -837,6 +840,7 @@ pub use manager::{
     EntityMoveUpdate, EntityOwnership, EntityVisibility, WorldEntityManager,
 };
 pub(crate) use mob::{Mob, MobBase, PathfinderMob};
+pub(crate) use monster::{Enemy, Monster};
 pub use movement_sync::{
     EntityMovementSyncPacket, EntityMovementSyncPackets, EntityMovementSyncState,
     EntityMovementSyncUpdate, EntityPositionRotSyncPacket, EntityPositionSyncDecision,
@@ -946,6 +950,11 @@ pub(crate) fn start_riding_entities(
 
     passenger.set_pose(EntityPose::Standing);
     EntityBase::start_riding_relationship(entity_to_ride, passenger);
+    if let Some(mob) = passenger.as_mob()
+        && mob.is_leashed()
+    {
+        mob.drop_leash();
+    }
     // TODO: Emit ENTITY_MOUNT game event and riding advancement trigger once those foundations exist.
     true
 }

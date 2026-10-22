@@ -1496,6 +1496,16 @@ impl LivingEntityBase {
             .floor() as i32
     }
 
+    /// Returns the remaining hurt-cooldown ticks.
+    pub fn invulnerable_time(&self) -> i32 {
+        self.state.lock().invulnerable_time
+    }
+
+    /// Sets the remaining hurt-cooldown ticks.
+    pub fn set_invulnerable_time(&self, invulnerable_time: i32) {
+        self.state.lock().invulnerable_time = invulnerable_time;
+    }
+
     /// Decrements remaining invulnerability ticks by one if any are active.
     pub fn decrement_invulnerable_time(&self) {
         let mut state = self.state.lock();
@@ -1539,6 +1549,11 @@ impl LivingEntityBase {
         state.last_hurt_by_player = Some(player_uuid);
         state.last_hurt_by_player_entity = None;
         state.last_hurt_by_player_memory_time = time_to_remember;
+    }
+
+    /// Sets the remaining memory time without touching the remembered player.
+    pub fn set_last_hurt_by_player_memory_time(&self, time_to_remember: i32) {
+        self.state.lock().last_hurt_by_player_memory_time = time_to_remember;
     }
 
     /// Remembers the live player independently of which world it occupies.

@@ -50,6 +50,9 @@ use crate::world::{
 };
 use steel_registry::vanilla_fluids;
 
+/// Exclusive block-emission limit for the default mob spawn predicate.
+pub(crate) const MAX_MOB_SPAWN_LIGHT_EMISSION: u8 = 14;
+
 pub(crate) fn default_can_be_replaced(
     state: BlockStateId,
     context: &BlockPlaceContext<'_>,
@@ -225,6 +228,20 @@ pub trait BlockBehavior: Send + Sync {
     /// (torches, buttons, candles, cactus, etc.).
     fn can_survive(&self, _state: BlockStateId, _world: &dyn LevelReader, _pos: BlockPos) -> bool {
         true
+    }
+
+    /// Whether this block accepts a mob spawning on or inside it.
+    /// Defaults to full UP support and emission below [`MAX_MOB_SPAWN_LIGHT_EMISSION`].
+    fn is_valid_spawn(
+        &self,
+        state: BlockStateId,
+        world: &dyn LevelReader,
+        pos: BlockPos,
+        _entity_type: EntityTypeRef,
+    ) -> bool {
+        // TODO: extract the correct rules from block spawn rule
+        world.is_face_sturdy_for(state, pos, Direction::Up, SupportType::Full)
+            && state.get_light_emission() < MAX_MOB_SPAWN_LIGHT_EMISSION
     }
 
     /// Returns whether this block can be occupied by a forced respawn position
